@@ -1,0 +1,7 @@
+work/
+staging/
+backups/
+node_modules/
+*.log
+.env
+auth.json
