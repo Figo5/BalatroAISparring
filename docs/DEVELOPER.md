@@ -163,6 +163,14 @@ The synthetic fixture provides `SMODS.Mods`, `SMODS.load_file`, `SMODS.current_m
 - No real game load, rendering, save, Mods scan, Steam or Love/Lovely interaction is exercised. Passing tests do not establish in-game load success, isolation, or rules/server parity.
 - Lua correctness is checked on `lupa.lua51` and `lupa.luajit21`; the shipped game runtime is not otherwise asserted.
 
-## No live install policy
+## Milestone 2 development boundaries
+
+The M1 entrypoint and status above are intentionally unchanged: none of the new observation/action modules are loaded into the game. `AISparring/ai/` contains the pure codec, observation registry and legal-action generator. `AISparring/integration/` contains the trusted state reader and submission broker. `tools/policy_worker.py` and `tools/lua/policy_env.lua` demonstrate a fresh, restricted interpreter receiving only normalized data. No future policy may import the integration modules or run inside the game interpreter.
+
+Read `FAIRNESS.md`, `AI_OBSERVATION.md`, `LEGAL_ACTIONS.md`, `STATE_READER.md` and `M2_EXECUTION_BOUNDARY.md` before extending these boundaries. The view/certificate producer, authenticated runtime role and revision assignment, legitimate game callback executor, and production process watchdog are still unimplemented gates. The supported action catalogue is a bounded certified subset, not an exhaustive search generator.
+
+Run `python tests/run_m2.py --require-all`, `python tests/run_reader.py --require-all`, `python tests/run_boundary.py --require-all` and `python tests/astra_attacks.py` in addition to M1's strict suite. Run `python tests/benchmark_m2.py --require-all` separately for fixture timings. These tests require only the pinned lupa dependency and never launch or alter Balatro.
+
+## No live install policy (all milestones)
 
 The companion is staging-only: it is never copied into the user's normal Balatro installation, and no game or server is launched from this milestone. Even staged live integration requires the closed-game checks, verified backups, staged copies and prototype gates in `docs/PROTOTYPE_GATES.md`. Never write to live Mods while Balatro is running and never terminate the user's game.
