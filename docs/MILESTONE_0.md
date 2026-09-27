@@ -9,7 +9,7 @@ Date: 2026-09-27. Research performed by the orchestrator while locating the requ
 - Balatro was running (PID 7676) during research. No live files were changed and no game interaction was performed.
 - Installed Multiplayer manifest: 0.5.5. Its 449 upstream-tracked files match tag v0.5.5 after CRLF normalization. Binary/content byte identity is a separate verification; initial raw hashes differed because Git checked out Windows line endings.
 - Exact upstream tag commit: `3dff16a99edde91894e0ccf94cc9a9171443070b`.
-- Steamodded version.lua: 26.829.0. Lovely startup log: 0.10.0. JokerDisplay manifest: 2.0.4. Handy folder exists; 2.0.6 reported by user, pending manifest confirmation.
+- Steamodded version.lua: 26.829.0. Lovely startup log: 0.10.0. JokerDisplay manifest: 2.0.4. Handy metadata.json and manifest.json: 2.0.6.
 - Research clones are under the workspace's `work/`, outside this repository and outside live Mods. No live backup is needed for read-only inspection; a fresh verified backup is mandatory before any future live change, after checking the game is closed.
 
 ## Actual architecture map
@@ -82,7 +82,7 @@ Difficulty changes computation and optional decision noise only. Pacing changes 
 - Live game/mod/save paths stay untouched while playing. Check processes immediately before integration; do not terminate Balatro. Back up affected targets with hashes only once closed. A later backup of an actively changing save is not a consistent snapshot.
 - Ordinary single-player and human multiplayer must take original code paths with AI disabled; preserve Handy/JokerDisplay hooks.
 - Existing Multiplayer terminal handlers record normal match history and emit log checksums. AI mode must isolate persistence and prevent network/stat submissions before reusing these handlers.
-- Both inspected Multiplayer and MultiplayerAPI repositories contain GPL v3 license text. The server license must also be reviewed before reuse. Preserve licenses and notices for any adaptation. No implementation source has been copied into this project; do not distribute proprietary Balatro sources/assets.
+- The inspected Multiplayer, MultiplayerAPI and TCP server repositories contain GPL v3 license text. Preserve licenses and notices for any adaptation; review the full obligations before copying implementation. No implementation source has been copied into this project; do not distribute proprietary Balatro sources/assets.
 - Required before implementation acceptance: DeepSeek's real code inspection, complete server parity assessment, child-runtime isolation proof, transport/offline strategy, and Claude's adversarial review with high/critical findings resolved.
 
 ## Sources
