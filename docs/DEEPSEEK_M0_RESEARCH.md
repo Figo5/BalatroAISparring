@@ -1,0 +1,95 @@
+# Balatro AI Sparring — Milestone 0 Independent Research (Corrected)
+
+**Status: research proposal, not accepted. No feature code, no game launch, no live install or `%AppData%\Balatro` writes. This revision resolves the Critical, High, Medium and Low findings of `docs/CLAUDE_M0_REVIEW.md` against the original report, under orchestrator adjudication. Facts, proposed design and unproven gates are labelled; no prototype (P1–P5) is claimed to have passed.**
+
+Attribution: original research by the primary implementation worker (DeepSeek); adversarial review by the reviewer (Claude); this revision merges both with the orchestrator's adjudication. Read-only inspection of `AGENTS.md`, `docs/MILESTONE_0.md`, `docs/TOOLCHAIN.md` and the three pinned clones; citations are relative to each clone root. Commit-hash pinning was not re-verifiable without git.
+
+## 0. Finding resolutions
+
+- **C1 — a static `.env` cannot redirect the human without breaking ordinary Multiplayer. Accepted.** `.env` is `MP.path .. "/.env"`, read once at load (`core.lua:72-97`); the address is bound into the network thread at start and reused on reconnect (`core.lua:343-350`; `socket.lua:6,55,83,104`); the persisted config it overrides is self-rewritten (`config.lua:4-5`; `.env.example:5`; `matchmaking.lua:28-32`). Resolution: stage **both** clients (human + bot) as hash-verified copies with their own profile, Mods and `.env`; all live `.env`/config mutation is removed. Fidelity is proved by staged-vs-installed hash equality (MILESTONE_0:10); the launcher fails closed on the `.env` and the `Connecting to %s:%s` line (`core.lua:345-348`).
+- **H1 — isolation was assumed. Accepted as a gate.** No runtime with Multiplayer loaded may launch until P1 evidence exists. P1 first studies native startup/save/Steam behaviour read-only, then proves harmless bootstrap redirection **without Multiplayer or user-save writes**, only with Balatro closed and verified backups, with a zero-byte diff of the live install and `%AppData%\Balatro`, plus Steam cloud/achievement controls. No launch now; P1 is not claimed.
+- **H2 — network presence is not human-visible state. Accepted.** §H rewritten as a projection of the human UI under the effective ruleset/layer snapshot.
+- **H3 — "own `G` is not a leak" overclaimed. Accepted.** `G.GAME` holds seed/RNG; `G.deck` is ordered; the seed is written to the RLOG manifest (`action_handlers.lua:294-316`) and trace log (`:1571-1582`); the server prints it (`main.ts:122-126`). Policy gets no filesystem/log access and reads `G` only through a field-by-field extractor.
+- **H4 — `moddedAction` is not a coordinator channel. Accepted.** Bot control moves to launcher-owned restricted IPC; policy cannot call `Client.send`/`MP.ACTIONS.*`; a trusted executor validates legal `G.FUNCS`; outbound allowlist and phase guards apply.
+- **H5 — seed semantics misread. Accepted**, corrected in §I: `seed = custom_seed` only when `not different_seeds and custom_seed ~= "random"` (`action_handlers.lua:288-290`).
+- **M1 — timers are client-reported. Accepted**; §A.5/§B corrected.
+- **M2 — PvP/tie fixtures incomplete. Accepted**; full list in `docs/PROTOTYPE_GATES.md`.
+- **M3 — server version says nothing about parity. Accepted**; coverage matrix, fixtures and commit-date gap required.
+- **M4 — loopback conflicts with "unmodified". Accepted**; documented minimal loopback bind patch + optional admin disable in staging, adjudication untouched, no global firewall changes.
+- **M5 — unlock/encryptID and Handy must match. Accepted**; matching unlock state and Handy configs required; copying live progression is not authorised while running.
+- **M6 — offline claim too broad. Accepted**; reworded to "no ranked submission path found in the MP 0.5.5 Lua."
+- **Lows.** modHash carries an FNV hash of the C: volume serial, not the raw serial (`crypto.lua:70,84`); Handy MP-extension flag must match (`Lobby.ts:308-311`); first-ready earns `speedrun` (`actionHandlers.ts:178-191`), so bot ready-timing is part of explicit pacing, without changing game rules or RNG; disable the signature-gated admin port (`main.ts:596-622,714-722`).
+
+---
+
+## A. Verified facts (corrected)
+
+1. **Architecture.** One process owns one `G` and one run (`core.lua:1,14-37,315-339`). The opponent is a summary table (`core.lua:220-237`); no second engine client-side. The network thread starts and connects during mod init (`core.lua:341-349`; `socket.lua:35-36,42-71`).
+2. **Rulesets/layers.** `MP.current_ruleset()` is a lazy resolver over active ruleset + modifier layers (`rulesets/_rulesets.lua:159-161,122-149`); bans `:198-230`; reworks `:232-377`; merge `layers/_layers.lua:143-190`.
+3. **Major League snapshot.** Forces Attrition, base timer 180, forgiveness 0, The Order off, preview off, enemy-location off, threshold 180 (`rulesets/majorleague.lua:17-30`); it has **no `layers`** (`:1-31`), so it is **not** a `standard`-layer ruleset and `hide_score_until_played` is false (`play_button_callbacks.lua:115`; `force_lobby_options` does not set it, `majorleague.lua:22-30`). Corrected from the original §8.
+4. **Opponent state.** `enemyInfo` (`action_handlers.lua:360-475`), `enemyLocation` (`:689-717`), own lives via `playerInfo` (`:530-543`); server sources `Client.ts:33-59,113-134`; `info_received` masks hands pre-`enemyInfo` (`:226-228,347-348`). Lobby metadata carries the opponent modHash (`Lobby.ts:288-300`; `matchmaking.lua:28`).
+5. **Timers are client-reported (M1).** The server only relays `startAnteTimer`/`pauseAnteTimer` (`actionHandlers.ts:696-719`) and deducts a life only when a client reports its own `failTimer`/`failPvPTimer` (`:721-742,346-391`). Expiry is local wall-clock (`timer.lua:395-397,484-497`). The old-timer reading is correct (`timer.lua:445-448,491`). The AI must run the unmodified timer code and must never block its Lua main thread on policy compute.
+6. **Life loss.** Per-cause once-per-round guards (`Client.ts:50-55,103-134`); `failRound` costs a life only if `death_on_round_loss` (`actionHandlers.ts:413-419`); Survival branch `:421-453`; PvP resolution `:305-343`; timer paths `:721-742,346-391`. Ghost uses a separate resolver (`lib/ghost_replay.lua:142-168,239-251`).
+7. **Nemesis/PvP.** Blind key `bl_mp_nemesis` (`objects/blinds/nemesis.lua:19-35`); client-side blind assignment (`ui/game/round.lua:53-70`). Server waits for both-ready and broadcasts `startBlind(firstPlayer)` (`actionHandlers.ts:173-215`); client commits hands via `play_hand` (`ui/game/game_state.lua:160-234`); server adjudicates when hands run out (`actionHandlers.ts:221-343`). The nemesis blind is the opponent's score, not a fixed target (`ui/game/blind_hud.lua:34-47,166-168`).
+8. **Score/hands visibility (H2).** `hide_score_until_played` is false globally except `standard`-layer rulesets (`play_button_callbacks.lua:113-117`). **Major League has no `layers` (`rulesets/majorleague.lua:1-31`), so it is not standard: scores are revealed after every hand** (server gates on the flag, `actionHandlers.ts:246-301`). The withholding path still exists for standard rulesets (`noScore`/`score:null`, `:246-301`; client `action_handlers.lua:387-442`; HUD `"???"` `blind_hud.lua:200-224`), but `Client.loseLife` (`Client.ts:124-133`) and `skipAction` (`actionHandlers.ts:535-541`) send the real score with no `noScore`. Projection follows the effective snapshot, not the general case.
+9. **Seeds (H5).** Server generates an 8-char seed unless `different_seeds` (`actionHandlers.ts:152`, `utils.ts:1-11`), stores it (`Lobby.ts:73-75`) and broadcasts it. **Correct rule:** `if not different_seeds and custom_seed ~= "random" then seed = custom_seed` (`action_handlers.lua:288-290`) — the opposite of the original reading. With `different_seeds` the server sends no seed and `start_run` gets nil (`:152`; `lobby.lua:367-372`). `custom_seed` is host-set (`lobby.lua:173`); `random_loadout` derives deck/stake from seed + username (`lobby.lua:332-358`). "Same seed ⇒ same offers" is too strong: opponent Magnet consumes the receiver's `j_mp_magnet` stream (`action_handlers.lua:772`).
+10. **Transport (C1/H4).** `Client.send` → `uiToNetwork` (`action_handlers.lua:35-42`); newline TCP (`socket.lua:100-107`); inbound dispatch is a **file-local `HANDLERS`** with no global (`:1484-1530,1547-1596`, header `:1-23`). `MP.register_action` refuses replacement (`:1532-1541`); `MP.register_mod_action` + server-relayed `moddedAction` are the only extension surfaces (`core.lua:42-53`; `action_handlers.lua:1432-1445`; `actionHandlers.ts:869-887`). A `.env` redirect applies only to the runtime it is placed in and is read once before connect (`core.lua:71-97,343-350`); staged copies only. `moddedAction` is relayed client-to-client, so it is **not** a bot control channel.
+11. **Locations (H2).** `set_location` (`action_handlers.lua:1179-1203`), `update_location` (`:1205-1209`); server stores and relays (`Client.ts:75-84`; `actionHandlers.ts:498-503`). Even with ML's `enemy_location_disabled`, the value is stored (`action_handlers.lua:689-717`); the only human-visible trace is whether the timer button is enabled (`timer.lua:8`, `loc_ready`). The observation projects that legal-action bit, not the location.
+12. **Spending (H2).** `spentLastShop` (`action_handlers.lua:1314-1319`) appends to `enemy.spent_in_shop` (`:754-756`); `sells`/`sells_per_ante` and `last_timer` are also stored (`:732-756,852-856`). Raw spending/sell fields are excluded for Major League. The timer is displayed through a threshold/rounding projection (`ui/game/timer.lua:162-174`); its raw backing value remains excluded. Public `lives`, `skips`, `highest_score`, score and hands follow their actual UI visibility rules.
+13. **Hands.** `play_hand(score,hands_left)` big-number normalization (`action_handlers.lua:1213-1233`); server floors `handsLeft` (`actionHandlers.ts:239-241`); `InsaneInt` encoding (`lib/insane_int.lua:9-49`).
+14. **Start/end.** `startGame` → `action_start_game` → `lobby_start_run` (`action_handlers.lua:278-320`; `lobby.lua:351-373`). End: `winGame`/`loseGame` + cosmetic end payloads (`action_handlers.lua:545-569,896-936`; `ui/game/game_end.lua:44-67`). Saving is off while a lobby code exists (`lobby.lua:554-566`), restored only by `continue_in_singleplayer` (`functions.lua:149-174`).
+15. **Practice/ghost/replay (M6).** Practice is single-player only (`lib/practice_mode.lua:1-62`); ghost resolves lives locally and differently (`lib/ghost_replay.lua:38-235`); RLOG is gated on `MP.LOBBY.code` (`lib/replay_log.lua:61-66,116-123,200-224`); joker stats persist to mod config (`lib/joker_stats.lua:15-39`); replays live in `Multiplayer/replays` (`ghost_replay.lua:341-367`). **Reworded network claim:** the only network code found in the MP 0.5.5 Lua is the TCP socket plus user `openURL` (`smods_menu.lua:8,12`; `functions.lua:146,412`). Ranked rulesets exist as data (`rulesets/ranked.lua:3`), but **no ranked submission path was found in the Lua**. Vanilla Steam, SMODS, Lovely, Handy and JokerDisplay were **not** audited.
+16. **MultiplayerAPI (not installed).** 1.0.0, MQTT + Express + Postgres (`README.md:250-278`; `api/connection/lifecycle.lua:15-20`); `create_local_lobby` is one-player `local_mode` (`api/lobby/public.lua:44-87`); `dispatch_local_action` self/broadcast only (`api/action/dispatch.lua:7-30`). No second participant, no engine, no legacy-rules bridge. Keep out of V1.
+
+## B. Server adjudication (corrected)
+
+Not a pure relay: it owns `lives`, `score`, `handsLeft`, `isReady/firstReady`, `skips`, `furthestBlind`, `location`, blockers (`Client.ts:33-59`); generates the seed; gates readiness; resolves ties with no life cost (`actionHandlers.ts:312-343`); deducts lives via `failRound`/`failTimer`/`failPvPTimer` (`:413-455,721-742,346-391`). Replay-log submissions are side-effect-only (`logHashStore.ts:88-136,155-258`). Version is hard-coded `"0.3.2-MULTIPLAYER"` with a "TODO: Fix this" and only warns if the client is older (`actionHandlers.ts:464-465,483-494`); the pin is repo HEAD, not a release matched to 0.5.5. `sendGameStats` is the only unhandled client action; `endGameStatsRequested`/`nemesisEndGameStats` are handled (`main.ts:469-477`). No auth/TLS; binds `0.0.0.0:8788`, admin `127.0.0.1:8789` (`main.ts:576,739`). **Source pins do not prove deployment parity; parity is a gate.**
+
+## C. Options and adopted direction
+
+- **A (in-process virtual participant): rejected** — no scoring engine; would be score reimplementation.
+- **B (staged client pair + local legacy server): adopted as direction for research only**, corrected per C1 to stage **both** the human and bot clients. A separate launcher is the prototype activation route; it is **not** proof that an in-game "VS AI" entry exists. A future installed companion may launch staged practice explicitly, but supported-launch investigation is still required; no commitment to an impossible UI.
+- **C (MultiplayerAPI local lobby): out.** One player, different transport, no legacy rules.
+- **D (ghost/practice replay): offline training adjunct only**, never the match authority.
+
+## D. Proposed design (proposal, not verified)
+
+Two staged, hash-verified copies — human and bot — each with its own profile, Mods and fixed loopback `.env` written before MP init. A local server coordinator (with a documented minimal loopback-bind patch and optional admin disable, keeping adjudication untouched) owns seed, readiness, lives, timer-failure, ties and win/lose. Bot control travels over **launcher-owned restricted IPC**, never `moddedAction`; a trusted executor in the bot runtime validates legal `G.FUNCS` actions and enforces an outbound allowlist with phase guards (reject pre-end deck/Joker requests, reject guest `lobbyOptions`). Legitimate runtime protocol messages required by the rules are preserved. Observation is a human-visible projection (§H); policy reads no globals/logs/filesystem and never draws the game RNG.
+
+## E. Unproven gates / blockers
+
+1. Whether a copied stack gets independent save/profile/Mods/Lovely paths, and whether Steam permits a second instance. **P1.**
+2. Behaviour with a dead local port given the single 10 s connect attempt (`socket.lua:50-63,102-105`). **P2.**
+3. Full-match parity of the pinned server (coverage matrix + fixtures). **P3.**
+4. Whether the bot can perform every legal action through existing APIs, with an audit matching a human baseline. **P4.**
+5. No supported handler-replacement hook (`action_handlers.lua:1-23,1532-1541`).
+6. Process-global flags (`G.F_NO_SAVING`, `MP.MODIFIERS`, `MP.GAME`) demand runtime isolation.
+7. Loopback binding + abuse-meter sharing because both clients are `127.0.0.1` with the same connection id (`abuse.ts:111-138,214-215`).
+
+## F. Hooks
+
+Available without a fork: staged `.env` transport redirect; new flat actions via `MP.register_action` (add-only), which V1 will not use because they lie outside the pinned server protocol. **Not** used for V1: `MP.register_mod_action`/`moddedAction` as a control channel. No handler-table patch. Policy runs outside the runtime over launcher IPC.
+
+## G. Offline / official isolation
+
+Startup auto-connect is the primary risk (`core.lua:341-349`); mitigate with a mandatory staged `.env` and a fail-closed launcher. RLOG/`submitLogHashes` would ship seed, deck, log and username to whatever server is targeted (`lib/replay_log.lua:218-224`). `server_connection_ID` ships an FNV hash of the C: volume serial in `modHash` (`lib/crypto.lua:70,84`). Isolate the server's `./data` sqlite and logs. Claim is limited to the MP 0.5.5 Lua.
+
+## H. Observation projection (rewritten)
+
+`AIObservation` is what the **human UI shows and can legally do** under the effective ruleset/layer snapshot, default-deny by wire field, one test per field. The default-deny allowlist includes legitimately displayed opponent `lives`, `skips`, `highest_score`, PvP score/hands and the capped/formatted timer and legal-action availability (e.g. timer button enabled as the only location-derived bit, `timer.lua:8`). **Exclude** `pvpTimerOrder` (a Major League human never uses it — only when the `pvp_timer` layer is active, `action_handlers.lua:445`), hidden location, lobby metadata/modHash, `spent_in_shop`, `sells`/`sells_per_ante`, `real_score`, `last_timer`. Do **not** categorically ban timer state: a publicly displayed timer may be projected with its display threshold and UI rounding if legitimate, but raw `last_timer` is never passed wholesale. Apply the same display-vs-raw projection to score, documenting `info_received` and both mask paths (`action_handlers.lua:226-228,347-348,387-442`; `blind_hud.lua:200-224`) and the unmasked `loseLife`/`skip` sends (`Client.ts:124-133`; `actionHandlers.ts:535-541`). Policy gets no globals, logs or filesystem; reads go through the extractor (H3).
+
+## I. Determinism and seed policy (corrected)
+
+`seed = custom_seed` only when `not different_seeds and custom_seed ~= "random"` (`action_handlers.lua:288-290`). **Random mode keeps server seed generation.** Fixed-seed benchmarks and user-selected matches are explicitly required, so **one trusted user/harness seed may be selected before the match**, matched to existing config semantics, and never chosen, rerolled or conditioned on outcomes by policy. Do not force every mode to random. The AI identity is fixed (`BALATRO AI`). The seed is never exposed to the decision engine. Opponent-triggered RNG draws (e.g. Magnet `action_handlers.lua:772`) and the event schedule are logged **outside** the policy boundary. Policy must not call `math.random`/`pseudorandom` on the game stream, and must not clone hidden live state.
+
+## J. Licensing
+
+Multiplayer 0.5.5, MultiplayerAPI 1.0.0 and the TCP server are GPLv3 (`README.md:54-56`; `LICENSE.md`). Local unmodified use is not conveyance; any distributed fork must ship GPLv3 source/notices and mark changes. Our repo carries no copied implementation. Balatro assets/saves are proprietary and never distributed; staged copies are local-only. `lib/serialization.lua:1,14` carries an MIT-attributed Penlight helper.
+
+## K. Uncertainties
+
+Native startup/path/Steam behaviour (P1); dead-port tolerance (P2); parity coverage (P3); bot action coverage and audit (P4); opponent-exogenous effect set; RLOG/stats/save handling inside a staged runtime; loopback bind and rate-limit compliance (two clients, same IP); per-AI process cost.
+
+## L. Next gate
+
+**Gate 0.G1:** orchestrator owns the final integration decision and may accept/reject this corrected research; the initial integration plan must be written before any feature code (AGENTS.md:6). Evidence is produced in the order and with the pass criteria in `docs/PROTOTYPE_GATES.md`, with Claude review of results. No launch occurs now. This document is a proposal and does not accept M0, assert server parity, or claim any prototype passed.

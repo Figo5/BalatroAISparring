@@ -1,6 +1,6 @@
-# Initial architecture investigation — not yet accepted
+# Initial architecture investigation — historical notes
 
-Date: 2026-09-27. Research performed by the orchestrator while locating the required implementation worker. DeepSeek inspection and Claude adversarial review remain outstanding. No feature code has been written.
+Date: 2026-09-27. Historical research performed by the orchestrator while locating the required implementation worker. These notes are superseded by INTEGRATION_PLAN.md, the subsequent DeepSeek source review and Claude findings. Do not implement the preliminary transport direction below without the revised plan and prototype gates. No feature code was written at this stage.
 
 ## Verified environment
 
