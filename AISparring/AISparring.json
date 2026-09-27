@@ -1,0 +1,16 @@
+{
+  "id": "AISparring",
+  "name": "AI Sparring",
+  "display_name": "AI Sparring",
+  "author": [
+    "BalatroAISparring project"
+  ],
+  "description": "Inert companion scaffold. No opponent, transport, gameplay hooks or content registration. Hard-requires Multiplayer 0.5.5 and loads after it.",
+  "prefix": "aisp",
+  "main_file": "core.lua",
+  "priority": 10000001,
+  "version": "0.1.0",
+  "dependencies": [
+    "Multiplayer (==0.5.5)"
+  ]
+}
