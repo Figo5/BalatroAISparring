@@ -1,4 +1,4 @@
-# Toolchain verification — DeepSeek verified; Claude pending
+# Toolchain verification — both workers verified
 
 Verified on 2026-09-27. This records actual results; installed software and published model availability are not proof that authenticated inference works.
 
@@ -38,14 +38,14 @@ Verification is complete for this worker. No `--auto` or permission bypass was n
 ## Claude review worker
 
 - Executable shim: `C:\Users\ginom\AppData\Roaming\npm\claude.ps1`.
-- Installed version: **2.1.222**.
+- Installed version: **2.1.283**, updated by the user from 2.1.222.
 - Exact model requested: `claude-opus-5-5`; explicit `--effort high`.
-- `claude auth status` reported a saved first-party Claude login. Actual inference failed: **OAuth session expired and could not be refreshed**. A saved login is not usable authentication.
-- Read-only smoke test invoked from the project directory using `Read,Glob,Grep` only, `--permission-mode dontAsk`, no session persistence and JSON output. Exit code **1**, API duration 0, no model usage, no repository changes. It did not reach Opus inference.
-- Current official Claude Code documentation states Opus 5.5 requires **2.1.280 or newer**, above the installed version. The exact public model name exists; no equivalent or fallback has been substituted.
-- Claude authentication was not changed. To finish verification later, the client needs a supported version and the user must refresh the expired login; then rerun the exact-model smoke test. Neither review availability nor acceptance is claimed.
+- Initial smoke test failed with an expired OAuth session. After the user updated the CLI, the retry **passed**, exit 0, is_error=false, terminal_reason=completed.
+- Read-only smoke test invoked from the project directory using `Read,Glob,Grep` only, `--permission-mode dontAsk`, no session persistence and JSON output. It returned the correct repository path, directories and research status. No commands or file mutations were permitted.
+- JSON modelUsage independently confirms canonicalModel **claude-opus-5-5**, firstParty provider, with actual token usage. Session: `9d60c0ab-aa0f-4cbc-ba0e-7e5d7610cc62`. High was set explicitly with `--effort high`.
+- Installed version now exceeds the documented 2.1.280 minimum for Opus 5.5. No equivalent or fallback was substituted; the orchestrator did not change authentication.
 
-Attempted read-only invocation:
+Successful read-only invocation:
 
 ```powershell
 claude -p --model claude-opus-5-5 --effort high --permission-mode dontAsk --tools 'Read,Glob,Grep' --allowedTools 'Read,Glob,Grep' --no-session-persistence --output-format json 'Read README.md and list the top-level directories. Do not modify files or run commands.'
@@ -53,7 +53,7 @@ claude -p --model claude-opus-5-5 --effort high --permission-mode dontAsk --tool
 
 ## Workflow status
 
-Astra can launch and capture both CLIs. **DeepSeek is verified; Claude inference remains blocked by expired authentication and its documented client-version requirement.** The required workflow is preserved: Astra -> DeepSeek -> Astra verification -> Claude review -> DeepSeek fixes -> Claude re-review -> Astra acceptance.
+Astra can launch and capture both CLIs. **Both requested workers have returned verified authenticated responses using their exact models and High effort.** The required workflow is preserved: Astra -> DeepSeek -> Astra verification -> Claude review -> DeepSeek fixes -> Claude re-review -> Astra acceptance.
 
 Milestone 0 notes are committed. No mod feature implementation, live installation, automated match, benchmark, or V1 acceptance is claimed. Balatro was running during research, and the installation/Mods/saves were left unchanged.
 
