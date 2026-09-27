@@ -1,4 +1,4 @@
-# Toolchain verification — authentication pending
+# Toolchain verification — DeepSeek verified; Claude pending
 
 Verified on 2026-09-27. This records actual results; installed software and published model availability are not proof that authenticated inference works.
 
@@ -20,17 +20,12 @@ Verified on 2026-09-27. This records actual results; installed software and publ
 - Exact target: **DeepSeek V4.1 Flash**, `opencode-go/deepseek-v4.1-flash`.
 - Public models.dev catalog confirms this provider/model and reasoning efforts `low`, `high`, `max`. The pinned OpenCode provider-transform source also supports High. Use `--variant high` as requested; stronger Max is not substituted.
 - Project opencode.json pins the exact model and disables sharing. No credentials are stored in this repository.
-- `opencode auth list`: **0 credentials**. No existing OpenCode/DeepSeek credential environment variables were found by name. Secrets were not printed.
-- `opencode models opencode-go --refresh --verbose`: refreshed cache, then exited 1 with `Provider not found: opencode-go`. The public catalog independently contains it; authenticated provider availability remains unverified.
-- Delegation smoke test: **not run**, awaiting the user-owned authentication step.
-
-Manual next step, in a fresh PowerShell window:
-
-```powershell
-opencode auth login --provider opencode-go
-```
-
-Complete provider connection locally. Obtain any necessary Go subscription/key directly through OpenCode; do not paste keys into chat. No subscription, payment, or credential was created on the user's behalf.
+- Initial attempt had no configured provider. After the user reported signing into the OpenCode console, the retry succeeded. `auth list` still displayed 0 credentials, so its output alone is not a reliable inference-availability check in this setup; no credential store was copied or exposed.
+- `opencode models opencode-go --verbose` now exits 0 and lists **deepseek-v4.1-flash**, active, with High variant mapping to reasoningEffort=high.
+- Delegation smoke test: **PASS**, exit 0, correct repository root/branch, documentation/config languages and top-level directories returned. SHA-256 comparison of all non-.git project files, including untracked files, reported **0 changes**.
+- Exported session `ses_f1be5f966ffeoPIFvu1zfryF19` independently identifies provider **opencode-go**, model **deepseek-v4.1-flash**, variant **high**, and the expected project cwd/root. Raw evidence is in workspace work/toolchain, outside Git.
+- The smoke test used process-scoped deny-by-default permissions with read/glob/grep/list and two exact read-only Git commands allowed. Two initial shell calls were correctly denied; the worker recovered using allowed tools and completed. No permission bypass was enabled.
+- No subscription, payment, or credential was created on the user's behalf.
 
 Supported non-interactive invocation, confirmed against installed CLI help:
 
@@ -38,7 +33,7 @@ Supported non-interactive invocation, confirmed against installed CLI help:
 opencode run --dir "C:\Users\ginom\Documents\Codex\2026-09-27\files-pasted-by-the-user-you\outputs\BalatroAISparring" --model opencode-go/deepseek-v4.1-flash --variant high --format json "TASK"
 ```
 
-After authentication: rerun the provider model list, run the requested read-only repository inspection under restrictive permissions, capture JSON output/model identity and exit status, and compare tracked plus untracked file hashes before/after. Only then mark delegation verified. No `--auto` or permission bypass is needed for verification.
+Verification is complete for this worker. No `--auto` or permission bypass was needed. Milestone 0 independent source inspection has been delegated read-only to this exact model and High variant.
 
 ## Claude review worker
 
@@ -58,7 +53,7 @@ claude -p --model claude-opus-5-5 --effort high --permission-mode dontAsk --tool
 
 ## Workflow status
 
-Astra can launch and capture both CLIs. **Neither external worker has yet produced a verified authenticated response.** The required workflow is preserved: Astra -> DeepSeek -> Astra verification -> Claude review -> DeepSeek fixes -> Claude re-review -> Astra acceptance.
+Astra can launch and capture both CLIs. **DeepSeek is verified; Claude inference remains blocked by expired authentication and its documented client-version requirement.** The required workflow is preserved: Astra -> DeepSeek -> Astra verification -> Claude review -> DeepSeek fixes -> Claude re-review -> Astra acceptance.
 
 Milestone 0 notes are committed. No mod feature implementation, live installation, automated match, benchmark, or V1 acceptance is claimed. Balatro was running during research, and the installation/Mods/saves were left unchanged.
 
