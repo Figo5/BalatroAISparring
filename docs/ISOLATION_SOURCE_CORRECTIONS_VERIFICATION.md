@@ -1,6 +1,6 @@
 # Isolation source corrections — September 28
 
-Scope: reviewed F1–F4 and adjacent F5–F11 from `CLAUDE_ISOLATION_AFTER_RESET_REREVIEW.md`, using the adopted corrections in `P2_MEASUREMENT_PROPOSAL.md`. DeepSeek V4.1 Flash High implemented the changes. Astra inspected the production diff and independently ran the checks below. Claude re-review is still required; this document is not native game acceptance.
+Scope: reviewed F1–F4 and adjacent F5–F11 from `CLAUDE_ISOLATION_AFTER_RESET_REREVIEW.md`, using the adopted corrections in `P2_MEASUREMENT_PROPOSAL.md`. DeepSeek V4.1 Flash High implemented the changes. Astra inspected the production diff and independently ran the checks below. Claude closed the findings in `CLAUDE_ISOLATION_SOURCE_REREVIEW.md`; Astra accepts commit `fddea7e` for controlled staged testing. Three non-blocking Low limitations remain documented there. This document is not native game acceptance.
 
 The silent listener records peer EOF independently from tool-side release. Evidence requires expiry-timed EOF and a hold through retry completion. The observer records connection start/end separately so actual connection latency is excluded from retry sleep gaps. Certificate validation re-parses copied listener evidence and requires a post-exit dead-port proof. The pinned Multiplayer protocol, timeouts, retry schedule and close comparison remain unchanged.
 

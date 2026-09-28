@@ -12,18 +12,22 @@ Status: **in development, not installed, not yet playable**. Fixture and local-s
 | Public opponent HUD | Original Multiplayer presentation/privacy retained; rendering pending |
 | Lives, PvP/Nemesis, both result orientations, completion | Original server handlers and real local TCP lifecycle pass; complete engine lifecycle pending |
 | Failure recovery, local decisions and match summaries | Service/runtime fixtures pass; controlled engine failure check pending |
-| Claude safety/playability verdict | Runtime/engine and installer scope accepted; host recovery repairs and isolation re-review pending |
+| Claude safety/playability verdict | Runtime/engine, installer, host/service and isolation code scopes accepted for staged tests; gameplay verdict pending |
 | Installed build ready for user | Pending review, backups, actual isolation gates and controlled live smoke |
 
 ## Current review status — September 28
 
 Runtime/engine/policy repairs are approved for controlled staged testing (`CLAUDE_RUNTIME_ENGINE_REREVIEW.md`). Installer repairs are approved in scope (`CLAUDE_INSTALLER_SECOND_REREVIEW.md`). Neither verdict establishes native gameplay or installation readiness by itself.
 
-Host/service commit `10245ea` passed 77 host tests, 55 service tests, five independent service contracts and the retained-ownership negative check. Claude found two remaining integration defects: public retry after delayed safe closure, and retaining the session through successful real-certificate completion (`CLAUDE_HOST_THIRD_REREVIEW.md`). DeepSeek repaired those paths in `47e1f64`; independent verification passes 84/84 host tests and the failed-close contract. Source/test hashes remained unchanged through verification. Host acceptance remains blocked pending Claude re-review.
+Host/service repair `4516e60` is accepted by Claude (`CLAUDE_HOST_FIFTH_REREVIEW.md`) and Astra after independent 87/87 host tests plus the retained-ownership negative. Service tests (55/55), independent service contracts (5/5) and Lua-to-service checks (6/6) remain unchanged passing results. The theoretical non-blocking Low is recorded in the review and does not delay this gate.
 
-Isolation commit `9c698ae` implements the reviewed `P2_INITIAL` / `P2_CLOSE` / `P2_SILENT` design, honest `keepalive_fallback` classification, original-error-handler crash probes, bounded tool-owned endings and immutable phase evidence. Independent tests and the real Windows listener helper check pass. Claude actual-diff re-review is pending. The earlier single-session P2 proposal is superseded by `P2_MEASUREMENT_PROPOSAL.md`.
+Isolation commit `fddea7e` corrects the reviewed F1–F4 and adjacent F5–F11 findings: source-faithful expiry EOF, separate connect/sleep timing, copied listener evidence validation and post-exit dead-port proof. Astra's independent checks pass, including certificate 50/50, launcher 61/61, shared host 87/87 and installer 48/48. Real non-game Windows socket checks also pass. See `ISOLATION_SOURCE_CORRECTIONS_VERIFICATION.md`. Claude closed F1–F4 and confirmed all seven phases may proceed under the existing conditions (`CLAUDE_ISOLATION_SOURCE_REREVIEW.md`). Astra accepts this code scope for controlled staged testing. The earlier single-session P2 proposal is superseded by `P2_MEASUREMENT_PROPOSAL.md`.
+
+The review records three non-blocking Low limitations: overlapping marker-name substring checks, possible cross-clock skew on the CLOSE ordering check, and post-exit proof freshness guaranteed by call placement rather than an explicit timestamp comparison. These remain documented without expanding the infrastructure scope. Coverage still fails closed. If a real phase exposes a limitation, preserve its evidence and make a focused repair through the established review cycle; do not bypass the gate.
 
 No actual Balatro runtime copies, backups, launches, installation or live-file changes have occurred. Native game measurements and playability remain unproven.
+
+A read-only process check on September 28 evening found the user's live Steam Balatro running. Staging and native game integration remain deferred while it is open; no process was interrupted.
 
 Read-only normal-Multiplayer compatibility inspection: the pinned `networking/action_handlers.lua` lobby-info path sets readiness from guest presence/readiness; `ui/lobby/start_ready_button.lua` does not impose a blanket equality check on all mod hashes. The live companion remains visible in the ordinary mod list, with no suppression or bypass. Actual normal-human compatibility is still an in-game acceptance gate.
 
@@ -47,7 +51,7 @@ Latest integrated regression batch uses repository-local Python 3.12.14 with pin
 
 The repaired integrated batch totals **1,626 executions**, plus 1,040 property iterations. Additional independent checks pass: M2 attacks 18/36, mutation 3/6, production adapter attacks 14/28 and runtime contracts 11/22. These counts describe repository tests, not real-engine acceptance.
 
-Latest independently rerun infrastructure suites: launcher 59/59, measured lifecycle 11/11, staging 48/48, reusable certificate 46/46, installer 48/48, backup binding 3/3 and Python-to-Lua attestation 8/8. Ten independent measurement negatives reject missing ownership, failed FIN, missing/early connection hold, reversed peer endpoint, unreadable process handles and unsupported coverage claims. Source-observer tests pass on both Lua runtimes (six reported cases). Host 84/84 now passes for the public-recovery repair in `47e1f64`; Claude re-review is still required. Server packaging 8/8 and ruleset parser 8/8 remain unchanged passing captured results.
+Latest independently rerun infrastructure suites: launcher 59/59, measured lifecycle 11/11, staging 48/48, reusable certificate 46/46, installer 48/48, backup binding 3/3 and Python-to-Lua attestation 8/8. Ten independent measurement negatives reject missing ownership, failed FIN, missing/early connection hold, reversed peer endpoint, unreadable process handles and unsupported coverage claims. Source-observer tests pass on both Lua runtimes (six reported cases). Host 87/87 now passes for the accepted `4516e60` repair. Isolation counts above describe `9c698ae`; verification of the subsequent F1–F4 correction is still pending. Server packaging 8/8 and ruleset parser 8/8 remain unchanged passing captured results.
 
 Cross-module adapter-to-real-policy-worker checks passed for all three difficulties on both runtimes (six checks, 88 legal hand candidates). Choices passed executor validation; observed process-inclusive latency was 0.17–0.22 seconds. These are engine-shaped fixtures, not actual Balatro play.
 
@@ -72,7 +76,7 @@ The TCP test intentionally uses a shortened one-life lifecycle. It does not prov
 ## Remaining acceptance gates
 
 1. Repository host/native-listener verification and window-identification fixtures are complete. Eight additional checks prove the actual Python attestation writer and Lua companion reader agree for both roles on both runtimes and reject changed nonces; all certificate files in this check are synthetic.
-2. Resolve the host public-recovery/completion findings and pass Claude re-review of host and isolation. Runtime/engine/policy and installer scope reviews are complete. No unresolved safety/playability Critical or High finding may remain.
+2. Finish and verify isolation F1–F4 corrections, then pass Claude re-review. Runtime/engine/policy, host/service and installer scope reviews are complete. No unresolved safety/playability Critical or High finding may remain.
 3. Once reviews pass, check whether the user's Balatro is closed. If open, request closure only then; never terminate it.
 4. Fresh verified backups, staged-only P1A/P1B/FULL_P1/CRASH/P2_INITIAL/P2_CLOSE/P2_SILENT measurements and zero live/save/Steam changes. No actual runtime staging, backups or launches have been performed yet.
 5. Controlled actual-engine actions, timer continuity, minimized AI progress, public HUD, results/failure recovery, followed by safe companion installation and normal-mod compatibility checks. Do not play an entire human run.
