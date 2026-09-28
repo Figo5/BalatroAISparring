@@ -182,6 +182,7 @@ CODE_STALE_DISCOVERY = "practice_host_stale_discovery"
 CODE_FOREIGN_DISCOVERY = "practice_host_foreign_discovery"
 CODE_ALREADY_RUNNING = "practice_host_already_running"
 CODE_OPEN_RECORD_BLOCKED = "practice_session_open_unmeasured"
+CODE_CLOSURE_PENDING = "practice_host_closure_pending"
 CODE_SESSION_WORKSPACE_EXISTS = "practice_session_workspace_exists"
 CODE_HUMAN_ACTIVE = "practice_human_window_active"
 CODE_CONFIG_DIGEST = "practice_major_league_config_unproven"
@@ -1871,6 +1872,9 @@ class MatchSupervisor:
         # the measured after-verdict; it can never silently rebaseline (C1).
         self._record_started = False
         self._unmeasured_lockout = False
+        # H-A-1-R: a closure that could not be retired/persisted is remembered and
+        # retried through the public daemon once the owned process finally exits.
+        self._pending_closure: Optional[str] = None
 
     # -- public ---------------------------------------------------------------
 
@@ -1934,7 +1938,7 @@ class MatchSupervisor:
             self._stop_service()
             return
         if not self.config.leave_human_visible:
-            self.cleanup()
+            self._retire_or_cleanup()
             return
         self._await_ai_receipt()
         self._terminate_roles(only=("ai",))
@@ -1942,7 +1946,25 @@ class MatchSupervisor:
         human = [item for item in statuses if item.get("role") == "human"]
         self.human_retained = bool(human and human[0].get("running"))
         if not self.human_retained:
-            self.cleanup()
+            self._retire_or_cleanup()
+
+    def _retire_or_cleanup(self) -> None:
+        """Retire the server/service/roles but keep the retained session (N-1-R).
+
+        With a certificate the retained ``LaunchSession`` is the only evidence the
+        measured after-verdict can close against, so it is held until the
+        certificate closes the record. Dropping it here (through ``cleanup``) would
+        make a genuine ``human_end`` fail with ``session_closure_unproven`` whenever
+        the human window had already exited. Without a certificate there is nothing
+        to retain and the historical ``cleanup`` applies.
+        """
+        self._stop_server()
+        self._stop_service()
+        if self.config.require_certificate and self._record_started:
+            self._terminate_roles()
+            self.human_retained = False
+            return
+        self.cleanup()
 
     def _await_ai_receipt(self) -> None:
         """Bounded wait for the AI end receipt; never touches the human connection."""
@@ -2341,6 +2363,23 @@ class MatchSupervisor:
         self._clear_unmeasured_lockout()
         self._set_phase("completed")
         self.code = CODE_OK
+        # N-1-R: the certificate has measured and closed the record against the
+        # retained handles; only now may ownership be dropped. If a retained owned
+        # handle still cannot be proven exited, remember the pending closure so the
+        # public acknowledge/start retry completes the retire instead of wedging.
+        retained_record = self._record_started
+        self._record_started = False
+        if (
+            retained_record
+            and self.config.require_certificate
+            and not self._retire_session()
+        ):
+            self._pending_closure = "session_closure_unproven"
+            self.code = "session_closure_unproven"
+            self.error = _compact_error(self.code)
+            self._set_phase("failed")
+            self.human_retained = True
+            return self._finalize(error_code=self.code, closure_unproven=True)
         return self._finalize()
 
     def _await_human_exit(self) -> str:
@@ -2548,13 +2587,16 @@ class MatchSupervisor:
         self.code = code
         self.error = _compact_error(code)
         if not self._retire_session():
+            self._pending_closure = code
             self.human_retained = True
             return self._finalize(
                 error_code=code, human_retained=True, closure_unproven=True, **extra
             )
         self.human_retained = False
         if self._record_started and self.config.require_certificate:
-            self._record_failure_closure(code)
+            if not self._record_failure_closure(code):
+                self._pending_closure = code
+                return self._finalize(error_code=code, closure_unproven=True, **extra)
         return self._finalize(error_code=code, **extra)
 
     def _void(self, code: str, **extra) -> dict:
@@ -2581,13 +2623,16 @@ class MatchSupervisor:
         self.code = code
         self.error = _compact_error(code)
         if not self._retire_session():
+            self._pending_closure = code
             self.human_retained = True
             return self._finalize(
                 error_code=code, void=True, human_retained=True, closure_unproven=True, **extra
             )
         self.human_retained = False
         if self._record_started and self.config.require_certificate:
-            self._record_failure_closure(code)
+            if not self._record_failure_closure(code):
+                self._pending_closure = code
+                return self._finalize(error_code=code, void=True, closure_unproven=True, **extra)
         return self._finalize(error_code=code, void=True, **extra)
 
     def _record_failure_closure(self, code: str) -> bool:
@@ -2609,6 +2654,34 @@ class MatchSupervisor:
         if isinstance(verdict, Mapping) and verdict.get("ok") is False:
             return False
         self._record_started = False
+        return True
+
+    def retry_pending_closure(self) -> bool:
+        """Retry a closure that could not be retired/persisted (H-A-1-R).
+
+        A refused closure (a stuck owned handle, or a persistence that raised once)
+        is remembered in ``_pending_closure`` and re-attempted here, so the public
+        ``acknowledge``/``start`` ops can complete it once the owned process finally
+        exits. Returns ``True`` only when no pending closure remains: a handle that
+        still cannot be proven exited, or a still-refused persistence, returns
+        ``False`` and keeps the record/handles exactly as they were (a refused
+        closure is never turned into a false one). Only a finished supervisor may be
+        retried; the daemon enforces that before calling.
+        """
+        code = self._pending_closure
+        if code is None:
+            return True
+        if not self._retire_session():
+            return False
+        self.human_retained = False
+        if self._record_started and self.config.require_certificate:
+            if not self._record_failure_closure(code):
+                return False
+        self._pending_closure = None
+        self.code = code
+        self.error = _compact_error(code)
+        self._set_phase("failed")
+        self._finalize(error_code=code)
         return True
 
     def _build_plan(self) -> dict:
@@ -2836,12 +2909,15 @@ class MatchSupervisor:
         if not self._retire_session():
             # An owned handle could not be proven exited (or close/query failed):
             # retain ownership and leave the record open rather than falsely
-            # recording a failure closure while an owned process remains.
+            # recording a failure closure while an owned process remains. The
+            # closure stays pending so the public ops can retry it later.
+            self._pending_closure = failure_code or "session_closure_unproven"
             self.human_retained = True
             return
         self.human_retained = False
         if failure_code is not None and self._record_started and self.config.require_certificate:
-            self._record_failure_closure(failure_code)
+            if not self._record_failure_closure(failure_code):
+                self._pending_closure = failure_code
 
     def _finalize(self, error_code: Optional[str] = None, **extra) -> dict:
         report = {
@@ -3110,6 +3186,30 @@ class HostDaemon:
             ticket = self._ticket
         return ticket.supervisor if ticket is not None else None
 
+    def _retry_pending_closure(self) -> bool:
+        """Retry a finished supervisor's pending closure (H-A-1-R).
+
+        Only a supervisor whose worker thread has actually finished is retried: a
+        still-running supervisor owns its own closure and must never be touched
+        concurrently. Returns ``False`` only when a pending closure still cannot be
+        completed (a stuck owned handle, or a still-failing persistence), so the
+        caller can refuse rather than reach ``cleanup`` while it is needed.
+        """
+        with self._lock:
+            ticket = self._ticket
+        if ticket is None or ticket.supervisor is None:
+            return True
+        thread = ticket.thread
+        if thread is not None and thread.is_alive():
+            return True
+        fn = getattr(ticket.supervisor, "retry_pending_closure", None)
+        if not callable(fn):
+            return True
+        try:
+            return bool(fn())
+        except Exception:  # noqa: BLE001
+            return False
+
     def human_active(self) -> bool:
         """True while a retained staged human window is still owned (H4)."""
         supervisor = self._active_supervisor()
@@ -3130,8 +3230,13 @@ class HostDaemon:
         exiting the daemon while it is still open would kill the user's window.
         A deferred stop leaves the daemon and the loopback socket alive (H4).
         """
-        if not force and self.human_active():
-            return {"ok": False, "code": CODE_HUMAN_ACTIVE, "stopped": False}
+        if not force:
+            # H-A-1-R: never reach cleanup() while a finished supervisor still holds
+            # a pending closure that needs its retained handles.
+            if not self._retry_pending_closure():
+                return {"ok": False, "code": CODE_CLOSURE_PENDING, "stopped": False}
+            if self.human_active():
+                return {"ok": False, "code": CODE_HUMAN_ACTIVE, "stopped": False}
         with self._lock:
             ticket = self._ticket
             self._ticket = None
@@ -3252,6 +3357,11 @@ class HostDaemon:
     def _op_acknowledge(self, request) -> dict:
         if set(request.keys()) != {"confirm"} or request.get("confirm") is not True:
             return {"ok": False, "code": CODE_BAD_REQUEST}
+        # H-A-1-R: a finished supervisor may hold a pending closure (a stuck owned
+        # handle that has since exited, or a persistence that failed once). Retry it
+        # through this public op before the human/open-record checks so a delayed
+        # safe exit can always be closed without hand-editing evidence.
+        self._retry_pending_closure()
         if self.human_active():
             return {"ok": False, "code": CODE_HUMAN_ACTIVE}
         # A prior unclosed/unmeasured record blocks acknowledgement until closure.
@@ -3273,6 +3383,11 @@ class HostDaemon:
     def _op_start(self, request) -> dict:
         if set(request.keys()) != START_REQUEST_KEYS:
             return {"ok": False, "code": CODE_BAD_REQUEST}
+        # H-A-1-R: retry a finished prior supervisor's pending closure before the
+        # open-record check, so a delayed safe exit never wedges the next ticket.
+        # This runs before the ticket slot is reserved, so it always targets the
+        # prior (finished) supervisor, never the one about to be created.
+        self._retry_pending_closure()
         if self.human_active():
             # A new ticket must never terminate a retained human window (H4).
             return {"ok": False, "code": CODE_HUMAN_ACTIVE}
@@ -3374,10 +3489,12 @@ class HostDaemon:
             )
             ticket.thread = thread
             # A concurrent stop() can retire this daemon (and this ticket) after the
-            # reservation ran. Re-check under the lock so a stopped daemon never
-            # launches an orphan supervisor thread.
+            # reservation ran. Re-check and start under the same lock so a stop()
+            # between the two can never start an orphaned supervisor thread.
             with self._lock:
                 retired = self._ticket is not ticket or self._server is None
+                if not retired:
+                    thread.start()
             if retired:
                 _release()
                 try:
@@ -3385,7 +3502,6 @@ class HostDaemon:
                 except Exception:  # noqa: BLE001
                     pass
                 return {"ok": False, "code": CODE_HOST_CLOSED}
-            thread.start()
         except BaseException:
             # A factory/workspace-mkdir/thread-start failure must never leak the
             # reserved slot (a later start would otherwise be stuck ``ticket_active``).

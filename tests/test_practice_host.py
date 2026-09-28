@@ -2982,6 +2982,379 @@ def test_supervisor_fails_on_real_service_prestart_timeout():
         assert report["supervision"]["reason"] == practice_service.CODE_PRESTART_TIMEOUT, report["supervision"]
 
 
+class _RecoverableOwnedRole:
+    """Owned handle that cannot be stopped until ``session.recover`` is flipped."""
+
+    def __init__(self, role, pid, session):
+        self.role = role
+        self.pid = pid
+        self.session = session
+        self.terminated = 0
+
+    def is_running(self):
+        return not self.session.recover
+
+    def terminate(self, timeout=10.0):
+        self.terminated += 1
+        return {"role": self.role, "pid": self.pid, "terminated": self.session.recover}
+
+
+class _RecoverableHumanSession:
+    """Real-certificate owned session whose first close fails while the human runs.
+
+    Mirrors a stuck Job Object: the first ``close`` raises while the owned human
+    still reports running, then the handle finally exits and the close succeeds.
+    """
+
+    def __init__(self, session_id, nonce):
+        self.session_id = session_id
+        self.nonce = nonce
+        self.spawn_time = 1000.0
+        self.recover = False
+        self.closed = 0
+        self.owned = [_RecoverableOwnedRole("human", 7, self)]
+
+    def is_running(self):
+        return [
+            {"role": item.role, "pid": item.pid, "running": item.is_running()}
+            for item in self.owned
+        ]
+
+    def close(self):
+        self.closed += 1
+        if not self.recover:
+            raise OSError("synthetic stuck Job close")
+
+
+class _StuckAiSession(_FailedCloseSession):
+    """A spawned session whose owned AI survives termination (a stuck Job)."""
+
+    def __init__(self, session_id, nonce):
+        super().__init__(session_id, nonce)
+        self.owned = [_StuckOwnedRole("ai", 8)]
+
+
+class _RetryRecordingSupervisor:
+    """Minimal supervisor stand-in that records pending-closure retries."""
+
+    def __init__(self, result=True):
+        self.phase = "failed"
+        self.error = None
+        self.calls = 0
+        self.result = result
+
+    def retry_pending_closure(self):
+        self.calls += 1
+        return self.result
+
+
+def _synthetic_livepair(config):
+    install = Path(config.live_install_root)
+    appdata = Path(config.live_appdata_root)
+    install.mkdir(parents=True, exist_ok=True)
+    appdata.mkdir(parents=True, exist_ok=True)
+    return {"install": str(install), "appdata": str(appdata)}
+
+
+def test_supervisor_real_certificate_human_end_after_exit_completes():
+    """N-1-R: a genuine human_end with the human already exited must pass with the
+    real certificate, close the record and leave no lockouts (no failure stamp)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-human-end"
+        _real_open_record(config, session_id, live, pids={"human": [7], "ai": [8]})
+        session = FakeSession(roles=("human", "ai"))
+        session.session_id = session_id
+        session.nonce = "n" * 32
+        for role in session.owned:
+            role.running = False
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            certificate_api=isolation_certificate,
+            verdict_recorder=None,
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="awaiting_ai"),
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        supervisor.session = session
+        supervisor.session_id = session_id
+        supervisor._gates = {"live_map": live}
+        supervisor.open_record = str(
+            isolation_certificate._open_record_path(Path(config.staging_root), session_id)
+        )
+        supervisor.backup_id = "b" * 64
+        supervisor.certificate_id = "cert1"
+        supervisor._record_started = True
+        supervisor._unmeasured_lockout = True
+        practice_host.set_host_lockout(config, reason="session_unmeasured", session_id=session_id)
+
+        result = supervisor._finalize_after_run()
+        assert result["ok"] is True, result
+        assert supervisor.human_retained is False
+        assert supervisor.session is None
+        assert session.closed == 1
+        assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+        closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert closed["status"] == "closed" and closed["close_problems"] == []
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+        assert practice_host.read_host_lockout(config)["locked"] is False
+
+
+def test_supervisor_real_certificate_stuck_ai_retains_open_record():
+    """N-1-R: an AI that survives termination must not stamp a closure; ownership
+    is retained and the record stays open."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-stuck-ai"
+        _real_open_record(config, session_id, live, pids={"human": [7], "ai": [8]})
+        session = _StuckAiSession(session_id, "n" * 32)
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+
+        result = supervisor._finalize_refused_closure("session_closure_unproven")
+        assert result["ok"] is False, result
+        assert supervisor.session is session
+        assert supervisor.human_retained is True
+        assert supervisor._pending_closure == "session_closure_unproven"
+        assert supervisor._record_started is True
+        assert isolation_certificate.list_open_records(Path(config.staging_root))
+        still_open = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert still_open["status"] == "open"
+        assert not [row for row in _receipts(config) if row.get("session_id") == session_id]
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+
+
+def test_daemon_acknowledge_retries_pending_closure_and_recovers():
+    """H-A-1-R: a finished supervisor with a stuck owned handle is retried through
+    the public acknowledge op once that handle finally exits."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-pending-ack"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = _RecoverableHumanSession(session_id, "n" * 32)
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+
+        first = supervisor._finalize_refused_closure("session_closure_unproven")
+        assert first["ok"] is False
+        assert supervisor.session is session
+        assert supervisor._pending_closure == "session_closure_unproven"
+        assert isolation_certificate.list_open_records(Path(config.staging_root))
+
+        daemon = practice_host.HostDaemon(
+            config,
+            certificate_api=isolation_certificate,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+        )
+        with daemon._lock:
+            daemon._ticket = practice_host.MatchTicket(ticket="ticket-pending", request=make_request())
+            daemon._ticket.supervisor = supervisor
+        try:
+            refused = daemon._op_acknowledge({"confirm": True})
+            assert refused["ok"] is False, refused
+            assert supervisor._pending_closure == "session_closure_unproven"
+            assert isolation_certificate.list_open_records(Path(config.staging_root))
+
+            # The stuck owned handle finally exits.
+            session.recover = True
+
+            ack = daemon._op_acknowledge({"confirm": True})
+            assert ack["ok"] is True and ack["cleared"] is True, ack
+            assert supervisor._pending_closure is None
+            assert supervisor.session is None
+            assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+            closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+            assert closed["status"] == "failed"
+            assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+            assert practice_host.read_host_lockout(config)["locked"] is False
+        finally:
+            with daemon._lock:
+                daemon._ticket = None
+
+
+def test_daemon_acknowledge_retries_closure_after_persistence_failure():
+    """H-A-1-R: a closure that raised once is persisted on the next acknowledge."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-persist-retry"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = FakeSession(roles=("human",))
+        session.owned[0].running = False
+        session.session_id = session_id
+        session.nonce = "n" * 32
+        real_failure = isolation_certificate.record_session_failure
+        calls = {"n": 0}
+
+        def flaky(staging_root, *, session_id, reason):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("synthetic persistence failure")
+            return real_failure(staging_root, session_id=session_id, reason=reason)
+
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+        with patched(isolation_certificate, record_session_failure=flaky):
+            first = supervisor._finalize_refused_closure("session_closure_unproven")
+            assert first["ok"] is False
+            assert calls["n"] == 1
+            assert supervisor._pending_closure == "session_closure_unproven"
+            assert supervisor.session is None
+            assert supervisor._record_started is True
+            assert isolation_certificate.list_open_records(Path(config.staging_root))
+
+            daemon = practice_host.HostDaemon(
+                config,
+                certificate_api=isolation_certificate,
+                opener=_live_opener(config),
+                enumerator=FakeEnumerator([]),
+            )
+            with daemon._lock:
+                daemon._ticket = practice_host.MatchTicket(
+                    ticket="ticket-persist", request=make_request()
+                )
+                daemon._ticket.supervisor = supervisor
+            try:
+                ack = daemon._op_acknowledge({"confirm": True})
+                assert ack["ok"] is True and ack["cleared"] is True, ack
+                assert calls["n"] == 2
+                assert supervisor._pending_closure is None
+                assert supervisor._record_started is False
+                assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+                closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+                assert closed["status"] == "failed"
+                assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+            finally:
+                with daemon._lock:
+                    daemon._ticket = None
+
+
+def test_daemon_start_retries_pending_closure_before_open_record_check():
+    """H-A-1-R: a finished prior supervisor's pending closure is retried (and
+    closed) before a new start's open-record check."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-start-retry"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = FakeSession(roles=("human",))
+        session.owned[0].running = False
+        session.session_id = session_id
+        session.nonce = "n" * 32
+        real_failure = isolation_certificate.record_session_failure
+        calls = {"n": 0}
+
+        def flaky(staging_root, *, session_id, reason):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("synthetic persistence failure")
+            return real_failure(staging_root, session_id=session_id, reason=reason)
+
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+        with patched(isolation_certificate, record_session_failure=flaky):
+            first = supervisor._finalize_refused_closure("session_closure_unproven")
+            assert first["ok"] is False
+            assert calls["n"] == 1
+            assert supervisor._pending_closure == "session_closure_unproven"
+
+            daemon = practice_host.HostDaemon(
+                config,
+                certificate_api=isolation_certificate,
+                opener=_live_opener(config),
+                enumerator=FakeEnumerator([]),
+                runtime_checker=_ok_runtime_checker,
+                start_gate=lambda: {"ok": True, "code": practice_host.CODE_OK},
+                supervisor_factory=lambda cfg, request: FakeSupervisor(block=threading.Event()),
+            )
+            daemon.start()
+            try:
+                with daemon._lock:
+                    daemon._ticket = practice_host.MatchTicket(
+                        ticket="ticket-pending-start", request=make_request(), phase="failed"
+                    )
+                    daemon._ticket.supervisor = supervisor
+
+                # The retry completes the closure, but the persistent host lockout
+                # still requires an explicit acknowledge (never silently cleared).
+                refused = daemon._op_start(make_request())
+                assert refused["code"] == practice_host.CODE_ACK_REQUIRED, refused
+                assert calls["n"] == 2
+                assert supervisor._pending_closure is None
+                assert supervisor._record_started is False
+                assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+
+                ack = daemon._op_acknowledge({"confirm": True})
+                assert ack["ok"] is True and ack["cleared"] is True, ack
+                assert practice_host.read_host_lockout(config)["locked"] is False
+
+                response = daemon._op_start(make_request())
+                assert response["ok"] is True, response
+                assert response["code"] == practice_host.CODE_ACCEPTED, response
+            finally:
+                daemon.stop(force=True)
+
+
+def test_daemon_stop_refuses_while_closure_pending():
+    """H-A-1-R: a non-forced stop must never reach cleanup while a closure is
+    still pending (the retained handles are the only proof of exit)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-stop-pending"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = _RecoverableHumanSession(session_id, "n" * 32)
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+        first = supervisor._finalize_refused_closure("session_closure_unproven")
+        assert first["ok"] is False
+        assert supervisor.session is session
+
+        daemon = practice_host.HostDaemon(
+            config,
+            certificate_api=isolation_certificate,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+        )
+        with daemon._lock:
+            daemon._ticket = practice_host.MatchTicket(ticket="ticket-stop", request=make_request())
+            daemon._ticket.supervisor = supervisor
+        try:
+            stopped = daemon.stop()
+            assert stopped["stopped"] is False, stopped
+            assert stopped["code"] == practice_host.CODE_CLOSURE_PENDING, stopped
+            assert supervisor.session is session
+        finally:
+            with daemon._lock:
+                daemon._ticket = None
+
+
+def test_daemon_retry_pending_closure_only_for_finished_threads():
+    """H-A-1-R: a running supervisor thread owns its closure and is never retried."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(
+            config, opener=_live_opener(config), enumerator=FakeEnumerator([])
+        )
+        recording = _RetryRecordingSupervisor()
+        event = threading.Event()
+        live_thread = threading.Thread(target=event.wait, args=(5.0,), daemon=True)
+        live_thread.start()
+        try:
+            with daemon._lock:
+                daemon._ticket = practice_host.MatchTicket(
+                    ticket="ticket-thread", request=make_request(), supervisor=recording, thread=live_thread
+                )
+            assert daemon._retry_pending_closure() is True
+            assert recording.calls == 0
+
+            with daemon._lock:
+                daemon._ticket.thread = None
+            assert daemon._retry_pending_closure() is True
+            assert recording.calls == 1
+        finally:
+            event.set()
+
+
 def _run_all() -> int:
     tests = sorted(
         (name, value)
