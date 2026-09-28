@@ -1,0 +1,75 @@
+return function(ctx)
+	local test = ctx.test
+	local eq = ctx.eq
+	local is_true = ctx.is_true
+	local bundle = ctx.support.bundle(ctx.repo_root)
+	local StateRevision = bundle.StateRevision
+
+	test("factory_defaults_zero", function()
+		local revision, code = StateRevision.factory()
+		is_true(revision ~= nil, "factory: " .. tostring(code))
+		eq(revision.current(), 0)
+	end)
+
+	test("sync_is_monotonic_and_stable", function()
+		local revision = StateRevision.factory()
+		eq(revision.sync("a"), 1)
+		eq(revision.sync("a"), 1)
+		eq(revision.sync("b"), 2)
+	end)
+
+	test("sync_detects_observed_aba", function()
+		local revision = StateRevision.factory()
+		eq(revision.sync("a"), 1)
+		eq(revision.sync("b"), 2)
+		eq(revision.sync("a"), 3)
+	end)
+
+	test("bump_advances_strictly", function()
+		local revision = StateRevision.factory()
+		eq(revision.bump("change"), 1)
+		eq(revision.bump("change"), 2)
+		local value, code = revision.bump("")
+		eq(value, nil)
+		eq(code, "revision_bad_reason")
+	end)
+
+	test("overflow_fails_closed", function()
+		local revision, code = StateRevision.factory({ limit = 2 })
+		is_true(revision ~= nil, "factory: " .. tostring(code))
+		eq(revision.sync("a"), 1)
+		eq(revision.sync("b"), 2)
+		local value, overflow = revision.sync("c")
+		eq(value, nil)
+		eq(overflow, "revision_overflow")
+		eq(revision.current(), 2)
+	end)
+
+	test("bad_fingerprint_refused", function()
+		local revision = StateRevision.factory()
+		local value, code = revision.sync("")
+		eq(value, nil)
+		eq(code, "revision_bad_fingerprint")
+		local value2, code2 = revision.sync(7)
+		eq(value2, nil)
+		eq(code2, "revision_bad_fingerprint")
+	end)
+
+	test("bad_options_refused", function()
+		local revision, code = StateRevision.factory({ limit = 0 })
+		eq(revision, nil)
+		eq(code, "revision_bad_options")
+		local revision2, code2 = StateRevision.factory({ start = 5, limit = 2 })
+		eq(revision2, nil)
+		eq(code2, "revision_bad_options")
+	end)
+
+	test("describe_is_a_copy", function()
+		local revision = StateRevision.factory()
+		revision.sync("a")
+		local described = revision.describe()
+		eq(described.epoch, 1)
+		described.epoch = 999
+		eq(revision.current(), 1)
+	end)
+end

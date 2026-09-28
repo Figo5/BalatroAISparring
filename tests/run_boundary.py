@@ -45,7 +45,10 @@ def static_cases() -> list[dict]:
     helper_src = HELPER.read_text(encoding="utf-8") if HELPER.is_file() else ""
 
     add("broker_declares_executor_disabled", "executor_disabled" in broker_src)
-    add("broker_atomic_capture_epoch", "local ok, handle, epoch = pcall(ports.capture)" in broker_src)
+    # Production snapshots the trusted capture function at authorization. The
+    # handle and epoch must still come from one invocation, not separate reads.
+    add("broker_atomic_capture_epoch", "local ok, handle, epoch = pcall(capture_fn)" in broker_src
+        and 'local capture_port = rawget(ports, "capture")' in broker_src)
     add("broker_rechecks_after_validator", "canonical_end" in broker_src and "epoch_end" in broker_src)
     add("broker_single_pending_token", "pending_token" in broker_src and "pending_record" in broker_src)
     offenders = [token for token in BROKER_FORBIDDEN if token in broker_src]
