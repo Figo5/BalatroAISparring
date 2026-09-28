@@ -727,6 +727,32 @@ def test_check_rejects_native_and_mods_layer_changes():
         assert not mods["ok"] and "mods_layer_changed" in mods["problems"]
 
 
+def test_generated_game_dump_cache_does_not_change_certificate_mods_layer():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        assert _build(fixture, tools_root=root)["ok"]
+        paths = staging.role_paths(fixture["staging_root"], "ai")
+        # The real run regenerates Lovely's separate unpatched game-dump cache; only
+        # the exact generated prefix is ignored, so layer M is unaffected.
+        regenerated = (
+            paths.mods / staging.LOVELY_DIR_NAME / staging.LOVELY_GAME_DUMP_DIR_NAME / "SMODS" / "Multiplayer"
+        )
+        (regenerated / "networking").mkdir(parents=True)
+        (regenerated / "core.lua").write_text("-- regenerated core\n", encoding="utf-8")
+        (regenerated / "networking" / "socket.lua").write_text("-- regenerated socket\n", encoding="utf-8")
+        with synthetic_tools(root):
+            verdict = ic.check_certificate(fixture["staging_root"], live=fixture["live_map"], port=PORT)
+        assert verdict["ok"], verdict
+        # A same-named sibling tree is still ordinary source and still refuses.
+        sibling = paths.mods / staging.LOVELY_DIR_NAME / (staging.LOVELY_GAME_DUMP_DIR_NAME + "-extra")
+        sibling.mkdir(parents=True)
+        (sibling / "keep.lua").write_text("-- sibling\n", encoding="utf-8")
+        with synthetic_tools(root):
+            changed = ic.check_certificate(fixture["staging_root"], live=fixture["live_map"], port=PORT)
+        assert not changed["ok"] and "mods_layer_changed" in changed["problems"]
+
+
 def test_certificate_requires_staged_role_parity():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -849,6 +875,27 @@ def test_snapshot_live_is_full_byte_manifest_over_all_profiles_only():
             assert entry["files"] and all("sha256" in item for item in entry["files"].values())
         assert ic.snapshot_live({"install": root / "missing"})["roots"]["install"]["digest"] is None
         assert ic._recompute_snapshot_digest(snapshot) == snapshot["digest"]
+
+
+def test_live_snapshot_still_includes_lovely_dump_and_game_dump_content():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        live_map = _live_map(root)
+        mods = Path(live_map["appdata"]) / "Mods"
+        for rel in (
+            "lovely/log/lovely.log",
+            "lovely/dump/main.lua",
+            "lovely/game-dump/SMODS/Multiplayer/core.lua",
+        ):
+            path = mods / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("-- " + rel + "\n", encoding="utf-8")
+        files = ic.snapshot_live(live_map)["roots"]["appdata"]["files"]
+        # The immutable live snapshot stays complete: generated Lovely output is
+        # captured byte-for-byte even though the staged policies ignore it.
+        assert "Mods/lovely/log/lovely.log" in files
+        assert "Mods/lovely/dump/main.lua" in files
+        assert "Mods/lovely/game-dump/SMODS/Multiplayer/core.lua" in files
 
 
 def _prepare_for_verdict(fixture, session_id="s1", backup_id=None):

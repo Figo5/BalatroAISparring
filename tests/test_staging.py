@@ -671,6 +671,105 @@ def test_verify_staged_role_roundtrip_and_tamper():
         assert "manifest_mismatch" in verify["problems"]
 
 
+def test_generated_lovely_game_dump_cache_never_invalidates_staged_role():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        install = _make_install(root)
+        mods = _make_mods(root)
+        # A stale live Lovely unpatched cache. Lovely deletes and regenerates it on
+        # every load (lib.rs:210-221,321), so it is never staged source.
+        stale = mods / "lovely" / "game-dump" / "SMODS" / "Handy" / "threads"
+        stale.mkdir(parents=True)
+        (stale / "updater").write_text("-- stale unpatched live\n", encoding="utf-8")
+        live = _make_live(root)
+        staging_root = root / "staging"
+        _stage_role(staging_root, "ai", install, mods, live=live)
+        paths = staging.role_paths(staging_root, "ai")
+        assert staging.verify_staged_role(staging_root, "ai")["ok"]
+        manifest = json.loads((paths.root / staging.MANIFEST_NAME).read_text(encoding="utf-8"))
+        # The fresh copy omits the generated cache and the manifest never binds it.
+        assert not (paths.mods / "lovely" / "game-dump").exists()
+        assert not any("lovely/game-dump" in rel for rel in manifest["files"])
+        # The real run regenerates the unpatched cache (two added, the stale one gone).
+        regenerated = paths.mods / "lovely" / "game-dump" / "SMODS" / "Multiplayer"
+        (regenerated / "networking").mkdir(parents=True)
+        (regenerated / "core.lua").write_text("-- regenerated core\n", encoding="utf-8")
+        (regenerated / "networking" / "socket.lua").write_text("-- regenerated socket\n", encoding="utf-8")
+        verify = staging.verify_staged_role(staging_root, "ai")
+        assert verify["ok"], verify
+        assert verify["manifest"]["added"] == [] and verify["manifest"]["missing"] == []
+
+
+def test_mods_hash_policy_excludes_only_exact_lovely_generated_dirs():
+    with tempfile.TemporaryDirectory() as tmp:
+        mods = Path(tmp) / "Mods"
+        for rel in (
+            "lovely/log/lovely.log",
+            "lovely/dump/main.lua",
+            "lovely/game-dump/SMODS/Multiplayer/core.lua",
+            "lovely/game-dump-extra/keep.lua",
+            "Multiplayer/game-dump/keep.lua",
+            "Multiplayer/core.lua",
+        ):
+            path = mods / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("-- " + rel + "\n", encoding="utf-8")
+        files = staging.hash_tree(mods, staging.MODS_HASH_POLICY)
+        assert not any(rel.startswith("lovely/log/") for rel in files)
+        assert not any(rel.startswith("lovely/dump/") for rel in files)
+        assert not any(rel.startswith("lovely/game-dump/") for rel in files)
+        # Only the exact generated prefixes are excluded, never a same-named tree.
+        assert "lovely/game-dump-extra/keep.lua" in files
+        assert "Multiplayer/game-dump/keep.lua" in files
+        assert "Multiplayer/core.lua" in files
+
+
+def test_stage_mods_omits_only_exact_generated_lovely_game_dump():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        mods = _make_mods(root)
+        for rel in (
+            "lovely/game-dump/SMODS/Handy/threads/updater",
+            "lovely/game-dump-extra/keep.lua",
+            "Handy/game-dump/keep.lua",
+        ):
+            path = mods / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("-- " + rel + "\n", encoding="utf-8")
+        staging_root = root / "staging"
+        dest = staging_root / "roles" / "ai" / "appdata" / "Roaming" / "Balatro" / "Mods"
+        result = staging.stage_mods(mods, dest, staging_root, closed_check=lambda: True)
+        staged = Path(result["dest"])
+        assert not (staged / "lovely" / "game-dump").exists()
+        assert (staged / "lovely" / "game-dump-extra" / "keep.lua").is_file()
+        assert (staged / "Handy" / "game-dump" / "keep.lua").is_file()
+        omission = [entry for entry in result["omitted"] if entry["rel"] == "lovely/game-dump"]
+        assert len(omission) == 1 and omission[0]["kind"] == "lovely_generated"
+
+
+def test_similar_game_dump_names_and_mod_sources_still_invalidate_role():
+    for rel, content in (
+        ("Multiplayer/core.lua", "-- mutated core\n"),
+        ("SomeMod/game-dump/keep.lua", "-- new nested cache-like dir\n"),
+        ("lovely/game-dump-extra/keep.lua", "-- new sibling dir\n"),
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install = _make_install(root)
+            mods = _make_mods(root)
+            live = _make_live(root)
+            staging_root = root / "staging"
+            _stage_role(staging_root, "ai", install, mods, live=live)
+            paths = staging.role_paths(staging_root, "ai")
+            assert staging.verify_staged_role(staging_root, "ai")["ok"]
+            target = paths.mods / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            verify = staging.verify_staged_role(staging_root, "ai")
+            assert not verify["ok"], (rel, verify)
+            assert "manifest_mismatch" in verify["problems"], (rel, verify)
+
+
 def test_measured_proof_recorded_and_recomputed_not_self_attested():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

@@ -35,7 +35,10 @@ Isolation is treated as *measured*, never self-attested:
   ``package.loaded.luasteam``) and the nonce-bound patch-applied marker, so a
   pre-``G:start_up()`` ``steam=nil`` echo can no longer pass.
 * ``check_lovely_evidence`` binds the exact staged ``Mods`` path and a *fresh* log
-  and ``main.lua`` dump under ``Mods/lovely/{log,dump}`` (NH1/NM8).
+  and ``main.lua`` dump under ``Mods/lovely/{log,dump}`` (NH1/NM8). The separate
+  generated ``Mods/lovely/game-dump`` unpatched cache is never staged source: it is
+  excluded by exact prefix from the immutable policies and omitted from a fresh
+  live copy (see ``LOVELY_GENERATED_DIR_NAMES``).
 
 Nothing in this module proves native save, Mods, Lovely or Steam isolation on its
 own. The default launch gate stays closed until the certificate described in
@@ -216,6 +219,7 @@ MODS_REL_PREFIX = "appdata/Roaming/Balatro/Mods"
 LOVELY_DIR_NAME = "lovely"
 LOVELY_LOG_DIR_NAME = "log"
 LOVELY_DUMP_DIR_NAME = "dump"
+LOVELY_GAME_DUMP_DIR_NAME = "game-dump"
 # Official Lovely v0.10.0 (lib.rs:308-331) writes the *patched* buffer under
 # ``lovely/dump/<pretty_name>`` and the unpatched buffer under
 # ``lovely/game-dump/<pretty_name>``. ``=[SMODS Multiplayer "networking/socket.lua"]``
@@ -223,6 +227,20 @@ LOVELY_DUMP_DIR_NAME = "dump"
 # bind these exact patched relative paths, never any same-basename file.
 MP_SOCKET_DUMP_REL = "SMODS/Multiplayer/networking/socket.lua"
 LOVELY_PATCHED_MAIN_REL = "main.lua"
+# Lovely's own runtime output directories. At init Lovely deletes and recreates
+# both ``lovely/dump`` and ``lovely/game-dump`` (lib.rs:210-221) and rewrites them
+# from every loaded chunk on each run (lib.rs:321 unpatched ``game-dump``, lib.rs:330
+# patched ``dump``), writing ``lovely/log`` alongside. None of these are staged
+# source, so the immutable policies exclude them by exact relative prefix only; a
+# same-named directory anywhere else (for example ``SomeMod/game-dump`` or
+# ``lovely/game-dump-extra``) is still hashed and bound.
+LOVELY_GENERATED_DIR_NAMES = (LOVELY_LOG_DIR_NAME, LOVELY_DUMP_DIR_NAME, LOVELY_GAME_DUMP_DIR_NAME)
+STAGING_LOVELY_OUTPUT_PREFIXES = tuple(
+    f"{MODS_REL_PREFIX}/{LOVELY_DIR_NAME}/{name}" for name in LOVELY_GENERATED_DIR_NAMES
+)
+MODS_LOVELY_OUTPUT_PREFIXES = tuple(
+    f"{LOVELY_DIR_NAME}/{name}" for name in LOVELY_GENERATED_DIR_NAMES
+)
 
 
 def lovely_patched_dump_rel(pretty_name: str) -> str:
@@ -698,17 +716,17 @@ def _related_to_any(rel: str, prefixes: Sequence[str]) -> bool:
 
 STAGING_POLICY = HashPolicy(
     include_rel_prefixes=("install", MODS_REL_PREFIX, "steam_guard"),
-    exclude_rel_prefixes=(f"{MODS_REL_PREFIX}/lovely/log", f"{MODS_REL_PREFIX}/lovely/dump"),
+    exclude_rel_prefixes=STAGING_LOVELY_OUTPUT_PREFIXES,
     exclude_names=(MANIFEST_NAME,),
 )
 BOOTSTRAP_POLICY = HashPolicy(
     include_rel_prefixes=("install", MODS_REL_PREFIX, "steam_guard", BOOTSTRAP_EXPECTED_NAME),
-    exclude_rel_prefixes=(f"{MODS_REL_PREFIX}/lovely/log", f"{MODS_REL_PREFIX}/lovely/dump"),
+    exclude_rel_prefixes=STAGING_LOVELY_OUTPUT_PREFIXES,
     exclude_names=(MANIFEST_NAME,),
 )
 BACKUP_POLICY = HashPolicy()
 INSTALL_HASH_POLICY = HashPolicy(exclude_names=(MANIFEST_NAME,))
-MODS_HASH_POLICY = HashPolicy(exclude_rel_prefixes=("lovely/log", "lovely/dump"))
+MODS_HASH_POLICY = HashPolicy(exclude_rel_prefixes=MODS_LOVELY_OUTPUT_PREFIXES)
 
 
 def _is_reparse_point(path) -> bool:
@@ -1037,6 +1055,39 @@ def _install_ignore(omitted: list):
     return ignore
 
 
+def _mods_ignore(source_mods, omitted: list):
+    """``_install_ignore`` plus the exact Lovely generated-cache omission.
+
+    Official Lovely deletes and rewrites ``lovely/game-dump`` from every loaded
+    chunk on each run (lib.rs:210-221,321), so a stale live copy is never staged
+    source. Only the exact ``lovely/game-dump`` subtree directly under the source
+    Mods root is skipped; a same-named directory elsewhere (a mod's own
+    ``game-dump`` folder, ``lovely/game-dump-extra``) is still copied and bound.
+    """
+    base_ignore = _install_ignore(omitted)
+    source = Path(source_mods)
+    generated_rel = f"{LOVELY_DIR_NAME}/{LOVELY_GAME_DUMP_DIR_NAME}"
+
+    def ignore(dirpath, names):
+        skip = list(base_ignore(dirpath, names))
+        try:
+            rel = Path(dirpath).relative_to(source).as_posix()
+        except ValueError:
+            return skip
+        if rel == LOVELY_DIR_NAME and LOVELY_GAME_DUMP_DIR_NAME in names:
+            skip.append(LOVELY_GAME_DUMP_DIR_NAME)
+            omitted.append(
+                {
+                    "rel": generated_rel,
+                    "kind": "lovely_generated",
+                    "reason": "regenerated_unpatched_cache_never_copied",
+                }
+            )
+        return skip
+
+    return ignore
+
+
 def stage_install(source_install, dest_install, staging_root, live_roots_map=None) -> dict:
     source = Path(source_install).resolve()
     if not source.is_dir():
@@ -1083,7 +1134,7 @@ def stage_mods(
         raise StagingError("staging_target_exists", str(dest))
     _ensure_dir(staging_root, dest.parent)
     omitted: list = []
-    shutil.copytree(source, dest, ignore=_install_ignore(omitted))
+    shutil.copytree(source, dest, ignore=_mods_ignore(source, omitted))
     return {"source": str(source), "dest": str(dest), "omitted": omitted}
 
 

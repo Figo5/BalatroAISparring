@@ -4,7 +4,7 @@ Status: **in development, not installed, not yet playable**. Fixture and local-s
 
 | Requirement | Evidence and remaining gate |
 |---|---|
-| Actual mod load; normal Balatro, single-player, Multiplayer, Handy and JokerDisplay | Live copies untouched; actual-engine checks pending |
+| Actual mod load; normal Balatro, single-player, Multiplayer, Handy and JokerDisplay | Base staged bootstrap and Multiplayer load passed; packaged companion and full gameplay checks pending; live copies untouched |
 | Menu, Major League, three difficulties, five Gauntlets, pacing and match start | UI/controller, runtime/service fixtures pass; actual menu/start pending |
 | Human control and independent AI run | Reviewed two-runtime architecture retained; native Balatro isolation proof pending |
 | Blinds, hands, discards, shops, purchases, rerolls, round progression | Baseline and production adapter implemented; fixtures pass; actual action traces pending |
@@ -12,7 +12,7 @@ Status: **in development, not installed, not yet playable**. Fixture and local-s
 | Public opponent HUD | Original Multiplayer presentation/privacy retained; rendering pending |
 | Lives, PvP/Nemesis, both result orientations, completion | Original server handlers and real local TCP lifecycle pass; complete engine lifecycle pending |
 | Failure recovery, local decisions and match summaries | Service/runtime fixtures pass; controlled engine failure check pending |
-| Claude safety/playability verdict | Runtime/engine, installer, host/service and isolation code scopes accepted for staged tests; gameplay verdict pending |
+| Claude safety/playability verdict | Prior code scopes accepted; native-generated cache correction under implementation/review; gameplay verdict pending |
 | Installed build ready for user | Pending review, backups, actual isolation gates and controlled live smoke |
 
 ## Current review status — September 28
@@ -25,9 +25,7 @@ Isolation commit `fddea7e` corrects the reviewed F1–F4 and adjacent F5–F11 f
 
 The review records three non-blocking Low limitations: overlapping marker-name substring checks, possible cross-clock skew on the CLOSE ordering check, and post-exit proof freshness guaranteed by call placement rather than an explicit timestamp comparison. These remain documented without expanding the infrastructure scope. Coverage still fails closed. If a real phase exposes a limitation, preserve its evidence and make a focused repair through the established review cycle; do not bypass the gate.
 
-No actual Balatro runtime copies, backups, launches, installation or live-file changes have occurred. Native game measurements and playability remain unproven.
-
-A read-only process check on September 28 evening found the user's live Steam Balatro running. Staging and native game integration remain deferred while it is open; no process was interrupted.
+After the user closed Balatro, verified backups and separate staged copies were created. Native P1A and P1B passed with zero live-file changes. FULL_P1 then refused before spawning because Lovely regenerated unpatched `game-dump` cache entries that the immutable manifest counted as sources. That narrow correction is in progress; native tests are paused for verification and review. No live installation or live-file changes have occurred. See `NATIVE_TEST_PROGRESS.md` for receipts and the explicit need to repeat measurements with the packaged companion included. Gameplay and user playability remain unproven.
 
 Read-only normal-Multiplayer compatibility inspection: the pinned `networking/action_handlers.lua` lobby-info path sets readiness from guest presence/readiness; `ui/lobby/start_ready_button.lua` does not impose a blanket equality check on all mod hashes. The live companion remains visible in the ordinary mod list, with no suppression or bypass. Actual normal-human compatibility is still an in-game acceptance gate.
 
