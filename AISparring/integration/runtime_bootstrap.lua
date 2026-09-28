@@ -1,0 +1,1598 @@
+-- Trusted staged-runtime bootstrap.
+--
+-- This is the single outer adapter that turns injected globals (G/MP/G.FUNCS,
+-- the game's json module, love.thread) into the private modules the staged AI
+-- runtime needs. It is the ONLY place permitted to mint a production broker
+-- capability, and it does so only after:
+--
+--   1. the role is exactly `human` or `ai` (a role string alone is NOT
+--      authority);
+--   2. the reported save directory, Lovely Mods root and current AISparring mod
+--      path exactly match the launcher-staged expectations;
+--   3. an independently verified launcher handshake agrees on nonce, session,
+--      role, content hash and control port;
+--   4. the control service answered the authenticated `hello` with success.
+--
+-- The capability, the broker, the engine adapter/executor and the decision loop
+-- stay in module-private locals: they are never exposed through `describe()` or
+-- any status/telemetry surface. The human role never constructs the executor,
+-- the policy channel or any action automation.
+--
+-- Loading this file has no side effect. The default/live path (any non-staged
+-- role, mismatched paths or unverified launcher) returns inert and never touches
+-- official Multiplayer routing.
+
+local RuntimeBootstrap = {}
+
+RuntimeBootstrap.CODE = {
+	OK = "boot_ok",
+	BAD_PORTS = "boot_bad_ports",
+	NOT_STAGED = "boot_not_staged",
+	BAD_TOKEN = "boot_bad_token",
+	BAD_PORT = "boot_bad_port",
+	ENV_MISMATCH = "boot_env_mismatch",
+	ENV_UNAVAILABLE = "boot_env_unavailable",
+	LAUNCHER_UNVERIFIED = "boot_launcher_unverified",
+	BAD_CHANNELS = "boot_bad_channels",
+	BAD_CODEC_PORTS = "boot_bad_codec_ports",
+	BAD_MODULES = "boot_bad_modules",
+	BAD_TRANSPORT = "boot_bad_transport",
+	NO_THREAD = "boot_no_thread",
+	ALREADY_INSTALLED = "boot_already_installed",
+	NOT_INSTALLED = "boot_not_installed",
+	HELLO_FAILED = "boot_hello_failed",
+	HELLO_REJECTED = "boot_hello_rejected",
+	SETUP_FAILED = "boot_setup_failed",
+	CONFIG_MISMATCH = "boot_config_mismatch",
+	COORD_TIMEOUT = "boot_coord_timeout",
+	SEED_MISMATCH = "boot_seed_mismatch",
+	SEED_TIMEOUT = "boot_seed_timeout",
+	TERMINAL_TIMEOUT = "boot_terminal_timeout",
+	NOT_ARMED = "boot_not_armed",
+	ACTIVATE_FAILED = "boot_activate_failed",
+	GUARD_FAILED = "boot_guard_failed",
+	WRONG_ROLE = "boot_wrong_role",
+	UPDATE_FAILED = "boot_update_failed",
+	TERMINAL = "boot_terminal",
+	STOPPED = "boot_stopped",
+	INTERNAL = "boot_internal_error",
+}
+
+RuntimeBootstrap.ROLE_AI = "ai_staged"
+RuntimeBootstrap.ROLE_HUMAN = "human_staged"
+
+RuntimeBootstrap.LIMITS = {
+	max_token = 128,
+	max_path = 512,
+	max_hash = 128,
+	max_update_errors = 5,
+	max_coordination_per_update = 8,
+	max_status_per_second = 30,
+	heartbeat_interval = 0.5,
+	hello_timeout = 10,
+	max_reason = 64,
+	-- The service owns the policy child and reports a slow worker after its
+	-- bounded 10 s decision timeout. The decision loop must budget longer than
+	-- the service (plus a poll margin) so the service's own timeout is observed
+	-- first; on a loop timeout the loop issues a wire `decide_cancel` for the
+	-- owned sequence and reissues a fresh `decide_begin`. The transport's own
+	-- request timeout is a strictly higher backstop so the loop, not the dumb
+	-- channel, is the one that cancels.
+	decision_timeout = 15,
+	decision_poll_interval = 0.25,
+	decision_transport_margin = 15,
+	-- Bounded pre-start coordination retry: a late UI element, a not-yet-ready
+	-- registry, an unattested service or a slow opponent is a wait, never a
+	-- frame error. Coordination aborts only after `coord_timeout` seconds.
+	coord_retry_interval = 0.5,
+	coord_timeout = 60,
+}
+
+local CODE = RuntimeBootstrap.CODE
+
+local function is_int(value)
+	if type(value) ~= "number" then
+		return false
+	end
+	if value ~= value or value == math.huge or value == -math.huge then
+		return false
+	end
+	if value % 1 ~= 0 then
+		return false
+	end
+	return true
+end
+
+local function is_plain(value)
+	return type(value) == "table" and getmetatable(value) == nil
+end
+
+local function rget(obj, key)
+	if type(obj) ~= "table" or key == nil then
+		return nil
+	end
+	return rawget(obj, key)
+end
+
+local function rpath(obj, a, b)
+	return rget(rget(obj, a), b)
+end
+
+-- The service's bounded seed vocabulary (`practice_service.SEED_PATTERN`).
+local RUN_SEED_PATTERN = "^[0-9A-Za-z_%-]+$"
+
+-- The actual, already-resolved run seed of a real initialized run: `Game:start_run`
+-- assigns `G.GAME.pseudorandom.seed` from the trusted `args.seed` (the gauntlet
+-- custom seed) or `generate_starting_seed()` for a normal match (pinned
+-- reference/game/game.lua:2164). Reading the resolved field avoids any stale
+-- menu/prior-run seed and is never derived from policy.
+local function resolved_run_seed(G)
+	local seed = rget(rget(rget(G, "GAME"), "pseudorandom"), "seed")
+	if type(seed) ~= "string" or #seed == 0 or #seed > 32 then
+		return nil
+	end
+	if string.match(seed, RUN_SEED_PATTERN) == nil then
+		return nil
+	end
+	return seed
+end
+
+local function token_of(value, limit)
+	if type(value) ~= "string" or #value == 0 or #value > limit then
+		return nil
+	end
+	return value
+end
+
+local function shallow_copy(source)
+	local out = {}
+	for key, value in next, source do
+		out[key] = value
+	end
+	return out
+end
+
+local function normalize_path(value)
+	local bounded = token_of(value, RuntimeBootstrap.LIMITS.max_path)
+	if bounded == nil then
+		return nil
+	end
+	local normalized = string.lower(bounded)
+	normalized = string.gsub(normalized, "\\", "/")
+	normalized = string.gsub(normalized, "/+", "/")
+	if #normalized > 1 then
+		normalized = string.gsub(normalized, "/$", "")
+	end
+	if #normalized == 0 then
+		return nil
+	end
+	return normalized
+end
+
+local function basename(path)
+	return string.match(path, "([^/]+)$")
+end
+
+local function under(root, child)
+	local prefix = root .. "/"
+	return string.sub(child, 1, #prefix) == prefix
+end
+
+local unpack_values = table.unpack or unpack
+
+-- Capture every return value including nil holes, so a wrapped engine callback
+-- keeps its exact return arity.
+local function pack_values(...)
+	local count = select("#", ...)
+	local packed = { n = count }
+	for index = 1, count do
+		packed[index] = select(index, ...)
+	end
+	return packed
+end
+
+RuntimeBootstrap.CODE = shallow_copy(CODE)
+
+-- Install revision hooks over injected engine targets. Each target is
+-- { table = t, name = "method", reason = "token" }. The wrapper preserves the
+-- original return values and lets exceptions propagate; it bumps the trusted
+-- revision only AFTER a successful call, so a failed callback never advances
+-- state. It is not a per-frame bump: only the named relevant methods fire.
+local function install_hooks(hook_targets, revision)
+	if type(hook_targets) ~= "table" or type(revision) ~= "table" then
+		return nil
+	end
+	local installed = {}
+	for i = 1, #hook_targets do
+		local target = hook_targets[i]
+		if type(target) == "table" then
+			local owner = rawget(target, "table")
+			local name = rawget(target, "name")
+			local reason = rawget(target, "reason")
+			if type(owner) == "table"
+				and type(name) == "string"
+				and type(reason) == "string"
+				and #reason > 0
+				and #reason <= RuntimeBootstrap.LIMITS.max_reason
+				and type(rawget(owner, name)) == "function" then
+				local original = owner[name]
+				local wrapper = function(...)
+					local results = pack_values(original(...))
+					revision.bump(reason)
+					return unpack_values(results, 1, results.n)
+				end
+				owner[name] = wrapper
+				installed[#installed + 1] = { owner = owner, name = name, original = original, wrapper = wrapper }
+			end
+		end
+	end
+	local function restore()
+		for i = #installed, 1, -1 do
+			local record = installed[i]
+			if record.owner[record.name] == record.wrapper then
+				record.owner[record.name] = record.original
+			end
+		end
+	end
+	return restore
+end
+
+RuntimeBootstrap.install_hooks = install_hooks
+
+-- Grounded Multiplayer wait states the *runtime* legitimately owns while the AI
+-- is not on a decision. These are the real, parser-visible MP fields
+-- (`MP.GAME.ready_blind`, a PvP blind with no hands left, the PvP countdown) from
+-- the pinned source — never a blanket `true`. Any other condition, including an
+-- unrecognised engine state or a genuine capture fault, returns nil so the
+-- decision loop keeps its own bounded transient window and can still abort.
+RuntimeBootstrap.WAIT_STATES = {
+	READY_BLIND = "mp_ready_blind",
+	PVP_NO_HANDS = "mp_pvp_no_hands",
+	PVP_COUNTDOWN = "mp_pvp_countdown",
+}
+
+function RuntimeBootstrap.mp_wait_state(mp, G)
+	local game = rget(mp, "GAME")
+	if type(game) ~= "table" then
+		return nil
+	end
+	if rget(game, "ready_blind") == true then
+		return RuntimeBootstrap.WAIT_STATES.READY_BLIND
+	end
+	-- A round that already ended (or is past PvP) is normally consumed by the
+	-- next decision, not stalled; only a still-open PvP blind is a trusted wait.
+	if rget(game, "round_ended") == true or rget(game, "end_pvp") == true then
+		return nil
+	end
+	if rget(game, "pvp_reached") == true then
+		local hands_left = rget(rget(rget(G, "GAME"), "current_round"), "hands_left")
+		if is_int(hands_left) and hands_left <= 0 then
+			return RuntimeBootstrap.WAIT_STATES.PVP_NO_HANDS
+		end
+	end
+	local countdown = rget(game, "pvp_countdown")
+	if is_int(countdown) and countdown > 0 then
+		return RuntimeBootstrap.WAIT_STATES.PVP_COUNTDOWN
+	end
+	return nil
+end
+
+function RuntimeBootstrap.factory(ports)
+	if not is_plain(ports) then
+		return nil, CODE.BAD_PORTS
+	end
+
+	local role = rawget(ports, "role")
+	local expected = rawget(ports, "expected")
+	local env = rawget(ports, "env")
+	local launcher = rawget(ports, "launcher")
+	local protocol = rawget(ports, "control_protocol")
+	local transport_factory = rawget(ports, "control_transport_factory")
+	local control_thread = rawget(ports, "control_thread")
+	local love_thread = rawget(ports, "love_thread")
+	local get_channel = rawget(ports, "get_channel")
+	local channels_port = rawget(ports, "channels")
+	local clock = rawget(ports, "clock")
+	local logger = rawget(ports, "logger")
+	local modules = rawget(ports, "modules")
+	local G = rawget(ports, "G")
+	local MP = rawget(ports, "MP")
+	local funcs = rawget(ports, "funcs") or rget(G, "FUNCS")
+	local element_for = rawget(ports, "element_for")
+	local encode = rawget(ports, "encode")
+	local decode = rawget(ports, "decode")
+	local ui_notify = rawget(ports, "ui_notify")
+	local spawn_thread = rawget(ports, "spawn_thread")
+	local terminal_probe = rawget(ports, "terminal_probe")
+
+	local session = token_of(rawget(ports, "session"), RuntimeBootstrap.LIMITS.max_token)
+	local credential = token_of(rawget(ports, "credential"), RuntimeBootstrap.LIMITS.max_token)
+	local nonce = token_of(rawget(ports, "nonce"), RuntimeBootstrap.LIMITS.max_token)
+	local content_hash = token_of(rawget(ports, "content_hash"), RuntimeBootstrap.LIMITS.max_hash)
+	local control_port = rawget(ports, "control_port")
+	local mode = rawget(ports, "mode") or "normal"
+	local difficulty = rawget(ports, "difficulty") or "competitive"
+	local pacing = rawget(ports, "pacing") or "normal"
+	local decision_base = rawget(ports, "decision_base") or 1000000
+	local auto_coordinate = rawget(ports, "auto_coordinate")
+	if auto_coordinate == nil then
+		auto_coordinate = true
+	end
+	local stall_timeout = rawget(ports, "stall_timeout")
+	local poll_interval = RuntimeBootstrap.LIMITS.decision_poll_interval
+	-- Loop timeout = service timeout + one poll interval (documented recovery
+	-- budget); the transport's request timeout is a strictly higher backstop.
+	local loop_timeout = RuntimeBootstrap.LIMITS.decision_timeout + poll_interval
+	local transport_request_timeout = loop_timeout + RuntimeBootstrap.LIMITS.decision_transport_margin
+	local coord_retry_interval = RuntimeBootstrap.LIMITS.coord_retry_interval
+
+	if type(control_thread) ~= "table"
+		or type(rawget(control_thread, "channel_names")) ~= "function"
+		or type(rawget(control_thread, "start")) ~= "function" then
+		return nil, CODE.BAD_PORTS
+	end
+	if type(protocol) ~= "table" or type(rawget(protocol, "envelope")) ~= "function" then
+		return nil, CODE.BAD_PORTS
+	end
+	if type(transport_factory) ~= "function" then
+		return nil, CODE.BAD_TRANSPORT
+	end
+	if type(clock) ~= "table" or type(rawget(clock, "now")) ~= "function" then
+		return nil, CODE.BAD_PORTS
+	end
+
+	local instance = {}
+
+	local installed = false
+	local state = "inert"
+	local handshake = "none"
+	local activated = false
+	local hello_request = nil
+	local hello_acked = false
+	local transport = nil
+	local thread = nil
+	local channels = nil
+	local decision_transport = nil
+	local revision = nil
+	local adapter = nil
+	local reader = nil
+	local executor = nil
+	local authority = nil
+	local capability = nil
+	local broker = nil
+	local loop = nil
+	local mp_driver = nil
+	local remove_hooks = nil
+	local uninstall_guard = nil
+	local last_error = nil
+	local last_heartbeat = nil
+	local installed_at = nil
+	local update_errors = 0
+	-- Typed coordination correlation. Every coordination request this role sends
+	-- is enqueued with its op; responses arrive in the same order on the single
+	-- control connection, so each response is routed to the exact op that caused
+	-- it (the service returns no request id on coordination responses).
+	local outstanding = {}
+	local outstanding_count = 0
+	-- Forward-declared so earlier closures (heartbeat/report_summary) can queue
+	-- their coordination sends in the same typed correlation order.
+	local co_send = nil
+	local setup_sent = false
+	local setup_acked = false
+	local setup_info = nil
+	local lobby_code_sent = false
+	local lobby_code_acked = false
+	local join_code = nil
+	local join_sent = false
+	local ready_sent = false
+	local ready_acked = false
+	local start_sent = false
+	local start_acked = false
+	local guest_ready_committed = false
+	local start_committed = false
+	local start_committed_at = nil
+	local lobby_enter_sent = false
+	local seed_reported = false
+	local human_seed = nil
+	local last_coord_at = nil
+	local handshake_retry_at = nil
+	local coord_failure = nil
+	local terminal_reported = false
+	local terminal_acked = false
+	local terminal_sent_at = nil
+	local terminal_timeout_recorded = false
+	local pending_stop = nil
+	local last_summary = nil
+	local receipt_rejections = {}
+	local last_receipt_sequence = nil
+	local counters = { decisions = 0, rejected = 0, errors = 0, terminal = 0 }
+	local inbound = {}
+	local inbound_count = 0
+
+	local function record_error(code)
+		counters.errors = counters.errors + 1
+		last_error = token_of(code, 64) or CODE.INTERNAL
+		if logger ~= nil then
+			pcall(logger.record, { event = "runtime_bootstrap", code = last_error, role = role })
+		end
+		return last_error
+	end
+
+	local function now()
+		local ok, value = pcall(clock.now)
+		if not ok or type(value) ~= "number" or value ~= value then
+			return nil
+		end
+		return value
+	end
+
+
+	-- 1 + 2 + 3: provenance.
+	function instance.validate()
+		if role ~= "human" and role ~= "ai" then
+			return nil, CODE.NOT_STAGED
+		end
+		if session == nil or credential == nil or nonce == nil or content_hash == nil then
+			return nil, CODE.BAD_TOKEN
+		end
+		if type(control_port) ~= "number" or not is_int(control_port) or control_port < 1 or control_port > 65535 then
+			return nil, CODE.BAD_PORT
+		end
+		if not is_plain(expected)
+			or not is_plain(env)
+			or type(rawget(env, "save_dir")) ~= "function"
+			or type(rawget(env, "mods_root")) ~= "function"
+			or type(rawget(env, "mod_root")) ~= "function" then
+			return nil, CODE.ENV_UNAVAILABLE
+		end
+		local expected_save = normalize_path(rawget(expected, "save_dir"))
+		local expected_mods = normalize_path(rawget(expected, "mods_root"))
+		local expected_mod = normalize_path(rawget(expected, "mod_root"))
+		if expected_save == nil or expected_mods == nil or expected_mod == nil then
+			return nil, CODE.ENV_UNAVAILABLE
+		end
+		local ok_save, actual_save = pcall(env.save_dir)
+		local ok_mods, actual_mods = pcall(env.mods_root)
+		local ok_mod, actual_mod = pcall(env.mod_root)
+		if not ok_save or not ok_mods or not ok_mod then
+			return nil, CODE.ENV_UNAVAILABLE
+		end
+		local norm_save = normalize_path(actual_save)
+		local norm_mods = normalize_path(actual_mods)
+		local norm_mod = normalize_path(actual_mod)
+		if norm_save == nil or norm_mods == nil or norm_mod == nil then
+			return nil, CODE.ENV_MISMATCH
+		end
+		if norm_save ~= expected_save or norm_mods ~= expected_mods or norm_mod ~= expected_mod then
+			return nil, CODE.ENV_MISMATCH
+		end
+		if not under(norm_mods, norm_mod) then
+			return nil, CODE.ENV_MISMATCH
+		end
+		if basename(norm_mod) ~= "aisparring" then
+			return nil, CODE.ENV_MISMATCH
+		end
+		if not is_plain(launcher) or type(rawget(launcher, "verify")) ~= "function" then
+			return nil, CODE.LAUNCHER_UNVERIFIED
+		end
+		local ok_verify, verdict = pcall(launcher.verify)
+		if not ok_verify or type(verdict) ~= "table" or rawget(verdict, "ok") ~= true then
+			return nil, CODE.LAUNCHER_UNVERIFIED
+		end
+		if rawget(verdict, "nonce") ~= nonce
+			or rawget(verdict, "session") ~= session
+			or rawget(verdict, "role") ~= role
+			or rawget(verdict, "content_hash") ~= content_hash
+			or rawget(verdict, "control_port") ~= control_port then
+			return nil, CODE.LAUNCHER_UNVERIFIED
+		end
+		return true, CODE.OK
+	end
+
+	-- Resolve a channel method from a trusted injected port. A real LÖVE Channel
+	-- from `love.thread.getChannel` is userdata whose `push`/`pop` live on the
+	-- metatable, so the check must use protected normal indexing rather than
+	-- `rawget`; a plain-table channel (fixtures) still works. A non-function or
+	-- throwing lookup is rejected, so this never exposes an arbitrary callable.
+	local function channel_has(value, name)
+		local kind = type(value)
+		if kind ~= "table" and kind ~= "userdata" then
+			return false
+		end
+		local ok, method = pcall(function()
+			return value[name]
+		end)
+		return ok and type(method) == "function"
+	end
+
+	local function build_channels()
+		if is_plain(channels_port)
+			and channel_has(rawget(channels_port, "to_worker"), "push")
+			and channel_has(rawget(channels_port, "from_worker"), "pop") then
+			return channels_port
+		end
+		local names, name_code = control_thread.channel_names(nonce, role)
+		if names == nil then
+			return nil, name_code or CODE.BAD_CHANNELS
+		end
+		if type(get_channel) ~= "function" then
+			return nil, CODE.BAD_CHANNELS
+		end
+		local ok_a, to_worker = pcall(get_channel, names.to_worker)
+		local ok_b, from_worker = pcall(get_channel, names.from_worker)
+		if not ok_a or not ok_b or to_worker == nil or from_worker == nil
+			or not channel_has(to_worker, "push") or not channel_has(from_worker, "pop") then
+			return nil, CODE.BAD_CHANNELS
+		end
+		return { to_worker = to_worker, from_worker = from_worker }
+	end
+
+	local function spawn()
+		if type(spawn_thread) == "function" then
+			local ok, spawned = pcall(spawn_thread, control_port, channels.to_worker, channels.from_worker)
+			if not ok or spawned == nil or spawned == false then
+				return nil, CODE.NO_THREAD
+			end
+			return spawned, CODE.OK
+		end
+		if type(love_thread) ~= "table" then
+			return nil, CODE.NO_THREAD
+		end
+		local names = control_thread.channel_names(nonce, role)
+		if names == nil then
+			return nil, CODE.BAD_CHANNELS
+		end
+		local thread_handle, thread_code = control_thread.start(love_thread, control_port, names.to_worker, names.from_worker)
+		if thread_handle == nil then
+			return nil, thread_code or CODE.NO_THREAD
+		end
+		return thread_handle, CODE.OK
+	end
+
+	local function notify(level, message)
+		if type(ui_notify) == "function" then
+			pcall(ui_notify, level, message)
+		end
+	end
+
+	-- Only the service's terminal-result vocabulary may leave the runtime. The
+	-- terminal signal is LOCAL to this runtime's engine, so the mapping must be
+	-- role-aware: the human's local win is the human's win and the human's local
+	-- lives are `human_lives`; the AI's are the inverse. The service trusts the
+	-- human END, so a role-blind mapping would reverse the winner and the life
+	-- totals.
+	local RESULT_WIRE = {
+		human = {
+			win = "human_win",
+			loss = "ai_win",
+			draw = "draw",
+			aborted = "aborted",
+			unknown = "unknown",
+		},
+		ai = {
+			win = "ai_win",
+			loss = "human_win",
+			draw = "draw",
+			aborted = "aborted",
+			unknown = "unknown",
+		},
+	}
+
+	local function report_summary(result)
+		if transport == nil then
+			return
+		end
+		local bounded = token_of(result, 32) or "unknown"
+		local wire = RESULT_WIRE[role] or RESULT_WIRE.ai
+		local summary = {
+			result = wire[bounded] or "unknown",
+			human_lives = nil,
+			ai_lives = nil,
+			ante = nil,
+			round = nil,
+			decisions = counters.decisions,
+			rejected = counters.rejected,
+			errors = counters.errors,
+		}
+		if type(MP) == "table" then
+			local local_lives = rget(rget(MP, "GAME"), "lives")
+			local enemy_lives = rget(rget(rget(MP, "GAME"), "enemy"), "lives")
+			if role == "human" then
+				summary.human_lives = local_lives
+				summary.ai_lives = enemy_lives
+			else
+				summary.ai_lives = local_lives
+				summary.human_lives = enemy_lives
+			end
+		end
+		if type(G) == "table" then
+			summary.round = rget(rget(G, "GAME"), "round")
+			summary.ante = rget(rget(rget(G, "GAME"), "round_resets"), "ante")
+		end
+		last_summary = summary
+		co_send(protocol.OPS.END, summary)
+	end
+
+	-- Private log bridge: forwards bounded decision records to the trusted
+	-- logger and reports committed results to the service status op, throttled.
+	local function decision_logger()
+		if type(logger) ~= "table" then
+			return nil
+		end
+		return {
+			record = function(fields)
+				pcall(logger.record, fields)
+			end,
+		}
+	end
+
+	local function push_inbound(response)
+		if inbound_count >= 16 then
+			return
+		end
+		inbound_count = inbound_count + 1
+		inbound[inbound_count] = response
+	end
+
+	local function take_inbound()
+		if inbound_count == 0 then
+			return nil
+		end
+		local response = inbound[1]
+		for i = 1, inbound_count - 1 do
+			inbound[i] = inbound[i + 1]
+		end
+		inbound[inbound_count] = nil
+		inbound_count = inbound_count - 1
+		return response
+	end
+
+	local function ensure_driver(driver_role)
+		if mp_driver ~= nil then
+			return mp_driver
+		end
+		if type(modules) ~= "table" then
+			return nil, CODE.BAD_MODULES
+		end
+		local MPDriver = rawget(modules, "MPDriver")
+		if type(MPDriver) ~= "table" or type(rawget(MPDriver, "factory")) ~= "function" then
+			return nil, CODE.BAD_MODULES
+		end
+		-- Source-derived allowlist/digest need the real Codec.hash_string; the
+		-- ready element lookup needs the real G (never a fabricated button).
+		local codec = type(modules) == "table" and rawget(modules, "codec") or nil
+		local hash_string = nil
+		if type(codec) == "table" and type(rawget(codec, "hash_string")) == "function" then
+			hash_string = function(text)
+				return codec.hash_string(text)
+			end
+		end
+		local driver = MPDriver.factory({
+			role = driver_role,
+			mp = MP,
+			funcs = funcs,
+			G = G,
+			element_for = element_for,
+			clock = clock,
+			logger = logger,
+			client = rawget(ports, "client"),
+			hash_string = hash_string,
+		})
+		if driver == nil then
+			return nil, CODE.BAD_MODULES
+		end
+		-- Both staged roles get the real Client.send allowlist before any lobby
+		-- create/join: the human host must also never emit ranked/server or
+		-- end-game/private sends in a local practice match. The allowlist keeps
+		-- ordinary MP coordination and the required timer/life penalties, and
+		-- only this staged path installs it (the normal/live lazy path never
+		-- reaches this bootstrap). A stage that cannot install it aborts before
+		-- create/join.
+		local uninstaller = driver.install_send_guard()
+		if type(uninstaller) ~= "function" then
+			return nil, CODE.GUARD_FAILED
+		end
+		uninstall_guard = uninstaller
+		mp_driver = driver
+		return driver
+	end
+
+	local function activate()
+		if role ~= "ai" then
+			return nil, CODE.WRONG_ROLE
+		end
+		if handshake ~= "acked" then
+			return nil, CODE.NOT_ARMED
+		end
+		if activated then
+			return true, CODE.OK
+		end
+		if type(modules) ~= "table" then
+			return nil, CODE.BAD_MODULES
+		end
+		local codec = rawget(modules, "codec")
+		local observation = rawget(modules, "observation")
+		local actions = rawget(modules, "actions")
+		local StateReader = rawget(modules, "StateReader")
+		local EngineAdapter = rawget(modules, "EngineAdapter")
+		local ProductionExecutor = rawget(modules, "ProductionExecutor")
+		local StateRevision = rawget(modules, "StateRevision")
+		local ActionBroker = rawget(modules, "ActionBroker")
+		local DecisionLoop = rawget(modules, "DecisionLoop")
+		local MPDriver = rawget(modules, "MPDriver")
+		if type(codec) ~= "table"
+			or type(observation) ~= "table"
+			or type(actions) ~= "table"
+			or type(StateReader) ~= "table"
+			or type(EngineAdapter) ~= "table"
+			or type(ProductionExecutor) ~= "table"
+			or type(StateRevision) ~= "table"
+			or type(ActionBroker) ~= "table"
+			or type(DecisionLoop) ~= "table"
+			or type(MPDriver) ~= "table" then
+			return nil, CODE.BAD_MODULES
+		end
+		if type(G) ~= "table" or type(MP) ~= "table" then
+			return nil, CODE.BAD_MODULES
+		end
+
+		local obs = observation.factory(codec)
+		local actions_handle = actions.factory(obs, codec)
+		if rawget(actions_handle, "generate") == nil or rawget(actions_handle, "validate") == nil then
+			return nil, CODE.BAD_MODULES
+		end
+		revision = StateRevision.factory()
+		if revision == nil then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+		local target_selection = nil
+		if type(rawget(ports, "target_selection")) == "function" then
+			target_selection = rawget(ports, "target_selection")
+		end
+		adapter = EngineAdapter.factory({
+			role = RuntimeBootstrap.ROLE_AI,
+			session = session,
+			codec = codec,
+			revision = revision,
+			G = G,
+			MP = MP,
+			target_selection = target_selection,
+		})
+		if adapter == nil then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+		reader = StateReader.factory(obs)
+		if reader == nil then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+		executor = ProductionExecutor.factory({
+			role = RuntimeBootstrap.ROLE_AI,
+			session = session,
+			adapter = adapter,
+			reader = reader,
+			revision = revision,
+			G = G,
+			MP = MP,
+			element_for = element_for,
+			clock = clock,
+			stall_timeout = stall_timeout,
+		})
+		if executor == nil then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+
+		-- The capability is minted here, AFTER validation + hello ack, and the
+		-- verifier binds the exact executor ports table plus the exact minted
+		-- capability. It is never serialized and never leaves this closure.
+		local bound_ports = executor.broker_ports()
+		if type(bound_ports) ~= "table" then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+		authority = ActionBroker.production_factory(function(candidate_ports, candidate_capability)
+			if not rawequal(candidate_ports, bound_ports) then
+				return false
+			end
+			if not rawequal(candidate_capability, capability) then
+				return false
+			end
+			if rawget(candidate_ports, "fixture") ~= nil then
+				return false
+			end
+			return true
+		end)
+		if authority == nil then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+		capability = authority.mint()
+		broker = authority.authorize(obs, actions_handle, bound_ports, capability)
+		if broker == nil then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+
+		decision_transport = {
+			request = function(payload)
+				return transport.request(payload)
+			end,
+			poll = function()
+				return transport.poll_decision()
+			end,
+			cancel = function(request_id)
+				return transport.cancel(request_id)
+			end,
+		}
+		local controls = {
+			next = function()
+				return executor.last_control_state()
+			end,
+			advance = function()
+				local ok, code = executor.advance_ui()
+				if ok == true then
+					return true
+				end
+				return nil, code
+			end,
+		}
+		loop = DecisionLoop.factory({
+			broker = broker,
+			transport = decision_transport,
+			clock = clock,
+			logger = decision_logger(),
+			controls = controls,
+			pacing = 0,
+			pacing_mode = pacing,
+			min_interval = 0,
+			timeout = loop_timeout,
+			terminal_phase = "MATCH_COMPLETE",
+			sequence_start = decision_base,
+			-- N5/L5: the loop's post-decision revision and its trusted wait probe
+			-- are the runtime's real public state, never inferred from a global.
+			get_revision = function()
+				return revision.current()
+			end,
+			wait_state = function()
+				return RuntimeBootstrap.mp_wait_state(MP, G)
+			end,
+			on_stop = function(reason)
+				pending_stop = token_of(reason, RuntimeBootstrap.LIMITS.max_reason) or "stopped"
+			end,
+		})
+		if loop == nil then
+			return nil, CODE.ACTIVATE_FAILED
+		end
+		-- Receipt logging is limited to the loop's own stable rejection codes,
+		-- and only when a real decision was delivered for that sequence.
+		receipt_rejections = {}
+		for _, key in ipairs({ "STALE", "DISPATCH_FAILED", "RESPONSE_REJECTED" }) do
+			local value = rawget(rawget(loop, "CODE"), key)
+			if type(value) == "string" then
+				receipt_rejections[value] = true
+			end
+		end
+		remove_hooks = install_hooks(rawget(ports, "hook_targets"), revision)
+		local driver, driver_code = ensure_driver("ai")
+		if driver == nil then
+			return nil, driver_code or CODE.ACTIVATE_FAILED
+		end
+
+		activated = true
+		state = "active"
+		return true, CODE.OK
+	end
+
+	local function handle_terminal()
+		if type(terminal_probe) == "function" then
+			local ok, value = pcall(terminal_probe)
+			if ok and value ~= nil then
+				return token_of(value, 32)
+			end
+		end
+		if type(MP) == "table" and rget(rget(MP, "GAME"), "won") == true then
+			return "win"
+		end
+		if type(G) == "table" then
+			local states = rget(G, "STATES")
+			local state_value = rget(G, "STATE")
+			local game_over = rget(states, "GAME_OVER")
+			if is_int(state_value) and is_int(game_over) and state_value == game_over then
+				return "loss"
+			end
+		end
+		return nil
+	end
+
+	local function heartbeat(current)
+		if transport == nil then
+			return
+		end
+		if last_heartbeat ~= nil and current - last_heartbeat < RuntimeBootstrap.LIMITS.heartbeat_interval then
+			return
+		end
+		last_heartbeat = current
+		-- The service `heartbeat` op accepts only an optional bounded `tick`.
+		co_send(protocol.OPS.HEARTBEAT, { tick = counters.decisions })
+	end
+
+	-- Typed coordination send: remember the op so the matching response can be
+	-- routed back to it. Bounded; a failed send is a retryable coordinator state.
+	co_send = function(op, payload)
+		if transport == nil then
+			return nil, CODE.BAD_TRANSPORT
+		end
+		local id, code = transport.send(op, payload)
+		if id == nil then
+			return nil, code
+		end
+		outstanding_count = outstanding_count + 1
+		outstanding[outstanding_count] = op
+		return id, code
+	end
+
+	local function take_outstanding()
+		if outstanding_count == 0 then
+			return nil
+		end
+		local op = outstanding[1]
+		for i = 1, outstanding_count - 1 do
+			outstanding[i] = outstanding[i + 1]
+		end
+		outstanding[outstanding_count] = nil
+		outstanding_count = outstanding_count - 1
+		return op
+	end
+
+	local function coord_ready(current)
+		if last_coord_at ~= nil and current - last_coord_at < coord_retry_interval then
+			return false
+		end
+		last_coord_at = current
+		return true
+	end
+
+	-- A bounded digest over the live forced ruleset config, using the trusted
+	-- SETUP ruleset id/gamemode and, for the guest, the service keyset; the host
+	-- additionally verifies its locally recorded keyset matches it exactly.
+	local function compute_digest()
+		if mp_driver == nil or setup_info == nil then
+			return nil
+		end
+		local keys = setup_info.forced_options
+		if role == "human" then
+			local recorded = mp_driver.forced_keys()
+			if recorded == nil or keys == nil or #recorded ~= #keys then
+				return nil
+			end
+			local seen = {}
+			for i = 1, #recorded do
+				seen[recorded[i]] = true
+			end
+			for i = 1, #keys do
+				if seen[keys[i]] ~= true then
+					return nil
+				end
+			end
+		end
+		local value = mp_driver.config_digest(setup_info.ruleset_id, setup_info.gamemode, keys)
+		return value
+	end
+
+	-- Route one coordination response to the op that produced it. Only
+	-- `coord_failure` (a fatal protocol/config mismatch) stops the boot.
+	local function handle_coordination(op, response)
+		local code = rawget(response, "code")
+		if op == protocol.OPS.HELLO then
+			if response.ok == true then
+				hello_acked = true
+				handshake = "acked"
+				state = "armed"
+			elseif code == protocol.CODES.NOT_ATTESTED then
+				-- The launcher host attests after both probes; re-send hello on
+				-- the next bounded retry. The sequence is not consumed on a
+				-- not-attested rejection, so a fresh one is safe.
+				handshake = "sent"
+				handshake_retry_at = nil
+			elseif response.ok == false then
+				coord_failure = CODE.HELLO_REJECTED
+			end
+			return
+		end
+		if op == protocol.OPS.SETUP then
+			if response.ok ~= true then
+				if code == protocol.CODES.NOT_ATTESTED then
+					setup_sent = false
+				else
+					coord_failure = token_of(code, RuntimeBootstrap.LIMITS.max_reason) or CODE.SETUP_FAILED
+				end
+				return
+			end
+			local ruleset_id = rawget(response, "ruleset_id")
+			local gamemode = rawget(response, "gamemode")
+			local forced = rawget(response, "forced_options")
+			if type(ruleset_id) ~= "string" or type(gamemode) ~= "string"
+				or type(forced) ~= "table" or #forced == 0 then
+				coord_failure = CODE.SETUP_FAILED
+				return
+			end
+			if rawget(response, "role") ~= role
+				or rawget(response, "difficulty") ~= difficulty
+				or rawget(response, "mode") ~= mode
+				or rawget(response, "pacing") ~= pacing then
+				coord_failure = CODE.CONFIG_MISMATCH
+				return
+			end
+			local keys = {}
+			for i = 1, #forced do
+				if type(forced[i]) ~= "string" then
+					coord_failure = CODE.SETUP_FAILED
+					return
+				end
+				keys[i] = forced[i]
+			end
+			setup_info = {
+				ruleset_id = ruleset_id,
+				gamemode = gamemode,
+				forced_options = keys,
+			}
+			if role == "human" then
+				local trusted = rawget(response, "gauntlet_seed")
+				if trusted ~= nil then
+					human_seed = token_of(trusted, RuntimeBootstrap.LIMITS.max_token)
+					if human_seed == nil then
+						coord_failure = CODE.SETUP_FAILED
+						return
+					end
+				end
+			end
+			setup_acked = true
+			return
+		end
+		if op == protocol.OPS.LOBBY_CODE then
+			lobby_code_acked = response.ok == true
+			return
+		end
+		if op == protocol.OPS.JOIN_CODE then
+			if response.ok == true and type(rawget(response, "lobby_code")) == "string" then
+				join_code = rawget(response, "lobby_code")
+			end
+			-- NO_LOBBY / not-ready are bounded waits, not failures.
+			return
+		end
+		if op == protocol.OPS.READY then
+			if response.ok == true then
+				ready_acked = true
+			elseif code == protocol.CODES.CONFIG_MISMATCH and ready_sent then
+				coord_failure = CODE.CONFIG_MISMATCH
+			end
+			return
+		end
+		if op == protocol.OPS.START then
+			start_acked = response.ok == true
+			return
+		end
+	end
+
+	-- Bounded, exactly-once start coordinator. Each service op commits once its
+	-- own ack arrives; each real MP callback commits once and is only retried
+	-- when it did not take effect (late UI / not-yet-ready).
+	local function advance_coordinator(current)
+		if mp_driver == nil then
+			return
+		end
+		if not setup_acked then
+			if not setup_sent and coord_ready(current) then
+				if co_send(protocol.OPS.SETUP, {}) ~= nil then
+					setup_sent = true
+				end
+			end
+			return
+		end
+		-- Create/join needs both the real MP socket AND an initialized main menu
+		-- (the server starts only after the launcher probes/attestation, and
+		-- `start_lobby`/`join_lobby` are main-menu callbacks).
+		if not mp_driver.connected() or not mp_driver.main_menu_ready() then
+			return
+		end
+		if role == "ai" and join_code ~= nil and not join_sent then
+			if coord_ready(current) then
+				local ok = mp_driver.ai_join(join_code)
+				if ok == true then
+					join_sent = true
+				end
+			end
+			return
+		end
+		if instance.lobby_code() == nil then
+			if coord_ready(current) then
+				if role == "human" then
+					-- `start_lobby` queues the server create asynchronously; send
+					-- it exactly once and wait for the real code. Only an explicit
+					-- callback failure re-arms the send.
+					if not lobby_enter_sent then
+						local entry = mp_driver.ruleset()
+						if entry ~= nil then
+							lobby_enter_sent = true
+							local ok = mp_driver.host_start(human_seed)
+							if ok ~= true then
+								lobby_enter_sent = false
+							end
+						end
+					end
+				else
+					co_send(protocol.OPS.JOIN_CODE, {})
+				end
+			end
+			return
+		end
+		if role == "human" and not lobby_code_acked then
+			if not lobby_code_sent and coord_ready(current) then
+				if co_send(protocol.OPS.LOBBY_CODE, { lobby_code = instance.lobby_code() }) ~= nil then
+					lobby_code_sent = true
+				end
+			end
+			return
+		end
+		if not ready_sent then
+			if coord_ready(current) then
+				local digest_value = compute_digest()
+				if digest_value ~= nil then
+					if co_send(protocol.OPS.READY, { config_digest = digest_value }) ~= nil then
+						ready_sent = true
+					end
+				end
+			end
+			return
+		end
+		if not ready_acked then
+			return
+		end
+		if role == "ai" then
+			if not guest_ready_committed then
+				if coord_ready(current) then
+					local ok = mp_driver.ai_ready()
+					if ok == true then
+						guest_ready_committed = true
+					end
+				end
+			end
+			return
+		end
+		if not start_sent then
+			if rpath(MP, "LOBBY", "ready_to_start") == true and coord_ready(current) then
+				if co_send(protocol.OPS.START, {}) ~= nil then
+					start_sent = true
+				end
+			end
+			return
+		end
+		if not start_acked then
+			return
+		end
+		if not start_committed then
+			if coord_ready(current) then
+				local ok = mp_driver.host_start_game()
+				if ok == true then
+					start_committed = true
+					start_committed_at = current
+				end
+			end
+			return
+		end
+		-- Trusted audit seed: the human reports the *actual resolved* run seed
+		-- once the run is initialized (`G.GAME.pseudorandom.seed`), never a menu
+		-- or prior-run value. A gauntlet run must agree with the SETUP seed. The
+		-- guest never reports a seed and no seed is ever exported to policy.
+		if not seed_reported then
+			local seed_value = resolved_run_seed(G)
+			if seed_value ~= nil then
+				if human_seed ~= nil and seed_value ~= human_seed then
+					coord_failure = CODE.SEED_MISMATCH
+					return
+				end
+				seed_reported = true
+				co_send(protocol.OPS.STATUS, { seed = seed_value })
+			elseif start_committed_at ~= nil
+				and current - start_committed_at > RuntimeBootstrap.LIMITS.coord_timeout then
+				coord_failure = CODE.SEED_TIMEOUT
+			end
+		end
+	end
+
+	local function coordination_done()
+		return (start_committed and seed_reported) or guest_ready_committed
+	end
+
+	-- Terminal is a drain-only state: consume the owned END ack (never leave it
+	-- unread in the channel), never run the loop again, and never let a missing
+	-- ack hang the runtime. The AI END is a receipt and never authorizes
+	-- teardown on this side; the human END is the authoritative one.
+	local function drain_terminal(current)
+		if transport == nil then
+			return
+		end
+		for _ = 1, RuntimeBootstrap.LIMITS.max_coordination_per_update do
+			local response = transport.poll_coordination()
+			if response == nil then
+				break
+			end
+			local op = take_outstanding()
+			if op == protocol.OPS.END then
+				terminal_acked = response.ok == true
+			elseif op ~= nil then
+				handle_coordination(op, response)
+			else
+				push_inbound(response)
+			end
+		end
+		if not terminal_acked and terminal_sent_at ~= nil
+			and current - terminal_sent_at > RuntimeBootstrap.LIMITS.coord_timeout then
+			if not terminal_timeout_recorded then
+				terminal_timeout_recorded = true
+				record_error(CODE.TERMINAL_TIMEOUT)
+			end
+		end
+	end
+
+	function instance.is_inert()
+		return state == "inert"
+	end
+
+	function instance.state()
+		return state
+	end
+
+	function instance.install()
+		if installed then
+			return nil, CODE.ALREADY_INSTALLED
+		end
+		state = "inert"
+		local allowed, code = instance.validate()
+		if allowed ~= true then
+			record_error(code)
+			return nil, code
+		end
+		if now() == nil then
+			record_error(CODE.BAD_PORTS)
+			return nil, CODE.BAD_PORTS
+		end
+		channels, code = build_channels()
+		if channels == nil then
+			record_error(code)
+			return nil, code
+		end
+		if type(encode) ~= "function" or type(decode) ~= "function" then
+			record_error(CODE.BAD_CODEC_PORTS)
+			return nil, CODE.BAD_CODEC_PORTS
+		end
+		local built, build_code = transport_factory({
+			role = role,
+			session = session,
+			credential = credential,
+			protocol = protocol,
+			channels = channels,
+			clock = clock,
+			encode = encode,
+			decode = decode,
+			logger = logger,
+			decision_base = decision_base,
+			poll_interval = poll_interval,
+			request_timeout = transport_request_timeout,
+		})
+		if built == nil then
+			record_error(build_code or CODE.BAD_TRANSPORT)
+			return nil, build_code or CODE.BAD_TRANSPORT
+		end
+		transport = built
+		thread, code = spawn()
+		if thread == nil then
+			record_error(code)
+			transport = nil
+			return nil, code
+		end
+		transport.start()
+		hello_request = transport.send(protocol.OPS.HELLO, {
+			version = rawget(protocol, "VERSION"),
+			content_digest = content_hash,
+		})
+		if hello_request == nil then
+			record_error(CODE.HELLO_FAILED)
+			return nil, CODE.HELLO_FAILED
+		end
+		outstanding_count = outstanding_count + 1
+		outstanding[outstanding_count] = protocol.OPS.HELLO
+		handshake = "sent"
+		handshake_retry_at = now()
+		state = "installed"
+		installed = true
+		installed_at = now()
+		return true, CODE.OK
+	end
+
+	function instance.lobby_code()
+		if mp_driver ~= nil then
+			return mp_driver.lobby_code()
+		end
+		local code_value = rget(rget(MP, "LOBBY"), "code")
+		if type(code_value) == "string" and #code_value > 0 and #code_value <= 32 then
+			return code_value
+		end
+		return nil
+	end
+
+	function instance.update(dt)
+		if not installed then
+			return "inert", CODE.OK
+		end
+		if state == "stopped" then
+			return "stopped", CODE.STOPPED
+		end
+		local current = now()
+		if current == nil then
+			if state == "terminal" then
+				return "terminal", CODE.TERMINAL
+			end
+			update_errors = update_errors + 1
+			if update_errors >= RuntimeBootstrap.LIMITS.max_update_errors then
+				instance.shutdown("clock")
+				return "stopped", update_errors
+			end
+			return "installed", CODE.BAD_PORTS
+		end
+		if state == "terminal" then
+			drain_terminal(current)
+			return "terminal", CODE.TERMINAL
+		end
+
+		-- The pre-start hello/attestation wait is a bounded coordinator state,
+		-- not a frame error: the launcher attests after both probes. Only the
+		-- whole coordinator window is bounded.
+		if handshake == "sent" and installed_at ~= nil
+			and current - installed_at > RuntimeBootstrap.LIMITS.coord_timeout then
+			record_error(CODE.HELLO_FAILED)
+			instance.shutdown("hello_timeout")
+			return "stopped", CODE.HELLO_FAILED
+		end
+
+		for _ = 1, RuntimeBootstrap.LIMITS.max_coordination_per_update do
+			local response = transport.poll_coordination()
+			if response == nil then
+				break
+			end
+			local op = take_outstanding()
+			if op == nil then
+				push_inbound(response)
+			else
+				handle_coordination(op, response)
+			end
+		end
+		if coord_failure ~= nil then
+			local code = coord_failure
+			record_error(code)
+			instance.shutdown(code)
+			return "stopped", code
+		end
+
+		if handshake == "acked" and role == "ai" and not activated then
+			local ok_activate, activate_code = activate()
+			if ok_activate ~= true then
+				-- A missing send guard is a hard fault: it must never be retried
+				-- into a lobby, so abort the staged boot immediately.
+				if activate_code == CODE.GUARD_FAILED then
+					record_error(activate_code)
+					instance.shutdown(activate_code)
+					return "stopped", activate_code
+				end
+				update_errors = update_errors + 1
+				if update_errors >= RuntimeBootstrap.LIMITS.max_update_errors then
+					instance.shutdown(activate_code)
+					return "stopped", activate_code
+				end
+				return "armed", activate_code
+			end
+		end
+
+		if handshake == "acked" and role == "human" and mp_driver == nil then
+			local driver, driver_code = ensure_driver("human")
+			if driver == nil then
+				-- The send guard is required for both roles before create/join.
+				local code = driver_code or CODE.GUARD_FAILED
+				record_error(code)
+				instance.shutdown(code)
+				return "stopped", code
+			end
+		end
+
+		local terminal = handle_terminal()
+		if terminal ~= nil then
+			counters.terminal = counters.terminal + 1
+			if loop ~= nil and not loop.is_stopped() then
+				loop.stop(terminal)
+			end
+			if not terminal_reported then
+				terminal_reported = true
+				terminal_sent_at = current
+				report_summary(terminal)
+			end
+			state = "terminal"
+			-- Drain the owned END reply on later updates; never run the loop or
+			-- emit further decisions/seed from here.
+			drain_terminal(current)
+			return "terminal", CODE.TERMINAL
+		end
+
+		if handshake == "acked" then
+			if auto_coordinate then
+				advance_coordinator(current)
+			end
+		elseif handshake == "sent" then
+			-- Retry the hello until the attestation gate lets it through; the
+			-- not-attested rejection does not consume the wire sequence.
+			if handshake_retry_at == nil or current - handshake_retry_at >= coord_retry_interval then
+				handshake_retry_at = current
+				local id = transport.send(protocol.OPS.HELLO, {
+					version = rawget(protocol, "VERSION"),
+					content_digest = content_hash,
+				})
+				if id ~= nil then
+					outstanding_count = outstanding_count + 1
+					outstanding[outstanding_count] = protocol.OPS.HELLO
+				end
+			end
+		end
+
+		-- The policy loop only runs once the real match has started (the guest
+		-- from the server start, the host from its start callback); before that
+		-- the service would refuse every decision as not-started and burn the
+		-- loop's error budget.
+		local match_running = false
+		if mp_driver ~= nil and type(mp_driver.is_started) == "function" then
+			local ok_started, value = pcall(mp_driver.is_started)
+			match_running = ok_started and value == true
+		elseif loop ~= nil then
+			match_running = true
+		end
+		if loop ~= nil and not loop.is_stopped() and match_running then
+			local status, loop_code = loop.update()
+			if status == "submitted" then
+				counters.decisions = counters.decisions + 1
+				-- Report the committed outcome to the service with the original
+				-- (wire) decision identity the transport mapped from the private
+				-- local sequence. The loop only reports `submitted` after an
+				-- explicit successful broker dispatch.
+				local local_sequence = transport.last_delivered_sequence()
+				if local_sequence ~= nil and local_sequence ~= last_receipt_sequence then
+					last_receipt_sequence = local_sequence
+					transport.decision_result(local_sequence, { accepted = true, code = "broker_ok" })
+				end
+			elseif status == "idle" and loop_code ~= nil then
+				counters.rejected = counters.rejected + 1
+				-- Stable rejection receipt for a decision that was actually
+				-- delivered and then refused by the broker/engine.
+				local local_sequence = transport.last_delivered_sequence()
+				if local_sequence ~= nil and local_sequence ~= last_receipt_sequence
+					and receipt_rejections[loop_code] == true then
+					last_receipt_sequence = local_sequence
+					transport.decision_result(local_sequence, { accepted = false, code = loop_code })
+				end
+			end
+		end
+
+		if pending_stop ~= nil and loop ~= nil and loop.is_stopped() then
+			local reason = pending_stop
+			pending_stop = nil
+			if reason ~= "terminal" then
+				instance.shutdown(reason)
+				return "stopped", reason
+			end
+		end
+
+		heartbeat(current)
+		return state, CODE.OK
+	end
+
+	function instance.summary()
+		return shallow_copy(last_summary or {})
+	end
+
+	function instance.status()
+		return {
+			state = state,
+			role = role,
+			handshake = handshake,
+			activated = activated,
+			decisions = counters.decisions,
+			rejected = counters.rejected,
+			errors = counters.errors,
+			has_pending = loop ~= nil and loop.pending_sequence() ~= nil,
+			connected = transport ~= nil and transport.connected(),
+			last_error = last_error,
+		}
+	end
+
+	function instance.shutdown(reason)
+		if state == "stopped" then
+			return true, CODE.STOPPED
+		end
+		local bounded = token_of(reason, RuntimeBootstrap.LIMITS.max_reason) or "shutdown"
+		if loop ~= nil then
+			pcall(loop.stop, bounded)
+		end
+		if broker ~= nil then
+			pcall(broker.cancel)
+		end
+		if authority ~= nil and capability ~= nil then
+			pcall(authority.revoke, capability)
+		end
+		if executor ~= nil then
+			pcall(executor.revoke)
+		end
+		if type(remove_hooks) == "function" then
+			pcall(remove_hooks)
+			remove_hooks = nil
+		end
+		if type(uninstall_guard) == "function" then
+			pcall(uninstall_guard)
+			uninstall_guard = nil
+		end
+		if mp_driver ~= nil then
+			pcall(mp_driver.uninstall)
+			pcall(mp_driver.leave_local)
+		end
+		if transport ~= nil then
+			pcall(transport.stop)
+		end
+		activated = false
+		installed = false
+		installed_at = nil
+		inbound = {}
+		inbound_count = 0
+		state = "stopped"
+		loop = nil
+		broker = nil
+		executor = nil
+		adapter = nil
+		reader = nil
+		revision = nil
+		capability = nil
+		authority = nil
+		decision_transport = nil
+		mp_driver = nil
+		return true, CODE.OK
+	end
+
+	function instance.describe()
+		local loop_state = nil
+		if loop ~= nil then
+			loop_state = loop.describe()
+		end
+		return {
+			version = "aisp-runtime-bootstrap/1",
+			state = state,
+			role = role,
+			handshake = handshake,
+			activated = activated,
+			mode = mode,
+			pacing = pacing,
+			difficulty = difficulty,
+			gauntlet = human_seed ~= nil,
+			setup_acked = setup_acked,
+			lobby_ready = guest_ready_committed or start_committed,
+			coordinated = coordination_done(),
+			-- The decision loop's real public state (N5): the wired timeout, the
+			-- trusted wait probe and the post-decision revision reader.
+			loop_timeout = loop_state ~= nil and loop_state.timeout or nil,
+			loop_has_wait_state = loop_state ~= nil and loop_state.has_wait_state == true,
+			loop_has_revision = loop_state ~= nil and loop_state.has_revision == true,
+			role_ai = RuntimeBootstrap.ROLE_AI,
+			role_human = RuntimeBootstrap.ROLE_HUMAN,
+			counters = shallow_copy(counters),
+			last_error = last_error,
+			codes = shallow_copy(CODE),
+		}
+	end
+
+	instance.CODE = shallow_copy(CODE)
+	instance.LIMITS = shallow_copy(RuntimeBootstrap.LIMITS)
+	instance.role = role
+	return instance
+end
+
+return RuntimeBootstrap

@@ -1,0 +1,317 @@
+return function(ctx)
+	local support = ctx.support
+	local MPDriver = support.mod(ctx.repo_root, "AISparring/integration/mp_driver.lua")
+	local test = ctx.test
+
+	local function fake_engine(opts)
+		opts = opts or {}
+		local calls = {}
+		local MP
+		local ruleset = {
+			forced_gamemode = "gamemode_mp_attrition",
+			force_lobby_options = function()
+				calls[#calls + 1] = { name = "force_lobby_options", custom_seed = MP.LOBBY.config.custom_seed }
+				MP.LOBBY.config.timer_base_seconds = 180
+				return true
+			end,
+		}
+		MP = {
+			LOBBY = {
+				code = opts.code,
+				ready_to_start = opts.ready_to_start or false,
+				connected = true,
+				username = "Guest",
+				config = { custom_seed = "random", ruleset = "ruleset_mp_majorleague" },
+			},
+			Rulesets = { ruleset_mp_majorleague = ruleset },
+			ACTIONS = {
+				join_lobby = function(code)
+					calls[#calls + 1] = { name = "join_lobby", code = code }
+				end,
+				set_username = function(name)
+					calls[#calls + 1] = { name = "set_username", username = name }
+				end,
+				leave_lobby = function()
+					calls[#calls + 1] = { name = "leave_lobby" }
+				end,
+			},
+		}
+		local original_current_ruleset = function()
+			return ruleset
+		end
+		MP.current_ruleset = original_current_ruleset
+		local funcs = {}
+		funcs.start_lobby = function()
+			calls[#calls + 1] = { name = "start_lobby" }
+			-- reset_lobby_config(true) preserves the ruleset/gamemode and resets
+			-- the seed, exactly like the real G.FUNCS.start_lobby.
+			MP.LOBBY.config.custom_seed = "random"
+			MP.current_ruleset():force_lobby_options()
+			MP.LOBBY.code = "ABC12"
+		end
+		funcs.lobby_ready_up = function(e)
+			calls[#calls + 1] = { name = "lobby_ready_up", e = e }
+			-- Source-shaped toggle: the real callback flips ready_to_start and
+			-- mutates e.config/e.children/e.UIBox.
+			MP.LOBBY.ready_to_start = not MP.LOBBY.ready_to_start
+			if type(e) == "table" then
+				e.config.colour = MP.LOBBY.ready_to_start and "green" or "red"
+				e.children[1].children[1].config.text = MP.LOBBY.ready_to_start and "unready" or "ready"
+				e.UIBox:recalculate()
+			end
+		end
+		funcs.lobby_start_game = function(e)
+			calls[#calls + 1] = { name = "lobby_start_game", e = e }
+		end
+		return MP, funcs, calls, original_current_ruleset
+	end
+
+	test("host_start_injects_seed_after_reset_before_original_options", function()
+		local MP, funcs, calls, original = fake_engine()
+		local driver, code = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		ctx.eq(code, nil)
+		local ok = driver.host_start("AISP0003")
+		ctx.is_true(ok)
+		ctx.eq(MP.LOBBY.config.ruleset, "ruleset_mp_majorleague")
+		ctx.eq(MP.LOBBY.config.gamemode, "gamemode_mp_attrition")
+		ctx.eq(MP.LOBBY.config.custom_seed, "AISP0003")
+		local saw_seed = false
+		for _, call in ipairs(calls) do
+			if call.name == "force_lobby_options" and call.custom_seed == "AISP0003" then
+				saw_seed = true
+			end
+		end
+		ctx.is_true(saw_seed, "original force_lobby_options saw the trusted seed")
+		ctx.is_true(rawequal(MP.current_ruleset, original), "current_ruleset restored")
+	end)
+
+	test("host_start_without_seed_keeps_normal_random_semantics", function()
+		local MP, funcs = fake_engine()
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local ok = driver.host_start(nil)
+		ctx.is_true(ok)
+		ctx.eq(MP.LOBBY.config.custom_seed, "random")
+	end)
+
+	test("host_start_refuses_bad_seed_and_wrong_role", function()
+		local MP, funcs = fake_engine()
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local bad, bad_code = driver.host_start("bad seed!")
+		ctx.eq(bad, nil)
+		ctx.eq(bad_code, "driver_bad_seed")
+		local ai_driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		local refused, refused_code = ai_driver.host_start("AISP0001")
+		ctx.eq(refused, nil)
+		ctx.eq(refused_code, "driver_wrong_role")
+	end)
+
+	test("ai_join_sets_fixed_name_and_exact_code", function()
+		local MP, funcs, calls = fake_engine()
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		local ok = driver.ai_join("abc12")
+		ctx.is_true(ok)
+		ctx.eq(MP.LOBBY.username, "BALATRO AI")
+		local joined = nil
+		local named = false
+		for _, call in ipairs(calls) do
+			if call.name == "join_lobby" then
+				joined = call.code
+			end
+			if call.name == "set_username" then
+				named = true
+			end
+		end
+		ctx.eq(joined, "abc12")
+		ctx.is_true(named)
+		local bad, bad_code = driver.ai_join("bad code!")
+		ctx.eq(bad, nil)
+		ctx.eq(bad_code, "driver_bad_code")
+	end)
+
+	local function source_element()
+		return {
+			config = {},
+			children = { { children = { { config = {} } } } },
+			UIBox = { recalculate = function() end },
+		}
+	end
+
+	test("ai_ready_uses_real_element_and_is_idempotent_once_ready", function()
+		local MP, funcs, calls = fake_engine({ code = "ABC12" })
+		local element = source_element()
+		local driver = MPDriver.factory({
+			role = "ai",
+			mp = MP,
+			funcs = funcs,
+			element_for = function(name)
+				if name == "lobby_ready" then
+					return element
+				end
+				return nil
+			end,
+		})
+		local ok = driver.ai_ready()
+		ctx.is_true(ok)
+		local ready_call = nil
+		for _, call in ipairs(calls) do
+			if call.name == "lobby_ready_up" then
+				ready_call = call
+			end
+		end
+		ctx.is_true(ready_call ~= nil)
+		ctx.is_true(rawequal(ready_call.e, element))
+		ctx.is_true(MP.LOBBY.ready_to_start)
+		-- Already ready: an idempotent success that never toggles again.
+		local again, again_code = driver.ai_ready()
+		ctx.is_true(again)
+		ctx.eq(again_code, "driver_ok")
+		local toggles = 0
+		for _, call in ipairs(calls) do
+			if call.name == "lobby_ready_up" then
+				toggles = toggles + 1
+			end
+		end
+		ctx.eq(toggles, 1)
+	end)
+
+	test("ai_ready_resolves_the_real_g_main_menu_element", function()
+		local MP, funcs, calls = fake_engine({ code = "ABC12" })
+		local element = source_element()
+		local G = {
+			MAIN_MENU_UI = {
+				get_UIE_by_ID = function(_, id)
+					if id == "lobby_menu_start" then
+						return element
+					end
+					return nil
+				end,
+			},
+		}
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, G = G })
+		local ok = driver.ai_ready()
+		ctx.is_true(ok)
+		local ready_call = nil
+		for _, call in ipairs(calls) do
+			if call.name == "lobby_ready_up" then
+				ready_call = call
+			end
+		end
+		ctx.is_true(ready_call ~= nil and rawequal(ready_call.e, element))
+	end)
+
+	test("ai_ready_requires_a_real_element", function()
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, element_for = function() return nil end })
+		local ok, code = driver.ai_ready()
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_missing_element")
+	end)
+
+	test("ai_ready_does_not_pretend_when_the_toggle_bailed", function()
+		-- Version-mismatch modal shape: the callback returns without changing
+		-- the observable ready flag.
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		funcs.lobby_ready_up = function() end
+		local element = source_element()
+		local driver = MPDriver.factory({
+			role = "ai",
+			mp = MP,
+			funcs = funcs,
+			element_for = function() return element end,
+		})
+		local ok, code = driver.ai_ready()
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_not_ready")
+		ctx.eq(MP.LOBBY.ready_to_start, false)
+	end)
+
+	test("ruleset_ready_requires_the_real_forced_ruleset", function()
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		ctx.is_true((driver.ruleset_ready()))
+		MP.LOBBY.config.ruleset = "ruleset_mp_blitz"
+		local ok, code = driver.ruleset_ready()
+		ctx.eq(ok, false)
+		ctx.eq(code, "driver_bad_state")
+	end)
+
+	test("host_start_game_requires_guest_ready", function()
+		local MP, funcs, calls = fake_engine({ code = "ABC12", ready_to_start = false })
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local ok, code = driver.host_start_game()
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_not_ready")
+		MP.LOBBY.ready_to_start = true
+		local started = driver.host_start_game()
+		ctx.is_true(started)
+		local saw_start = false
+		for _, call in ipairs(calls) do
+			if call.name == "lobby_start_game" then
+				saw_start = true
+			end
+		end
+		ctx.is_true(saw_start)
+	end)
+
+	test("send_guard_is_default_deny", function()
+		local MP, funcs = fake_engine()
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		ctx.is_true(driver.guard_allows("joinLobby"))
+		ctx.is_true(driver.guard_allows("readyBlind"))
+		ctx.eq(driver.guard_allows("get_end_game_jokers"), false)
+		ctx.eq(driver.guard_allows("getEndGameJokers"), false)
+		ctx.eq(driver.guard_allows("getNemesisDeck"), false)
+		ctx.eq(driver.guard_allows("nemesisEndGameStats"), false)
+		ctx.eq(driver.guard_allows("moddedAction"), false)
+		ctx.eq(driver.guard_allows("mysteryAction"), false)
+		ctx.eq(driver.guard_allows(nil), false)
+	end)
+
+	test("send_guard_preserves_required_life_and_timer_penalties", function()
+		local MP, funcs = fake_engine()
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		for _, action in ipairs({ "failTimer", "failPvPTimer", "startAnteTimer", "pauseAnteTimer" }) do
+			ctx.is_true(driver.guard_allows(action), "penalty suppressed: " .. action)
+		end
+	end)
+
+	test("send_guard_blocks_guest_lobby_options_and_create", function()
+		local MP, funcs = fake_engine()
+		MP.LOBBY.is_host = false
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		ctx.eq(driver.guard_allows("lobbyOptions"), false)
+		ctx.eq(driver.guard_allows("createLobby"), false)
+		ctx.is_true(driver.guard_allows("joinLobby"))
+	end)
+
+	test("send_guard_allows_host_options_only_before_start", function()
+		local MP, funcs = fake_engine({ code = "ABC12", ready_to_start = true })
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		ctx.is_true(driver.guard_allows("lobbyOptions"))
+		ctx.is_true(driver.guard_allows("createLobby"))
+		ctx.is_true(driver.host_start_game())
+		ctx.eq(driver.guard_allows("lobbyOptions"), false, "configuration frozen after start")
+	end)
+
+	test("send_guard_wraps_and_restores_client_send", function()
+		local MP, funcs = fake_engine()
+		local sent = {}
+		local client = {
+			send = function(message)
+				sent[#sent + 1] = message.action
+				return "forwarded"
+			end,
+		}
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, client = client })
+		local original = client.send
+		local uninstall = driver.install_send_guard()
+		ctx.is_true(type(uninstall) == "function")
+		ctx.eq(client.send({ action = "joinLobby" }), "forwarded")
+		local blocked, blocked_code = client.send({ action = "get_end_game_jokers" })
+		ctx.eq(blocked, false)
+		ctx.eq(blocked_code, "driver_send_blocked")
+		ctx.eq(#sent, 1)
+		uninstall()
+		ctx.is_true(rawequal(client.send, original))
+	end)
+end

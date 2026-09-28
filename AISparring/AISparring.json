@@ -5,11 +5,11 @@
   "author": [
     "BalatroAISparring project"
   ],
-  "description": "Inert companion scaffold. No opponent, transport, gameplay hooks or content registration. Hard-requires Multiplayer 0.5.5 and loads after it.",
+  "description": "Developer build 0.1.0-dev of the AI Sparring companion. Inert by default: no opponent, gameplay hooks, content registration or transport is claimed until an installed companion configuration and an authenticated launcher host are present. Hard-requires Multiplayer 0.5.5 and loads after it.",
   "prefix": "aisp",
   "main_file": "core.lua",
   "priority": 10000001,
-  "version": "0.1.0",
+  "version": "0.1.0-dev",
   "dependencies": [
     "Multiplayer (==0.5.5)"
   ]
