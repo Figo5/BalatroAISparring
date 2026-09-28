@@ -1875,6 +1875,10 @@ class MatchSupervisor:
         # H-A-1-R: a closure that could not be retired/persisted is remembered and
         # retried through the public daemon once the owned process finally exits.
         self._pending_closure: Optional[str] = None
+        # Serializes concurrent ``retry_pending_closure`` calls (the control server is
+        # threaded) so two retries can never append duplicate receipts or race the
+        # ownership retire.
+        self._closure_lock = threading.Lock()
 
     # -- public ---------------------------------------------------------------
 
@@ -2351,7 +2355,14 @@ class MatchSupervisor:
             # (an unmeasured closure) closes the record as failed + persistent lockout
             # so the next ticket/acknowledge is not wedged (H-A-1).
             if verdict.get("code") == "live_byte_diff_revoked":
-                return self._fail(CODE_LIVE_CHANGED, live_verdict=verdict)
+                # H-A-1-R2: the certificate already persisted the record as failed
+                # (and raised the byte-diff lockout); only ownership remains to be
+                # retired. Clearing ``_record_started`` first means a retire failure
+                # becomes a pending closure that only needs retiring, and no second
+                # verdict/failure persistence can wedge it (``session_already_closed``
+                # -> ``open_session_missing`` forever).
+                self._record_started = False
+                return self._finalize_refused_closure(CODE_LIVE_CHANGED, live_verdict=verdict)
             if self._record_started and self.config.require_certificate:
                 return self._finalize_refused_closure(verdict.get("code") or "live_verdict_failed")
             return self._finalize_unverified_human()
@@ -2671,18 +2682,23 @@ class MatchSupervisor:
         code = self._pending_closure
         if code is None:
             return True
-        if not self._retire_session():
-            return False
-        self.human_retained = False
-        if self._record_started and self.config.require_certificate:
-            if not self._record_failure_closure(code):
+        with self._closure_lock:
+            # Re-read under the lock: a concurrent retry may have completed it.
+            code = self._pending_closure
+            if code is None:
+                return True
+            if not self._retire_session():
                 return False
-        self._pending_closure = None
-        self.code = code
-        self.error = _compact_error(code)
-        self._set_phase("failed")
-        self._finalize(error_code=code)
-        return True
+            self.human_retained = False
+            if self._record_started and self.config.require_certificate:
+                if not self._record_failure_closure(code):
+                    return False
+            self._pending_closure = None
+            self.code = code
+            self.error = _compact_error(code)
+            self._set_phase("failed")
+            self._finalize(error_code=code)
+            return True
 
     def _build_plan(self) -> dict:
         return {
@@ -3360,8 +3376,11 @@ class HostDaemon:
         # H-A-1-R: a finished supervisor may hold a pending closure (a stuck owned
         # handle that has since exited, or a persistence that failed once). Retry it
         # through this public op before the human/open-record checks so a delayed
-        # safe exit can always be closed without hand-editing evidence.
-        self._retry_pending_closure()
+        # safe exit can always be closed without hand-editing evidence. A retry that
+        # still cannot retire/persist must refuse: acknowledging would otherwise
+        # pretend the still-open record/kept handles are resolved.
+        if not self._retry_pending_closure():
+            return {"ok": False, "code": CODE_CLOSURE_PENDING}
         if self.human_active():
             return {"ok": False, "code": CODE_HUMAN_ACTIVE}
         # A prior unclosed/unmeasured record blocks acknowledgement until closure.
@@ -3386,8 +3405,11 @@ class HostDaemon:
         # H-A-1-R: retry a finished prior supervisor's pending closure before the
         # open-record check, so a delayed safe exit never wedges the next ticket.
         # This runs before the ticket slot is reserved, so it always targets the
-        # prior (finished) supervisor, never the one about to be created.
-        self._retry_pending_closure()
+        # prior (finished) supervisor, never the one about to be created. A retry
+        # that still cannot retire/persist must refuse before ``cleanup`` can drop
+        # the kept handles that are the only proof of exit.
+        if not self._retry_pending_closure():
+            return {"ok": False, "code": CODE_CLOSURE_PENDING}
         if self.human_active():
             # A new ticket must never terminate a retained human window (H4).
             return {"ok": False, "code": CODE_HUMAN_ACTIVE}

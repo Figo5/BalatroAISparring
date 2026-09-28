@@ -3355,6 +3355,156 @@ def test_daemon_retry_pending_closure_only_for_finished_threads():
             event.set()
 
 
+def test_supervisor_real_certificate_live_byte_diff_closes_failed_record_and_stop():
+    """H-A-1-R2: a real measured live byte diff closes the record as failed with the
+    byte-diff lockout and leaves no pending closure, so the daemon can actually stop
+    even though the certificate already closed the record (no second verdict)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-real-diff"
+        _real_open_record(config, session_id, live, pids={"human": [7], "ai": [8]})
+        # A real byte change in the live install after the before-snapshot.
+        (Path(config.live_install_root) / "revoked.bin").write_bytes(b"live byte change")
+        session = FakeSession(roles=("human", "ai"))
+        session.session_id = session_id
+        session.nonce = "n" * 32
+        for role in session.owned:
+            role.running = False
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            certificate_api=isolation_certificate,
+            verdict_recorder=None,
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="awaiting_ai"),
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        supervisor.session = session
+        supervisor.session_id = session_id
+        supervisor._gates = {"live_map": live}
+        supervisor.open_record = str(
+            isolation_certificate._open_record_path(Path(config.staging_root), session_id)
+        )
+        supervisor.backup_id = "b" * 64
+        supervisor.certificate_id = "cert1"
+        supervisor._record_started = True
+        supervisor._unmeasured_lockout = True
+        practice_host.set_host_lockout(config, reason="session_unmeasured", session_id=session_id)
+
+        result = supervisor._finalize_after_run()
+        assert result["ok"] is False, result
+        assert result["code"] == practice_host.CODE_LIVE_CHANGED, result
+        assert supervisor.live_verdict["code"] == "live_byte_diff_revoked"
+        # The certificate already persisted the failure; nothing else is pending.
+        assert supervisor._pending_closure is None
+        assert supervisor._record_started is False
+        assert supervisor.session is None
+        assert supervisor.human_retained is False
+        assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+        closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert closed["status"] == "failed"
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is True
+        receipts = [row for row in _receipts(config) if row.get("session_id") == session_id]
+        assert receipts and receipts[-1]["verdict"] == "revoked"
+
+        # The public stop must actually shut the daemon down (no stuck pending state).
+        daemon = practice_host.HostDaemon(
+            config,
+            certificate_api=isolation_certificate,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+        )
+        with daemon._lock:
+            daemon._ticket = practice_host.MatchTicket(ticket="ticket-diff", request=make_request())
+            daemon._ticket.supervisor = supervisor
+        stopped = daemon.stop()
+        assert stopped["stopped"] is True, stopped
+
+
+def test_daemon_refuses_acknowledge_and_start_while_retry_cannot_close():
+    """H-A-1-R (Low): a retry that still cannot retire/persist must refuse the public
+    acknowledge and start without discarding the kept owned handles or the record."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-retry-refuse"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = _FailedCloseSession(session_id, "n" * 32)
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+        first = supervisor._finalize_refused_closure("session_closure_unproven")
+        assert first["ok"] is False
+        assert supervisor._pending_closure == "session_closure_unproven"
+        assert supervisor.session is session
+
+        daemon = practice_host.HostDaemon(
+            config,
+            certificate_api=isolation_certificate,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+        )
+        with daemon._lock:
+            daemon._ticket = practice_host.MatchTicket(ticket="ticket-refuse", request=make_request())
+            daemon._ticket.supervisor = supervisor
+        try:
+            ack = daemon._op_acknowledge({"confirm": True})
+            assert ack["ok"] is False and ack["code"] == practice_host.CODE_CLOSURE_PENDING, ack
+            assert supervisor.session is session
+            assert supervisor._pending_closure == "session_closure_unproven"
+            assert isolation_certificate.list_open_records(Path(config.staging_root))
+
+            start = daemon._op_start(make_request())
+            assert start["ok"] is False and start["code"] == practice_host.CODE_CLOSURE_PENDING, start
+            assert supervisor.session is session
+            assert supervisor._pending_closure == "session_closure_unproven"
+            assert isolation_certificate.list_open_records(Path(config.staging_root))
+        finally:
+            with daemon._lock:
+                daemon._ticket = None
+
+
+def test_concurrent_pending_closure_retry_persists_once():
+    """H-A-1-R (Low): concurrent retries are serialized, so the failure closure is
+    persisted exactly once and never appends duplicate receipts."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_livepair(config)
+        session_id = "s-concurrent-retry"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = FakeSession(roles=("human",))
+        session.owned[0].running = False
+        session.session_id = session_id
+        session.nonce = "n" * 32
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+        supervisor._pending_closure = "session_closure_unproven"
+
+        real_failure = isolation_certificate.record_session_failure
+        calls = {"n": 0}
+
+        def slow_failure(staging_root, *, session_id, reason):
+            calls["n"] += 1
+            time.sleep(0.05)
+            return real_failure(staging_root, session_id=session_id, reason=reason)
+
+        results = []
+
+        def worker():
+            results.append(supervisor.retry_pending_closure())
+
+        with patched(isolation_certificate, record_session_failure=slow_failure):
+            threads = [threading.Thread(target=worker) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(5.0)
+
+        assert sorted(results) == [True, True], results
+        assert calls["n"] == 1
+        assert supervisor._pending_closure is None
+        assert supervisor._record_started is False
+        receipts = [row for row in _receipts(config) if row.get("session_id") == session_id]
+        assert len(receipts) == 1 and receipts[0]["verdict"] == "failed"
+
+
 def _run_all() -> int:
     tests = sorted(
         (name, value)

@@ -417,8 +417,14 @@ explicit closure exists; once the record is closed as failed, `acknowledge` clea
 both lockouts so a stuck session is always recoverable without hand-editing
 evidence. A pre-launch live reappearance takes the same reviewed void/failure
 path. Only a real `live_byte_diff_revoked` verdict raises the byte-diff lockout;
-any other refusal closes as failed with `session_unmeasured`. A failed session can
-therefore never silently re-baseline the next one (C1).
+any other refusal closes as failed with `session_unmeasured`. When the certificate
+has itself already closed the record as `failed` for a measured byte diff, the host
+clears `_record_started` and retires the handles through the same refused-closure
+path: it never asks for a second verdict or calls `record_session_failure` again
+(which would only return `session_already_closed`/`open_session_missing` and wedge a
+permanent pending closure). The byte-diff lockout set by the measured verdict is
+kept (H-A-1-R2). A failed session can therefore never silently re-baseline the next
+one (C1).
 
 A closure that cannot yet be **retired or persisted** (a stuck owned handle, or a
 `record_session_failure` that raised/refused) is remembered as a **pending closure**
@@ -428,7 +434,12 @@ re-proves the owned-handle exit, persists the failure closure, rewrites the sess
 report and clears the pending state. A delayed but proven exit therefore always
 completes the *same* closure through the public API, with no hand edit and no
 fabricated success; a still-stuck handle or still-failing persistence returns
-`False` and leaves the record/handles exactly as they were. A non-forced daemon
+`False` and leaves the record/handles exactly as they were. `acknowledge` and
+`start` therefore refuse (`practice_host_closure_pending`) when that retry cannot
+complete, instead of clearing the lockout or reaching `cleanup()` and dropping the
+kept handles. `retry_pending_closure()` is serialized by a supervisor lock, so two
+concurrent authenticated requests persist the closure exactly once (never duplicate
+receipts). A non-forced daemon
 `stop()` also retries first and refuses (`practice_host_closure_pending`,
 `stopped: false`) while a closure is still pending, so it never reaches `cleanup()`
 and drops the handles that are the only proof of exit (H-A-1-R).
@@ -590,8 +601,12 @@ Balatro and is not game/review acceptance.
   `acknowledge` and `start` ops driving the pending-closure retry after both a stuck
   owned handle and a one-shot persistence failure (and never retrying a still-running
   supervisor thread), a non-forced `stop()` refusing with
-  `practice_host_closure_pending`, live-game-appears void + lockout,
-  live-diff revocation lockout, listener-failure cleanup (roles never spawned) and
+  `practice_host_closure_pending`, live-game-appears void + lockout, a
+  real-certificate live byte diff (record `failed` + byte-diff lockout, no pending
+  closure, and a public `stop()` that actually stops), `acknowledge`/`start`
+  refusing with `practice_host_closure_pending` while a retry still cannot close
+  without dropping the kept handles, concurrent pending-closure retries persisting
+  exactly once, listener-failure cleanup (roles never spawned) and
   launch-failure cleanup, and the reserved-ticket release when the supervisor
   factory raises;
 - server environment allowlisting (SQLite path stays in the repo) and developer
