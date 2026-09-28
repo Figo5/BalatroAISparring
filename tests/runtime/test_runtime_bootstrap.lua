@@ -150,7 +150,7 @@ return function(ctx)
 	end)
 
 	test("ai_activates_after_hello_and_issues_a_decision", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai" })
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
 		ctx.is_true(instance.install())
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -203,7 +203,7 @@ return function(ctx)
 	end)
 
 	test("decision_issue_is_bounded_and_matches_pacing", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai" })
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
 		instance.install()
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -247,7 +247,7 @@ return function(ctx)
 	end)
 
 	test("loop_timeout_issues_a_wire_cancel_then_reissues", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai" })
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
 		instance.install()
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -443,10 +443,27 @@ return function(ctx)
 			RuntimeBootstrap.mp_wait_state({ GAME = { ready_blind = true } }, { GAME = {} }),
 			"mp_ready_blind"
 		)
+		-- Engine HIGH C: the real PvP no-hands wait is driven by the *current*
+		-- blind and the hands counter, not by `pvp_reached` (which Multiplayer
+		-- resets to false when the PvP blind starts). The source-visible PvP
+		-- blind is `blind.pvp` (any non-nil/non-false value) or the pinned
+		-- nemesis key.
 		ctx.eq(
 			RuntimeBootstrap.mp_wait_state(
-				{ GAME = { pvp_reached = true } },
-				{ GAME = { current_round = { hands_left = 0 } } }
+				{ GAME = { pvp_reached = false } },
+				{ GAME = { current_round = { hands_left = 0 }, blind = { pvp = true } } }
+			),
+			"mp_pvp_no_hands"
+		)
+		ctx.eq(
+			RuntimeBootstrap.mp_wait_state(
+				{ GAME = { pvp_reached = false } },
+				{
+					GAME = {
+						current_round = { hands_left = -1 },
+						blind = { config = { blind = { key = "bl_mp_nemesis" } } },
+					},
+				}
 			),
 			"mp_pvp_no_hands"
 		)
@@ -454,15 +471,197 @@ return function(ctx)
 			RuntimeBootstrap.mp_wait_state({ GAME = { pvp_countdown = 3 } }, { GAME = {} }),
 			"mp_pvp_countdown"
 		)
-		-- A finished PvP round is not a wait, and an unknown engine fault never
-		-- becomes an unbounded wait.
+		-- A finished PvP round is not a wait, and a non-PvP blind with no hands is
+		-- never a PvP wait even when pvp_reached is stale-true.
 		ctx.eq(
 			RuntimeBootstrap.mp_wait_state(
 				{ GAME = { pvp_reached = true, round_ended = true } },
-				{ GAME = { current_round = { hands_left = 0 } } }
+				{ GAME = { current_round = { hands_left = 0 }, blind = { pvp = true } } }
 			),
 			nil
 		)
+		ctx.eq(
+			RuntimeBootstrap.mp_wait_state(
+				{ GAME = { pvp_reached = true } },
+				{ GAME = { current_round = { hands_left = 0 }, blind = { config = { blind = { key = "bl_small" } } } } }
+			),
+			nil
+		)
+	end)
+
+	test("host_create_failure_is_fatal_and_never_recreated", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		-- Break the real forcing *before* the driver snapshots the callbacks:
+		-- the lobby is created but no config keys are recorded. Once the create
+		-- callback ran, this must be fatal, never a re-armed second createLobby.
+		local creates = 0
+		bctx.engine.G.FUNCS.start_lobby = function()
+			creates = creates + 1
+			bctx.engine.MP.LOBBY.code = "ABC12"
+		end
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		support.inbound(bctx, {
+			ok = true,
+			code = "practice_ok",
+			role = "human",
+			ruleset_id = "ruleset_mp_majorleague",
+			gamemode = "gamemode_mp_attrition",
+			forced_options = { "timer_base_seconds" },
+			difficulty = "competitive",
+			mode = "normal",
+			pacing = "normal",
+		})
+		step(instance, bctx)
+		step(instance, bctx)
+		step(instance, bctx)
+		ctx.eq(instance.state(), "stopped")
+		ctx.eq(instance.status().last_error, "driver_force_failed")
+		ctx.eq(creates, 1, "createLobby is never re-sent after the real call")
+	end)
+
+	test("service_aborted_reply_stops_the_coordinator", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		-- The SETUP reply carries the service's fatal abort.
+		support.inbound(bctx, { ok = false, code = "practice_aborted" })
+		step(instance, bctx)
+		ctx.eq(instance.state(), "stopped")
+		ctx.eq(instance.status().last_error, "practice_aborted")
+	end)
+
+	test("heartbeat_aborted_stops_the_runtime", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "human",
+			auto_coordinate = false,
+		})
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		-- With auto coordination off, the heartbeat is the only outstanding
+		-- frame, so its aborted reply routes straight back to it.
+		local _, by_op = drain_envelopes(bctx)
+		ctx.is_true(by_op.heartbeat ~= nil)
+		support.inbound(bctx, {
+			ok = true,
+			code = "practice_ok",
+			role = "human",
+			started = false,
+			aborted = true,
+		})
+		step(instance, bctx)
+		ctx.eq(instance.state(), "stopped")
+		ctx.eq(instance.status().last_error, "practice_aborted")
+	end)
+
+	test("prestart_deadline_stops_an_uncompletable_coordination", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "human",
+			auto_coordinate = false,
+		})
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		bctx.clock.advance(RuntimeBootstrap.LIMITS.prestart_timeout + 1)
+		local status, code = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(code, "boot_coord_timeout")
+		ctx.eq(instance.status().last_error, "boot_coord_timeout")
+	end)
+
+	test("pvp_no_hands_wait_holds_the_loop_beyond_120s", function()
+		local engine_support = support.engine_support(ctx.repo_root)
+
+		local function build(pvp)
+			local engine = support.engine(ctx.repo_root, {
+				state = engine_support.STATES.HAND_PLAYED,
+				blind_on_deck = "Boss",
+				hands_left = 0,
+				blind_pvp = pvp or nil,
+				blind_key = pvp and "bl_mp_nemesis" or "bl_small",
+			})
+			support.shape_mp(engine, { code = "ABC12" })
+			-- The guest applies the host's lobby configuration locally; the AI's
+			-- source-derived digest reads these live values.
+			engine.MP.LOBBY.config.timer_base_seconds = 180
+			return support.bootstrap(ctx.repo_root, { role = "ai", engine = engine })
+		end
+
+		-- Ordered mini-responder: every pushed frame gets exactly one reply so
+		-- the real service ordering invariant holds.
+		local function respond_all(bctx)
+			local messages = support.drain_outbound(bctx)
+			for _, message in ipairs(messages) do
+				local op = message.op
+				if op == "hello" then
+					support.inbound(bctx, { ok = true, code = "practice_ok" })
+				elseif op == "setup" then
+					support.inbound(bctx, {
+						ok = true,
+						code = "practice_ok",
+						role = "ai",
+						ruleset_id = "ruleset_mp_majorleague",
+						gamemode = "gamemode_mp_attrition",
+						forced_options = { "timer_base_seconds" },
+						difficulty = "competitive",
+						mode = "normal",
+						pacing = "normal",
+					})
+				elseif op == "join_code" then
+					support.inbound(bctx, { ok = true, code = "practice_ok", lobby_code = "ABC12" })
+				elseif op == "ready" then
+					support.inbound(bctx, { ok = true, code = "practice_ok", role = "ai" })
+				elseif op == "start" then
+					support.inbound(bctx, { ok = true, code = "practice_ok", started = true })
+				else
+					support.inbound(bctx, { ok = true, code = "practice_ok" })
+				end
+			end
+		end
+
+		local function coordinated(pvp)
+			local instance, _, bctx = build(pvp)
+			instance.install()
+			step(instance, bctx)
+			respond_all(bctx)
+			for _ = 1, 40 do
+				step(instance, bctx)
+				respond_all(bctx)
+				if instance.describe().coordinated then
+					break
+				end
+			end
+			return instance, bctx
+		end
+
+		-- Control: a non-PvP blind with no hands is not a trusted wait, so the
+		-- loop's own 120 s transient window ends the AI.
+		local control, control_ctx = coordinated(false)
+		ctx.is_true(control.describe().coordinated, "control coordinated")
+		for _ = 1, 140 do
+			step(control, control_ctx)
+			respond_all(control_ctx)
+		end
+		ctx.eq(control.state(), "stopped", "unverified no-hands stall still aborts")
+
+		-- PvP: the current blind really is the PvP blind and the AI is waiting for
+		-- the human's turn (`pvp_reached` is false post-start). The trusted wait
+		-- keeps the loop alive well beyond its 120 s transient budget.
+		local pvp, pvp_ctx = coordinated(true)
+		ctx.is_true(pvp.describe().coordinated, "pvp coordinated")
+		for _ = 1, 200 do
+			step(pvp, pvp_ctx)
+			respond_all(pvp_ctx)
+		end
+		ctx.eq(pvp.state(), "active", "PvP no-hands wait does not end the AI")
 	end)
 
 	test("install_hooks_preserves_returns_and_exceptions", function()

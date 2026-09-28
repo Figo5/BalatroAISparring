@@ -167,7 +167,9 @@ def static_cases() -> list[dict]:
     )
     add(
         "driver_uses_original_force_lobby_options",
-        "original(resolved)" in driver_src or "original = rget(resolved" in driver_src,
+        # The real `MP.current_ruleset()` is a metatable proxy, so the field must
+        # be resolved with protected normal indexing, never rawget.
+        "return resolved.force_lobby_options" in driver_src and "pcall(function()" in driver_src,
     )
     add(
         "driver_seed_after_reset",
@@ -194,12 +196,34 @@ def static_cases() -> list[dict]:
         'rpath(mp, "LOBBY", "ready_to_start") ~= true' in driver_src,
     )
     add(
+        "driver_c1_real_run_stage_no_invented_flag",
+        "STAGES" in driver_src
+        and 'rget(stages, "RUN")' in driver_src
+        and 'rget(mp, "is_started")' not in driver_code
+        and 'rpath(mp, "LOBBY", "started")' not in driver_code,
+    )
+    add(
+        "driver_c2_protected_force_lookup_and_fatal_rearm",
+        "return resolved.force_lobby_options" in driver_src
+        and "FORCE_FAILED" in driver_src,
+    )
+    add(
+        "driver_m5_requires_menu_state_and_ui",
+        'rget(states, "MENU")' in driver_src and 'rget(G, "MAIN_MENU_UI")' in driver_src,
+    )
+    add(
         "bootstrap_coordinates_setup_and_join_code",
         "JOIN_CODE" in bootstrap_src and "connected" in bootstrap_src and "compute_digest" in bootstrap_src,
     )
     add(
         "bootstrap_gates_loop_on_match_start",
         "is_started" in bootstrap_src and "match_running" in bootstrap_src,
+    )
+    add(
+        "bootstrap_prestart_deadline_and_abort_are_fatal",
+        "prestart_timeout" in bootstrap_src
+        and "PRESTART_TIMEOUT" in bootstrap_src
+        and 'rawget(response, "aborted")' in bootstrap_src,
     )
     add(
         "bootstrap_installs_guard_for_both_roles",
@@ -226,6 +250,17 @@ def static_cases() -> list[dict]:
         "DECIDE_CANCEL" in transport_src
         and "send_cancel" in transport_src
         and "decision_sequence" in transport_src,
+    )
+    add(
+        "transport_ordered_inflight_frame_matching",
+        "reserve_inflight" in transport_src
+        and "take_inflight" in transport_src
+        and "deliver_decision" in transport_src
+        and "entry.kind" in transport_src,
+    )
+    add(
+        "transport_keeps_owned_cancel_slot_on_failed_push",
+        "cancel_code ~= CODE.OK" in transport_src,
     )
 
     add(

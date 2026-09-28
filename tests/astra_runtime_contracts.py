@@ -5,6 +5,83 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 CASES = {
+    "control_throwing_push_preserves_capacity_and_sequence": r'''
+local support=dofile(ROOT..'/tests/runtime/support.lua')
+local Transport=dofile(ROOT..'/AISparring/integration/control_transport.lua')
+local json=support.json(ROOT)
+local fail=true
+local sent={}
+local transport=assert(support.transport(ROOT,{channels={
+  to_worker={push=function(_,line)
+    if fail then error('synthetic channel failure') end
+    sent[#sent+1]=json.decode(line)
+  end},
+  from_worker={pop=function() return nil end}
+}}))
+assert(transport.start())
+local id,code=transport.send('status',{})
+assert(id==nil and code=='transport_push_failed')
+fail=false
+for i=1,Transport.LIMITS.max_inflight do assert(transport.send('status',{})) end
+assert(#sent==Transport.LIMITS.max_inflight and sent[1].sequence==1)
+assert(transport.send('status',{})==nil)
+''',
+    "control_queue_refusal_does_not_send_untracked_frame": r'''
+local support=dofile(ROOT..'/tests/runtime/support.lua')
+local Transport=dofile(ROOT..'/AISparring/integration/control_transport.lua')
+local sent={}
+local transport=assert(support.transport(ROOT,{channels={
+  to_worker={push=function(_,line) sent[#sent+1]=line end},
+  from_worker={pop=function() return nil end}
+}}))
+assert(transport.start())
+for i=1,Transport.LIMITS.max_inflight do assert(transport.send('status',{})) end
+local before=#sent
+local id,code=transport.send('end',{result='aborted'})
+assert(id==nil and code=='transport_queue_full')
+assert(#sent==before,'queue refusal nevertheless sent an untracked command')
+''',
+    "menu_accepts_actual_object_instance_shape": r'''
+dofile(ROOT..'/work/reference/game/engine/object.lua')
+local GameShape=Object:extend()
+local ui=dofile(ROOT..'/tests/menu/fakeui.lua').new()
+local game=GameShape()
+for k,v in pairs(ui.G) do game[k]=v end
+assert(getmetatable(game)~=nil)
+ui.G=game
+local menu,code=dofile(ROOT..'/AISparring/ui/practice_menu.lua').factory(ui)
+assert(menu~=nil,'real Object instance G rejected: '..tostring(code))
+''',
+    "ai_start_uses_real_run_stage_without_invented_flags": r'''
+local Driver=dofile(ROOT..'/AISparring/integration/mp_driver.lua')
+local mp={LOBBY={code='ABC12',config={}}}
+local game={STAGES={RUN=2,MAIN_MENU=1},STAGE=1}
+local d=assert(Driver.factory({role='ai',mp=mp,G=game,funcs={}}))
+assert(not d.is_started())
+game.STAGE=game.STAGES.RUN
+assert(mp.is_started==nil and mp.LOBBY.started==nil)
+assert(d.is_started(),'AI failed to observe actual Multiplayer RUN stage')
+''',
+    "majorleague_force_resolves_real_proxy_shape": r'''
+local Driver=dofile(ROOT..'/AISparring/integration/mp_driver.lua')
+local mp={LOBBY={config={ruleset='ruleset_mp_majorleague'}}}
+local forced=0
+local rules={forced_gamemode='gamemode_mp_attrition',force_lobby_options=function()
+  forced=forced+1
+  mp.LOBBY.config.timer_base_seconds=180
+end}
+mp.Rulesets={ruleset_mp_majorleague=rules}
+mp.current_ruleset=function() return setmetatable({}, {__index=function(_,k) return rules[k] end}) end
+local funcs={start_lobby=function()
+  mp.LOBBY.config.custom_seed='random'
+  mp.current_ruleset():force_lobby_options()
+  mp.LOBBY.code='ABC12'
+end}
+local d=assert(Driver.factory({role='human',mp=mp,funcs=funcs}))
+local ok,code=d.host_start(nil)
+assert(ok==true and forced==1 and mp.LOBBY.config.timer_base_seconds==180,
+  'real proxy force_lobby_options was skipped: '..tostring(code))
+''',
     "control_channels_accept_userdata_methods": r'''
 local support=dofile(ROOT..'/tests/runtime/support.lua')
 local sent={}

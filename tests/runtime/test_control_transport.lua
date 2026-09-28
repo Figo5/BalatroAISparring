@@ -146,6 +146,13 @@ return function(ctx)
 		transport.request({ sequence = 10 })
 		local wire = transport.pending_wire_sequence()
 		transport.cancel("d10")
+		-- The service answers strictly in order: the begin's pending reply, then
+		-- the cancel ack. Neither may be delivered as a decision.
+		support.inbound(tctx, {
+			sequence = wire,
+			ok = true,
+			code = protocol.CODES.DECISION_PENDING,
+		})
 		support.inbound(tctx, {
 			sequence = wire,
 			ok = true,
@@ -216,18 +223,79 @@ return function(ctx)
 		ctx.eq(transport.pending_sequence(), nil)
 	end)
 
-	test("stale_decision_sequence_is_dropped", function()
+	test("unsolicited_decision_reply_is_dropped", function()
 		local transport, _, tctx = support.transport(ctx.repo_root, { decision_base = 10 })
 		transport.start()
-		transport.request({ sequence = 10 })
+		-- No request is outstanding: a decision-coded reply cannot dispatch and
+		-- must never be queued as a coordination response.
 		support.inbound(tctx, {
-			sequence = transport.pending_wire_sequence() + 100,
+			sequence = 999,
 			ok = true,
 			code = protocol.CODES.DECISION_READY,
 			action = {},
 		})
 		ctx.eq(transport.poll_decision(), nil)
+		ctx.eq(transport.poll_coordination(), nil)
 		ctx.eq(transport.stats().out_of_order, 1)
+	end)
+
+	test("begin_rejection_without_a_sequence_completes_the_decision", function()
+		-- Every decide_begin rejection from the real service omits `sequence`
+		-- (not attested, replay, bad observation, outstanding, ended, aborted).
+		-- Ordered head-matching must still deliver it to the decision.
+		local transport, _, tctx = support.transport(ctx.repo_root, { decision_base = 10 })
+		transport.start()
+		transport.request({ sequence = 10 })
+		support.inbound(tctx, { ok = false, code = "practice_bad_observation" })
+		local response = transport.poll_decision()
+		ctx.is_true(response ~= nil)
+		ctx.eq(response.sequence, 10)
+		ctx.eq(response.code, "practice_bad_observation")
+		ctx.eq(transport.pending_sequence(), nil)
+	end)
+
+	test("repeated_poll_then_terminal_delivers_once", function()
+		local transport, _, tctx = support.transport(ctx.repo_root, { decision_base = 10, poll_interval = 0 })
+		transport.start()
+		transport.request({ sequence = 10 })
+		local wire = transport.pending_wire_sequence()
+		ctx.eq(transport.poll_decision(), nil, "first poll")
+		ctx.eq(transport.poll_decision(), nil, "second poll")
+		-- begin and first poll are answered pending, in order.
+		support.inbound(tctx, { sequence = wire, ok = true, code = protocol.CODES.DECISION_PENDING })
+		support.inbound(tctx, { sequence = wire, ok = true, code = protocol.CODES.DECISION_PENDING })
+		ctx.eq(transport.poll_decision(), nil, "pending polls do not complete the slot")
+		ctx.eq(transport.pending_sequence(), 10)
+		support.inbound(tctx, { sequence = wire, ok = true, code = protocol.CODES.DECISION_READY, action = { type = "SELECT_BLIND" } })
+		local response = transport.poll_decision()
+		ctx.is_true(response ~= nil)
+		ctx.eq(response.sequence, 10)
+		ctx.eq(response.action.type, "SELECT_BLIND")
+		ctx.eq(transport.poll_decision(), nil)
+	end)
+
+	test("result_and_heartbeat_replies_do_not_shift_a_later_end_ack", function()
+		-- decision_result and heartbeat acks are consumed by their own ordered
+		-- entries; the END ack still lands on the END op, never miscredited.
+		local transport, _, tctx = support.transport(ctx.repo_root, { decision_base = 10 })
+		transport.start()
+		transport.request({ sequence = 10 })
+		local wire = transport.pending_wire_sequence()
+		support.inbound(tctx, { sequence = wire, ok = true, code = protocol.CODES.DECISION_READY, action = {} })
+		transport.poll_decision()
+		transport.decision_result(10, { accepted = true, code = "broker_ok" })
+		transport.send(protocol.OPS.HEARTBEAT, { tick = 1 })
+		transport.send(protocol.OPS.END, { result = "ai_win" })
+		support.inbound(tctx, { sequence = wire, ok = true, code = protocol.CODES.OK })
+		support.inbound(tctx, { ok = true, code = protocol.CODES.OK, role = "ai", started = true, aborted = false })
+		support.inbound(tctx, { ok = true, code = protocol.CODES.OK })
+		local heartbeat = transport.poll_coordination()
+		ctx.eq(heartbeat.op, protocol.OPS.HEARTBEAT)
+		ctx.eq(heartbeat.aborted, false)
+		local ended = transport.poll_coordination()
+		ctx.eq(ended.op, protocol.OPS.END)
+		ctx.eq(transport.stats().results, 1)
+		ctx.eq(transport.poll_coordination(), nil)
 	end)
 
 	test("request_timeout_is_terminal", function()

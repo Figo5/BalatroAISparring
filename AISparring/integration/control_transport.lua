@@ -78,6 +78,7 @@ ControlTransport.LIMITS = {
 	max_queue = 64,
 	max_request_id = 64,
 	max_error_code = 64,
+	max_inflight = 256,
 	decision_base_default = 1000000,
 	max_sequence = 2147483647,
 	drain_budget = 32,
@@ -234,6 +235,18 @@ function ControlTransport.factory(ports)
 	local cancelled_wire_count = 0
 	local coordination = {}
 	local coordination_count = 0
+	-- Ordered record of every frame this side has pushed on the single ordered
+	-- connection. The service answers strictly in order, one response per
+	-- request, so each non-event reply is matched to the head of this list. This
+	-- is what keeps a `decision_result`/cancel/heartbeat reply from shifting the
+	-- reply that belongs to a later coordination op (and vice versa), and it is
+	-- how a decision rejection that carries no `sequence` is still routed back to
+	-- the decision that caused it. Entries: { kind = "coordination"|"decision"|
+	-- "poll"|"cancel"|"result", op = <wire op>, decision_sequence = <local decision seq?> }.
+	local inflight = {}
+	local inflight_head = 1
+	local inflight_tail = 0
+	local inflight_count = 0
 	local stats = {
 		sent = 0,
 		received = 0,
@@ -243,6 +256,7 @@ function ControlTransport.factory(ports)
 		polls = 0,
 		cancels = 0,
 		cancel_acks = 0,
+		results = 0,
 	}
 
 	local function record_error(code)
@@ -281,6 +295,59 @@ function ControlTransport.factory(ports)
 		local index = coordination_count + 1
 		coordination[index] = response
 		coordination_count = index
+	end
+
+	-- Reserve an ordered inflight entry for a frame about to be pushed. Bounded:
+	-- a dead peer that never answers must not let the list grow without limit.
+	local function reserve_inflight(entry)
+		if inflight_count >= ControlTransport.LIMITS.max_inflight then
+			record_error(CODE.QUEUE_FULL)
+			return false
+		end
+		local index = inflight_tail + 1
+		inflight[index] = entry
+		inflight_tail = index
+		inflight_count = inflight_count + 1
+		return true
+	end
+
+	local function take_inflight()
+		if inflight_count == 0 then
+			return nil
+		end
+		local entry = inflight[inflight_head]
+		inflight[inflight_head] = nil
+		inflight_head = inflight_head + 1
+		inflight_count = inflight_count - 1
+		if inflight_count == 0 then
+			inflight = {}
+			inflight_head = 1
+			inflight_tail = 0
+		end
+		return entry
+	end
+
+	local function clear_inflight()
+		inflight = {}
+		inflight_head = 1
+		inflight_tail = 0
+		inflight_count = 0
+	end
+
+	-- Remove the most recently reserved entry (the tail), used to roll back a
+	-- reservation when the underlying push fails.
+	local function unreserve_inflight()
+		if inflight_count == 0 then
+			return
+		end
+		inflight[inflight_tail] = nil
+		inflight_tail = inflight_tail - 1
+		inflight_count = inflight_count - 1
+		if inflight_count == 0 then
+			inflight = {}
+			inflight_head = 1
+			inflight_tail = 0
+		end
 	end
 
 	local function handle_event(decoded)
@@ -353,7 +420,19 @@ function ControlTransport.factory(ports)
 		return true
 	end
 
-	local function map_decision_response(decoded)
+	-- Map one ordered decision reply (begin/poll) back to its private local
+	-- sequence. `entry.decision_sequence` is the decision identity the frame was pushed for;
+	-- a terminal reply that does not belong to the still-outstanding decision is
+	-- dropped instead of clobbering a later reply.
+	local function deliver_decision(decoded, entry)
+		if decision_response ~= nil then
+			stats.out_of_order = stats.out_of_order + 1
+			return
+		end
+		if pending_decision == nil or pending_decision.local_sequence ~= entry.decision_sequence then
+			stats.out_of_order = stats.out_of_order + 1
+			return
+		end
 		local mapped = {}
 		for key, value in next, decoded do
 			mapped[key] = value
@@ -384,27 +463,45 @@ function ControlTransport.factory(ports)
 					if rawget(decoded, "t") ~= nil then
 						handle_event(decoded)
 					else
-						local sequence = rawget(decoded, "sequence")
-						local matches_pending = pending_decision ~= nil
-							and is_nat(sequence)
-							and sequence == pending_decision.wire_sequence
-						if matches_pending then
+						-- The service answers strictly in order on the single
+						-- connection: every non-event reply consumes exactly the
+						-- head of the ordered inflight list, regardless of
+						-- whether the reply echoes a `sequence`.
+						local entry = take_inflight()
+						if entry == nil then
+							-- Unsolicited: a decision code cannot dispatch without
+							-- an owned request; anything else is coordination.
+							if is_decision_code(rawget(decoded, "code")) then
+								stats.out_of_order = stats.out_of_order + 1
+							else
+								enqueue(decoded)
+							end
+						elseif entry.kind == "coordination" then
+							local tagged = {}
+							for key, value in next, decoded do
+								tagged[key] = value
+							end
+							tagged.op = entry.op
+							enqueue(tagged)
+						elseif entry.kind == "cancel" then
+							if is_nat(rawget(decoded, "sequence")) then
+								if not take_cancel_ack(rawget(decoded, "sequence")) then
+									stats.cancel_acks = stats.cancel_acks + 1
+								end
+							else
+								stats.cancel_acks = stats.cancel_acks + 1
+							end
+						elseif entry.kind == "result" then
+							stats.results = stats.results + 1
+						elseif entry.kind == "decision" or entry.kind == "poll" then
 							local pending_code = rawget(decoded, "code")
 							if rawget(decoded, "ok") == true
 								and pending_code == protocol.CODES.DECISION_PENDING then
 								-- Still computing: leave the slot outstanding.
 							else
-								map_decision_response(decoded)
+								deliver_decision(decoded, entry)
 							end
-						elseif is_nat(sequence) and take_cancel_ack(sequence) then
-							-- A cancel ack (or a ready/timeout for the cancelled
-							-- decision that raced it). Neither is dispatchable.
-						elseif is_nat(sequence) and is_decision_code(rawget(decoded, "code")) then
-							-- A decision response that is not the outstanding wire
-							-- sequence can never dispatch: drop it (stale/replay).
-							stats.out_of_order = stats.out_of_order + 1
 						else
-							-- Coordination responses are not sequence-matched.
 							enqueue(decoded)
 						end
 					end
@@ -413,7 +510,7 @@ function ControlTransport.factory(ports)
 		end
 	end
 
-	local function build_and_push(op, sequence, observation)
+	local function build_and_push(op, sequence, observation, entry)
 		local ok_env, envelope = pcall(protocol.envelope, session, credential, role, op, sequence, observation)
 		if not ok_env or type(envelope) ~= "table" then
 			return record_error(CODE.ENCODE_FAILED)
@@ -425,7 +522,19 @@ function ControlTransport.factory(ports)
 		if #text > max_send then
 			return record_error(CODE.SEND_TOO_LARGE)
 		end
-		return push_raw(text)
+		-- Reserve the ordered entry *before* pushing, so a full list refuses the
+		-- frame without ever sending an untracked command.
+		if entry ~= nil and not reserve_inflight(entry) then
+			return CODE.QUEUE_FULL
+		end
+		local code = push_raw(text)
+		if code ~= nil then
+			if entry ~= nil then
+				unreserve_inflight()
+			end
+			return code
+		end
+		return nil
 	end
 
 	-- Send the wire cancellation for exactly one owned outstanding decision,
@@ -452,7 +561,7 @@ function ControlTransport.factory(ports)
 		if sequence > ControlTransport.LIMITS.max_sequence then
 			return nil, CODE.SEQUENCE_EXHAUSTED
 		end
-		local code = build_and_push(op, sequence, payload)
+		local code = build_and_push(op, sequence, payload, { kind = "cancel", op = op })
 		if code ~= nil then
 			return nil, code
 		end
@@ -472,6 +581,7 @@ function ControlTransport.factory(ports)
 		started = true
 		coordination = {}
 		coordination_count = 0
+		clear_inflight()
 		return true, CODE.OK
 	end
 
@@ -521,7 +631,7 @@ function ControlTransport.factory(ports)
 		if sequence > ControlTransport.LIMITS.max_sequence then
 			return nil, CODE.SEQUENCE_EXHAUSTED
 		end
-		local code = build_and_push(op, sequence, payload)
+		local code = build_and_push(op, sequence, payload, { kind = "coordination", op = op })
 		if code ~= nil then
 			return nil, code
 		end
@@ -559,7 +669,11 @@ function ControlTransport.factory(ports)
 		if sequence > ControlTransport.LIMITS.max_sequence then
 			return nil, CODE.SEQUENCE_EXHAUSTED
 		end
-		local code = build_and_push(protocol.OPS.DECIDE_BEGIN, sequence, observation)
+		local code = build_and_push(protocol.OPS.DECIDE_BEGIN, sequence, observation, {
+			kind = "decision",
+			op = protocol.OPS.DECIDE_BEGIN,
+			decision_sequence = local_sequence,
+		})
 		if code ~= nil then
 			return nil, code
 		end
@@ -607,7 +721,10 @@ function ControlTransport.factory(ports)
 		if sequence > ControlTransport.LIMITS.max_sequence then
 			return nil, CODE.SEQUENCE_EXHAUSTED
 		end
-		local code = build_and_push(protocol.OPS.DECISION_RESULT, sequence, payload)
+		local code = build_and_push(protocol.OPS.DECISION_RESULT, sequence, payload, {
+			kind = "result",
+			op = protocol.OPS.DECISION_RESULT,
+		})
 		if code ~= nil then
 			return nil, code
 		end
@@ -640,15 +757,24 @@ function ControlTransport.factory(ports)
 			local item = pending_decision
 			local sequence = item.local_sequence
 			-- Never abandon the service's single decision slot silently: send the
-			-- wire cancellation for exactly this owned job before clearing.
-			send_cancel(item)
+			-- wire cancellation for exactly this owned job before clearing. If the
+			-- cancel cannot be pushed, keep the local slot (the caller can retry)
+			-- rather than forgetting a cancel the service still owns.
+			local _, cancel_code = send_cancel(item)
+			if cancel_code ~= CODE.OK then
+				return nil
+			end
 			pending_decision = nil
 			return { sequence = sequence, ok = false, code = CODE.TIMEOUT }
 		end
 		if pending_decision.last_poll == nil or current - pending_decision.last_poll >= poll_interval then
 			pending_decision.last_poll = current
 			stats.polls = stats.polls + 1
-			build_and_push(protocol.OPS.DECIDE_POLL, pending_decision.wire_sequence, {})
+			build_and_push(protocol.OPS.DECIDE_POLL, pending_decision.wire_sequence, {}, {
+				kind = "poll",
+				op = protocol.OPS.DECIDE_POLL,
+				decision_sequence = pending_decision.local_sequence,
+			})
 		end
 		return nil
 	end
@@ -721,6 +847,7 @@ function ControlTransport.factory(ports)
 		stopped = true
 		pending_decision = nil
 		decision_response = nil
+		clear_inflight()
 		if started then
 			pcall(channels.to_worker.push, channels.to_worker, '{"t":"stop"}')
 		end

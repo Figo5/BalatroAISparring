@@ -314,4 +314,47 @@ return function(ctx)
 		uninstall()
 		ctx.is_true(rawequal(client.send, original))
 	end)
+
+	test("is_started_tracks_the_real_run_stage_and_latches", function()
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		local G = { STAGES = { MAIN_MENU = 1, RUN = 2 }, STAGE = 1 }
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, G = G })
+		ctx.eq(driver.is_started(), false, "main menu is not a running match")
+		ctx.eq(rawget(MP, "is_started"), nil, "no invented MP.is_started flag")
+		ctx.eq(MP.LOBBY.started, nil, "no invented MP.LOBBY.started flag")
+		G.STAGE = G.STAGES.RUN
+		ctx.eq(driver.is_started(), true)
+		G.STAGE = G.STAGES.MAIN_MENU
+		ctx.eq(driver.is_started(), true, "the running match is latched")
+	end)
+
+	test("main_menu_ready_rejects_the_splash_screen", function()
+		local MP, funcs = fake_engine()
+		local G = {
+			STAGES = { MAIN_MENU = 1, RUN = 2 },
+			STATES = { MENU = 11, SPLASH = 12 },
+			STAGE = 1,
+			STATE = 12,
+			MAIN_MENU_UI = {},
+		}
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G })
+		ctx.eq(driver.main_menu_ready(), false, "the splash state is not the menu")
+		G.STATE = G.STATES.MENU
+		ctx.eq(driver.main_menu_ready(), true)
+		G.MAIN_MENU_UI = nil
+		ctx.eq(driver.main_menu_ready(), false, "the menu UI handle is required")
+	end)
+
+	test("host_start_failure_after_create_is_fatal_not_rearmed", function()
+		local MP, funcs, calls = fake_engine()
+		-- The lobby is created but the real options are never forced.
+		funcs.start_lobby = function()
+			calls[#calls + 1] = { name = "start_lobby" }
+			MP.LOBBY.code = "ABC12"
+		end
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local ok, code = driver.host_start(nil)
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_force_failed")
+	end)
 end

@@ -29,7 +29,11 @@ function PracticeMenu.factory(ui)
 		return nil, CODE.BAD_UI
 	end
 	local constants = rawget(ui, "G")
-	if not is_plain_table(constants) then
+	-- The live `G` is `Game = Object:extend()` and therefore carries a metatable
+	-- (engine/object.lua); the factory must accept any table. The plain-table
+	-- checks are kept for the nested constant tables, which really are plain
+	-- fields on the instance.
+	if type(constants) ~= "table" then
 		return nil, CODE.BAD_UI
 	end
 	local UIT = rawget(constants, "UIT")

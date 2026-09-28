@@ -30,6 +30,7 @@ MPDriver.CODE = {
 	BAD_CODE = "driver_bad_code",
 	BAD_STATE = "driver_bad_state",
 	BAD_DIGEST = "driver_bad_digest",
+	FORCE_FAILED = "driver_force_failed",
 	NO_RULESET = "driver_no_ruleset",
 	NO_FORCED_MODE = "driver_no_forced_gamemode",
 	MISSING_CALLBACK = "driver_missing_callback",
@@ -79,6 +80,12 @@ MPDriver.SEND_ALLOWLIST = {
 	startGame = true,
 	stopGame = true,
 	lobbyInfo = true,
+	-- The pinned `MP.ACTIONS.connect()` (action = "connect") opens/reopens the
+	-- local staged socket in the ordinary Multiplayer way and carries only the
+	-- action name. It is harmless (no private/ranked data) and is not the
+	-- official match transport, so it is allowed; the pinned reconnect button
+	-- (`G.FUNCS.reconnect`) depends on it.
+	connect = true,
 	-- in-match coordination / gameplay
 	readyBlind = true,
 	unreadyBlind = true,
@@ -136,7 +143,6 @@ MPDriver.SEND_BLOCKED = {
 	nemesisEndGameStats = true,
 	receiveEndGameJokers = true,
 	receiveNemesisDeck = true,
-	connect = true,
 	auth = true,
 	authenticate = true,
 	rankedSubmit = true,
@@ -266,13 +272,6 @@ function MPDriver.factory(ports)
 	if hash_string ~= nil and type(hash_string) ~= "function" then
 		return nil, CODE.BAD_PORTS
 	end
-	local is_started_port = rawget(ports, "is_started")
-	if is_started_port ~= nil and type(is_started_port) ~= "function" then
-		return nil, CODE.BAD_PORTS
-	end
-	if is_started_port == nil and rget(mp, "is_started") ~= nil and type(rget(mp, "is_started")) ~= "function" then
-		return nil, CODE.BAD_ENGINE
-	end
 	local is_connected_port = rawget(ports, "is_connected")
 	if is_connected_port ~= nil and type(is_connected_port) ~= "function" then
 		return nil, CODE.BAD_PORTS
@@ -289,22 +288,23 @@ function MPDriver.factory(ports)
 		if started then
 			return true
 		end
-		if is_started_port ~= nil then
-			local ok, value = pcall(is_started_port)
-			if ok and value == true then
-				return true
-			end
+		-- The pinned Multiplayer source has no `MP.is_started` and never sets
+		-- `MP.LOBBY.started` (only the human-only `host_start_game` does). The
+		-- real, source-visible signal is the ordinary RUN stage reached by the
+		-- normal Multiplayer start while the lobby is joined. Latch it: once a
+		-- real match is running it never un-starts from a later teardown frame.
+		local code = rpath(mp, "LOBBY", "code")
+		if type(code) ~= "string" or #code == 0 then
+			return false
 		end
-		if type(rget(mp, "is_started")) == "function" then
-			local ok, value = pcall(mp.is_started)
-			if ok and value == true then
-				return true
-			end
+		local stages = rget(G, "STAGES")
+		local stage_value = rget(G, "STAGE")
+		local run_stage = rget(stages, "RUN")
+		if not is_int(stage_value) or not is_int(run_stage) or stage_value ~= run_stage then
+			return false
 		end
-		if rpath(mp, "LOBBY", "started") == true then
-			return true
-		end
-		return false
+		started = true
+		return true
 	end
 
 	local function is_host_role()
@@ -377,14 +377,27 @@ function MPDriver.factory(ports)
 	end
 
 	-- The real initialized main menu: `start_lobby`/`join_lobby` are main-menu
-	-- callbacks and must not fire before the menu exists. Prefer the resolved
-	-- engine stage enum; fall back to the real menu UI handle (fixtures/tests).
+	-- callbacks and must not fire before the menu exists. The pinned source shows
+	-- the splash screen reuses the MAIN_MENU stage with the SPLASH state
+	-- (game.lua), so the stage alone is not enough: when the real enum pairs are
+	-- present, both STAGE == STAGES.MAIN_MENU and STATE == STATES.MENU must hold,
+	-- and the main-menu UI handle must exist.
 	function instance.main_menu_ready()
 		local stages = rget(G, "STAGES")
-		local stage_value = rget(G, "STAGE")
-		local main_menu = rget(stages, "MAIN_MENU")
-		if is_int(stage_value) and is_int(main_menu) then
-			return stage_value == main_menu
+		local states = rget(G, "STATES")
+		local main_menu_stage = rget(stages, "MAIN_MENU")
+		if is_int(main_menu_stage) then
+			local stage_value = rget(G, "STAGE")
+			if not is_int(stage_value) or stage_value ~= main_menu_stage then
+				return false
+			end
+		end
+		local menu_state = rget(states, "MENU")
+		if is_int(menu_state) then
+			local state_value = rget(G, "STATE")
+			if not is_int(state_value) or state_value ~= menu_state then
+				return false
+			end
 		end
 		return rget(G, "MAIN_MENU_UI") ~= nil
 	end
@@ -520,8 +533,14 @@ function MPDriver.factory(ports)
 							if bounded_seed ~= nil then
 								mp.LOBBY.config.custom_seed = bounded_seed
 							end
-							local original = rget(resolved, "force_lobby_options")
-							if type(original) ~= "function" then
+							-- The real `MP.current_ruleset()` is an empty
+							-- metatable proxy that answers every field through
+							-- its metatable, so the field must be read with
+							-- protected normal indexing, never rawget.
+							local ok_get, original = pcall(function()
+								return resolved.force_lobby_options
+							end)
+							if not ok_get or type(original) ~= "function" then
 								return false
 							end
 							-- Record exactly which config keys the real
@@ -559,8 +578,12 @@ function MPDriver.factory(ports)
 			return nil, CODE.START_LOBBY_FAILED
 		end
 		if forced_keys == nil then
-			-- The real registry never forced options: not source-ready.
-			return nil, CODE.BAD_STATE
+			-- The real registry never forced options after the real create was
+			-- invoked: the lobby exists in an un-forced state. This is fatal,
+			-- never a retryable re-arm, because a second createLobby would
+			-- orphan the first lobby and repeat the defect.
+			emit({ event = "mp_driver", code = CODE.FORCE_FAILED, op = "host_start" })
+			return nil, CODE.FORCE_FAILED
 		end
 		emit({ event = "mp_driver", code = CODE.OK, op = "host_start", gauntlet = bounded_seed ~= nil })
 		return true, CODE.OK

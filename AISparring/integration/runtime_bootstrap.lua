@@ -86,6 +86,11 @@ RuntimeBootstrap.LIMITS = {
 	-- frame error. Coordination aborts only after `coord_timeout` seconds.
 	coord_retry_interval = 0.5,
 	coord_timeout = 60,
+	-- Overall pre-start coordination deadline. The service aborts its own
+	-- pre-start window after 90 s, so the runtime's deadline must be strictly
+	-- larger (service timeout + margin) or the runtime would keep attempting
+	-- coordination the service has already refused.
+	prestart_timeout = 120,
 }
 
 local CODE = RuntimeBootstrap.CODE
@@ -251,6 +256,24 @@ RuntimeBootstrap.WAIT_STATES = {
 	PVP_COUNTDOWN = "mp_pvp_countdown",
 }
 
+-- The real current blind is the PvP blind: `G.GAME.blind.pvp` (any non-nil,
+-- non-false value, matching MP's `... or blind.pvp` truthiness) or the pinned
+-- nemesis blind key. Never inferred from `pvp_reached`, which Multiplayer resets
+-- to false when the PvP blind starts.
+local function current_blind_is_pvp(G)
+	local blind = rget(rget(G, "GAME"), "blind")
+	if type(blind) ~= "table" then
+		return false
+	end
+	local pvp = rget(blind, "pvp")
+	if pvp ~= nil and pvp ~= false then
+		return true
+	end
+	local config = rget(blind, "config")
+	local key = rget(rget(config, "blind"), "key")
+	return key == "bl_mp_nemesis"
+end
+
 function RuntimeBootstrap.mp_wait_state(mp, G)
 	local game = rget(mp, "GAME")
 	if type(game) ~= "table" then
@@ -264,7 +287,11 @@ function RuntimeBootstrap.mp_wait_state(mp, G)
 	if rget(game, "round_ended") == true or rget(game, "end_pvp") == true then
 		return nil
 	end
-	if rget(game, "pvp_reached") == true then
+	-- PvP no-hands wait: the current blind really is the PvP blind and the AI has
+	-- no hands left, but the server has not yet signalled `end_pvp`. This is the
+	-- ordinary wait for the human's PvP turn and must not depend on
+	-- `pvp_reached` (false during the PvP round).
+	if current_blind_is_pvp(G) then
 		local hands_left = rget(rget(rget(G, "GAME"), "current_round"), "hands_left")
 		if is_int(hands_left) and hands_left <= 0 then
 			return RuntimeBootstrap.WAIT_STATES.PVP_NO_HANDS
@@ -368,14 +395,9 @@ function RuntimeBootstrap.factory(ports)
 	local last_heartbeat = nil
 	local installed_at = nil
 	local update_errors = 0
-	-- Typed coordination correlation. Every coordination request this role sends
-	-- is enqueued with its op; responses arrive in the same order on the single
-	-- control connection, so each response is routed to the exact op that caused
-	-- it (the service returns no request id on coordination responses).
-	local outstanding = {}
-	local outstanding_count = 0
-	-- Forward-declared so earlier closures (heartbeat/report_summary) can queue
-	-- their coordination sends in the same typed correlation order.
+	-- The control transport owns the ordered outstanding-frame list and tags
+	-- every coordination reply with the op that produced it. Earlier closures
+	-- (heartbeat/report_summary) queue their coordination sends through `co_send`.
 	local co_send = nil
 	local setup_sent = false
 	local setup_acked = false
@@ -912,8 +934,8 @@ function RuntimeBootstrap.factory(ports)
 		co_send(protocol.OPS.HEARTBEAT, { tick = counters.decisions })
 	end
 
-	-- Typed coordination send: remember the op so the matching response can be
-	-- routed back to it. Bounded; a failed send is a retryable coordinator state.
+	-- Coordination send: the transport records the pushed frame in its ordered
+	-- outstanding list and tags the matching reply with this op.
 	co_send = function(op, payload)
 		if transport == nil then
 			return nil, CODE.BAD_TRANSPORT
@@ -922,22 +944,7 @@ function RuntimeBootstrap.factory(ports)
 		if id == nil then
 			return nil, code
 		end
-		outstanding_count = outstanding_count + 1
-		outstanding[outstanding_count] = op
 		return id, code
-	end
-
-	local function take_outstanding()
-		if outstanding_count == 0 then
-			return nil
-		end
-		local op = outstanding[1]
-		for i = 1, outstanding_count - 1 do
-			outstanding[i] = outstanding[i + 1]
-		end
-		outstanding[outstanding_count] = nil
-		outstanding_count = outstanding_count - 1
-		return op
 	end
 
 	local function coord_ready(current)
@@ -979,6 +986,22 @@ function RuntimeBootstrap.factory(ports)
 	-- `coord_failure` (a fatal protocol/config mismatch) stops the boot.
 	local function handle_coordination(op, response)
 		local code = rawget(response, "code")
+		-- A service abort/close/end (or the explicit pre-start timeout) is fatal
+		-- for the whole pre-start coordinator: it can never complete, so stop now
+		-- instead of waiting for the overall deadline.
+		if code == protocol.CODES.ABORTED or code == protocol.CODES.CLOSED
+			or code == protocol.CODES.ENDED or code == protocol.CODES.PRESTART_TIMEOUT then
+			coord_failure = token_of(code, RuntimeBootstrap.LIMITS.max_reason) or CODE.COORD_TIMEOUT
+			return
+		end
+		-- Heartbeats carry the service's own `aborted` flag. A service that has
+		-- aborted its pre-start window will never complete, so stop.
+		if op == protocol.OPS.HEARTBEAT then
+			if rawget(response, "aborted") == true then
+				coord_failure = protocol.CODES.ABORTED
+			end
+			return
+		end
 		if op == protocol.OPS.HELLO then
 			if response.ok == true then
 				hello_acked = true
@@ -1047,13 +1070,17 @@ function RuntimeBootstrap.factory(ports)
 		end
 		if op == protocol.OPS.LOBBY_CODE then
 			lobby_code_acked = response.ok == true
+			if not lobby_code_acked then
+				-- A refused lobby_code report is a bounded retry, not a stop.
+				lobby_code_sent = false
+			end
 			return
 		end
 		if op == protocol.OPS.JOIN_CODE then
 			if response.ok == true and type(rawget(response, "lobby_code")) == "string" then
 				join_code = rawget(response, "lobby_code")
 			end
-			-- NO_LOBBY / not-ready are bounded waits, not failures.
+			-- NO_LOBBY / not-ready are bounded waits: re-poll on the retry tick.
 			return
 		end
 		if op == protocol.OPS.READY then
@@ -1061,11 +1088,19 @@ function RuntimeBootstrap.factory(ports)
 				ready_acked = true
 			elseif code == protocol.CODES.CONFIG_MISMATCH and ready_sent then
 				coord_failure = CODE.CONFIG_MISMATCH
+			else
+				-- NOT_READY (the other role has not reported yet) and other
+				-- retryable refusals re-arm the send under the overall deadline.
+				ready_sent = false
 			end
 			return
 		end
 		if op == protocol.OPS.START then
-			start_acked = response.ok == true
+			if response.ok == true or code == protocol.CODES.ALREADY_STARTED then
+				start_acked = true
+			else
+				start_sent = false
+			end
 			return
 		end
 	end
@@ -1085,14 +1120,15 @@ function RuntimeBootstrap.factory(ports)
 			end
 			return
 		end
-		-- Create/join needs both the real MP socket AND an initialized main menu
-		-- (the server starts only after the launcher probes/attestation, and
-		-- `start_lobby`/`join_lobby` are main-menu callbacks).
-		if not mp_driver.connected() or not mp_driver.main_menu_ready() then
+		-- Once the lobby is joined, coordination no longer depends on the main
+		-- menu: reporting the code, readying, starting and the audit seed all
+		-- happen with the match stage changing underneath.
+		if not mp_driver.connected() then
 			return
 		end
 		if role == "ai" and join_code ~= nil and not join_sent then
-			if coord_ready(current) then
+			-- `join_lobby` is a main-menu callback; wait for the real menu.
+			if mp_driver.main_menu_ready() and coord_ready(current) then
 				local ok = mp_driver.ai_join(join_code)
 				if ok == true then
 					join_sent = true
@@ -1101,6 +1137,9 @@ function RuntimeBootstrap.factory(ports)
 			return
 		end
 		if instance.lobby_code() == nil then
+			if not mp_driver.main_menu_ready() then
+				return
+			end
 			if coord_ready(current) then
 				if role == "human" then
 					-- `start_lobby` queues the server create asynchronously; send
@@ -1110,9 +1149,19 @@ function RuntimeBootstrap.factory(ports)
 						local entry = mp_driver.ruleset()
 						if entry ~= nil then
 							lobby_enter_sent = true
-							local ok = mp_driver.host_start(human_seed)
+							local ok, host_code = mp_driver.host_start(human_seed)
 							if ok ~= true then
-								lobby_enter_sent = false
+								-- Once the real create callback has been invoked, a
+								-- failure must never re-arm: a second createLobby
+								-- would orphan the first lobby and repeat the
+								-- un-forced-config defect. Pre-call refusals
+								-- (NO_RULESET / NO_FORCED_MODE) stay retryable.
+								if host_code == mp_driver.CODE.START_LOBBY_FAILED
+									or host_code == mp_driver.CODE.FORCE_FAILED then
+									coord_failure = host_code
+								else
+									lobby_enter_sent = false
+								end
 							end
 						end
 					end
@@ -1213,7 +1262,7 @@ function RuntimeBootstrap.factory(ports)
 			if response == nil then
 				break
 			end
-			local op = take_outstanding()
+			local op = rawget(response, "op")
 			if op == protocol.OPS.END then
 				terminal_acked = response.ok == true
 			elseif op ~= nil then
@@ -1296,8 +1345,6 @@ function RuntimeBootstrap.factory(ports)
 			record_error(CODE.HELLO_FAILED)
 			return nil, CODE.HELLO_FAILED
 		end
-		outstanding_count = outstanding_count + 1
-		outstanding[outstanding_count] = protocol.OPS.HELLO
 		handshake = "sent"
 		handshake_retry_at = now()
 		state = "installed"
@@ -1356,7 +1403,7 @@ function RuntimeBootstrap.factory(ports)
 			if response == nil then
 				break
 			end
-			local op = take_outstanding()
+			local op = rawget(response, "op")
 			if op == nil then
 				push_inbound(response)
 			else
@@ -1422,19 +1469,25 @@ function RuntimeBootstrap.factory(ports)
 			if auto_coordinate then
 				advance_coordinator(current)
 			end
+			-- Overall pre-start deadline: the whole bounded coordination window
+			-- (SETUP through start/seed) may not exceed the service's own
+			-- pre-start window plus margin. A stall here is a clean stop, never
+			-- an unbounded wait.
+			if not coordination_done() and installed_at ~= nil
+				and current - installed_at > RuntimeBootstrap.LIMITS.prestart_timeout then
+				record_error(CODE.COORD_TIMEOUT)
+				instance.shutdown("coord_timeout")
+				return "stopped", CODE.COORD_TIMEOUT
+			end
 		elseif handshake == "sent" then
 			-- Retry the hello until the attestation gate lets it through; the
 			-- not-attested rejection does not consume the wire sequence.
 			if handshake_retry_at == nil or current - handshake_retry_at >= coord_retry_interval then
 				handshake_retry_at = current
-				local id = transport.send(protocol.OPS.HELLO, {
+				transport.send(protocol.OPS.HELLO, {
 					version = rawget(protocol, "VERSION"),
 					content_digest = content_hash,
 				})
-				if id ~= nil then
-					outstanding_count = outstanding_count + 1
-					outstanding[outstanding_count] = protocol.OPS.HELLO
-				end
 			end
 		end
 

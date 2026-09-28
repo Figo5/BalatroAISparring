@@ -95,10 +95,16 @@ connection). The coordinator then runs a bounded, exactly-once state machine:
    `lobby_start_game`. Each real callback commits once; a late UI element or a
    not-yet-ready flag is retried without double-toggling.
 
-The whole pre-start window is bounded by `coord_timeout` (60 s), not by the
-per-update error budget. `hello`/`setup` are re-sent while the service replies
-`practice_not_attested` (attestation is monotonic and set only through the
-trusted host `mark_attested` port, never over the wire).
+The whole pre-start window is bounded by `prestart_timeout` (120 s: the
+service's own 90 s pre-start window plus margin). A service reply of
+`practice_aborted`/`practice_closed`/`practice_ended`/`practice_prestart_timeout`,
+or a `heartbeat` reply with `aborted = true`, is fatal and stops the coordinator
+immediately; a retryable refusal (`practice_not_ready`, `practice_no_lobby`, a
+refused `lobby_code`) re-arms the send under that same deadline. `hello`/`setup`
+are re-sent while the service replies `practice_not_attested` (attestation is
+monotonic and set only through the trusted host `mark_attested` port, never over
+the wire). Once the real `start_lobby` has been invoked, a forcing failure
+(`driver_force_failed`) is fatal instead of re-arming a second `createLobby`.
 
 The broker capability is minted by `ActionBroker.production_factory(verifier)`
 inside `activate()`. The verifier closure holds the exact executor ports table
@@ -174,20 +180,31 @@ Instance API: `validate()`, `install()`, `update(dt) -> status, code`, `status()
   side forgets it. An unknown/stale request id sends nothing. The local→wire
   mapping survives the cancel so a receipt can still name the cancelled
   decision, and the cancel ack (which echoes the decision sequence) is consumed
-  rather than delivered or counted as out-of-order.
+  rather than delivered or counted as out-of-order. When the cancel frame cannot
+  be pushed the local slot is **kept** (both `cancel()` and the transport
+  timeout path), so an owned cancel is never lost before it is pushed/acked or
+  the connection closes.
 - The loop timeout is `decision_timeout + one poll interval` (`15.25 s`); the
   service worker timeout stays 10 s, so the service reports a slow worker first
   and the loop's own timeout triggers the `decide_cancel` + reissue. The
   transport request timeout is a strictly higher backstop (`+15 s`) and also
   cancels its own owned decision on the wire before clearing.
 - `poll_decision()` is nonblocking: it never sleeps, emits at most one
-  `decide_poll` per `poll_interval`, drops stale/replayed decision responses
-  (`transport_out_of_order`), maps the delivered wire sequence to the private
-  local sequence, and returns a terminal response (`ready`, or a bounded
-  failure) only. A service `practice_decision_pending` keeps the slot
+  `decide_poll` per `poll_interval`, and returns a terminal response (`ready`, or
+  a bounded failure) only. A service `practice_decision_pending` keeps the slot
   outstanding.
+- **Ordered outstanding-frame matching.** The service answers strictly in order
+  on the single connection, one reply per request, so the transport keeps a
+  bounded ordered list of **every** frame it pushes (coordination, `decide_begin`,
+  `decide_poll`, `decide_cancel`, `decision_result`) and matches each non-event
+  reply to the head of that list. A `decide_begin` rejection that omits
+  `sequence` (not attested/replay/bad observation/outstanding/ended/aborted)
+  still reaches the decision that caused it; a `decision_result`/cancel/
+  heartbeat reply can never shift a later coordination reply (or a false END
+  ack), and every coordination reply is tagged with the op that produced it so
+  the runtime routes it without a second, drift-prone correlation list.
 - Bounds: 2 MiB outbound, 64 KiB inbound; per-request timeout; bounded
-  coordination queue. Credentials/session never appear in `describe()`.
+  coordination queue and bounded inflight list. Credentials/session never appear in `describe()`.
 - Channel ports are resolved with protected normal indexing, so a real LÖVE
   `love.thread.getChannel` **userdata** (whose `push`/`pop` live on the
   metatable) is accepted exactly like the in-memory table fixture; `rawget`-only
@@ -213,8 +230,14 @@ Instance API: `validate()`, `install()`, `update(dt) -> status, code`, `status()
   `G.FUNCS.start_lobby`. Because `start_lobby` resets the config and then calls
   `MP.current_ruleset():force_lobby_options()`, the trusted gauntlet seed is
   installed by a scoped wrapper that runs *after* the reset and *before* the
-  original `force_lobby_options`. The wrapper is always restored; the original
-  timer/location/option values are never re-implemented.
+  original `force_lobby_options`. The wrapper reads the field with protected
+  normal indexing (`resolved.force_lobby_options`), because the real
+  `MP.current_ruleset()` is an empty metatable proxy; a rawget would skip the
+  real function. The wrapper is always restored; the original
+  timer/location/option values are never re-implemented. Once the real
+  `start_lobby` has been invoked, a failure to record the forced keys is fatal
+  (`driver_force_failed`) and is **never** a re-armed second `createLobby`
+  (pre-call refusals such as `driver_no_ruleset` stay retryable).
 - `ai_join(code)`: sets `MP.LOBBY.username = "BALATRO AI"` and calls the ordinary
   `MP.ACTIONS.join_lobby(code)` with the exact service-provided code.
 - `ai_ready()`: resolves the **real** element
@@ -227,9 +250,17 @@ Instance API: `validate()`, `install()`, `update(dt) -> status, code`, `status()
   already-ready lobby is an idempotent success that never double-toggles.
 - `host_start_game()`: requires the guest-confirmed ready state and the live
   forced ruleset, then calls the original `G.FUNCS.lobby_start_game`.
-- `connected()` / `ruleset_ready()` / `is_started()`: real MP observables used by
-  the coordinator (socket connected, registry+forced ruleset agree, match
-  started). `is_started()` is the *match* flag, never "we called ready".
+- `connected()` / `ruleset_ready()` / `is_started()` / `main_menu_ready()`: real
+  MP observables used by the coordinator (socket connected, registry+forced
+  ruleset agree, match started, menu ready). `is_started()` is the *match* flag,
+  never "we called ready": it latches once the lobby is joined and the engine has
+  reached the ordinary `G.STAGES.RUN` stage (the only way a staged lobby gets
+  there is the real Multiplayer start). It never consults a
+  `MP.is_started`/`MP.LOBBY.started` flag, neither of which exists in the pinned
+  source. `main_menu_ready()` requires the real `G.STAGE == G.STAGES.MAIN_MENU`
+  **and** `G.STATE == G.STATES.MENU` **and** `G.MAIN_MENU_UI ~= nil`, so the
+  splash screen (which reuses the MAIN_MENU stage with the SPLASH state) never
+  creates a lobby.
 - `config_digest(ruleset_id, gamemode, keys)`: source-derived Major League digest
   (`ruleset_id | gamemode | key=value…`, keys bytewise ascending) over the live
   `MP.LOBBY.config`, hashed with `Codec.hash_string` (FNV1a32, eight lowercase
@@ -248,7 +279,10 @@ Instance API: `validate()`, `install()`, `update(dt) -> status, code`, `status()
   `moddedAction`, …) can never be sent. Role/phase gates sit on top: the guest
   can never create a lobby or push `lobbyOptions`; only the trusted human host
   may push `lobbyOptions`, and only before start (configuration is frozen once
-  the match starts). Uninstall restores the exact original.
+  the match starts). The pinned, harmless `connect` action (`MP.ACTIONS.connect`,
+  the reconnect button carries no private/ranked data) is allowed; the blocked
+  set still contains every ranked/server/end-game/private path. Uninstall
+  restores the exact original.
 - The guard is **required for both staged roles** before any create/join: it is
   installed for the human host as well as the AI guest and a boot that cannot
   install it aborts with `boot_guard_failed` before any lobby create/join. Only
@@ -261,17 +295,22 @@ Instance API: `validate()`, `install()`, `update(dt) -> status, code`, `status()
 ## 6. Update, terminal and errors
 
 `update(dt)` performs one bounded step: drains and correlates coordination
-responses, arms on the hello ack, (AI) activates, checks terminal signals, runs
-the bounded start coordinator, then runs the decision loop **only after the real
-MP match-start is observed** (`MP.is_started`/`LOBBY.started`; the guest learns it
+responses (each reply carries the op the transport tagged it with), arms on the
+hello ack, (AI) activates, checks terminal signals, runs the bounded start
+coordinator, then runs the decision loop **only after the real MP match-start is
+observed** (the lobby is joined and `G.STAGE == G.STAGES.RUN`; the guest learns it
 from the ordinary server start), and throttles the additive `heartbeat` op
 (`{tick = decisions}`). Gate the loop on the real start: otherwise the service
 refuses every decision as not-started and burns the loop's error budget.
 The loop is wired with the real revision reader (`StateRevision.current`) and a
 grounded `wait_state` probe (`mp_wait_state`): only real MP waits
-(`MP.GAME.ready_blind`, an open PvP blind with no hands left, the PvP countdown)
-hold the transient window open; every other condition, including an unknown
-engine fault, keeps the loop's own bounded window. After a `submitted` loop step
+(`MP.GAME.ready_blind`, the **current** PvP blind with no hands left while
+`end_pvp`/`round_ended` are not set, the PvP countdown) hold the transient window
+open; every other condition, including an unknown engine fault, keeps the loop's
+own bounded window. The PvP no-hands wait deliberately does **not** depend on
+`MP.GAME.pvp_reached`, which Multiplayer resets to false when the PvP blind
+starts, so the AI can wait out the human's PvP turn instead of stopping after its
+120 s transient budget. After a `submitted` loop step
 the bootstrap reports the outcome with the additive `decision_result` op
 (`accepted=true`), and reports an actually-delivered-then-refused decision with
 its stable loop code (`accepted=false`), carrying the transport-mapped decision
@@ -330,7 +369,13 @@ lifecycle additions are covered too: wire-cancel ordering/unknown-cancel/timeout
 cancel, hello retry under the attestation gate, the loop timeout cancel+reissue,
 role-aware terminal mapping for both roles, the drained bounded terminal END, the
 deferred asynchronous lobby code without a duplicate create, the grounded
-`mp_wait_state` probe, and the default-`get_channel` **userdata** channel path.
+`mp_wait_state` probe (including the post-start PvP no-hands wait holding the loop
+past its 120 s transient budget), the default-`get_channel` **userdata** channel
+path, ordered outstanding-frame matching (a `decide_begin` rejection without a
+`sequence`, repeated polls, and a `decision_result`/heartbeat reply not shifting a
+later END ack), the fatal post-create forcing failure (`driver_force_failed`,
+one create only), the service-abort/heartbeat-abort and prestart-deadline stops,
+and the real RUN-stage/SPLASH-state shape checks.
 
 Run the pinned interpreter `work/runtime-venv/Scripts/python.exe` (lupa 2.8,
 no `PYTHONPATH` needed).
@@ -406,7 +451,9 @@ external network.
   configuration equality, not authentication.
 - **Real start observation.** The guest's match-start relay is the ordinary
   server start; fixtures relay it explicitly (the two runtimes do not share
-  engine memory). A live run must observe the real `MP.is_started`/`LOBBY.started`.
+  engine memory). A live run must observe the real lobby join plus the ordinary
+  `G.STAGES.RUN` transition (there is no `MP.is_started`/`LOBBY.started` in the
+  pinned source).
 - **Pending-action latch.** The executor's pending/cancel/timeout API
   (`pending_status`, `cancel`, `revoke`) is consumed through the broker ports; a
   worker-owned latch change is integrated via those ports, not by editing worker

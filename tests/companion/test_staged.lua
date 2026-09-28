@@ -172,6 +172,30 @@ return function(ctx)
 		eq(instance.status().activated, true, "activated only after the hello ack")
 	end)
 
+	test("a slow second role is waited for within the host-plus-margin bound", function()
+		-- The host waits up to 90 s for both roles' probes before writing the
+		-- attestation, so the companion must still be pending at 90 s and only
+		-- give up after its own strictly larger bound.
+		local descriptors = support.descriptors()
+		local reader, reader_state = support.attestation_reader()
+		local fake_clock = clock()
+		local ports = support.staged_ports(ctx.repo_root, {
+			attestation_reader = reader,
+			attestation_path = "/stage/AppData/Balatro/aisparring-launcher-attestation.json",
+			clock = fake_clock,
+		})
+		local instance = host_module.staged(ports)
+		fake_clock.advance(90)
+		local state = instance.update(0)
+		eq(state, "awaiting_attestation", "still waiting at the host bound")
+		eq(instance.status().pending, true, "still pending at the host bound")
+		-- The slow second role finally lands inside the companion's larger bound.
+		fake_clock.advance(10)
+		reader_state.blob = support.attestation_blob(descriptors)
+		instance.update(0)
+		eq(instance.status().booted, true, "booted inside the companion bound")
+	end)
+
 	test("a deferred attestation that never arrives fails gracefully", function()
 		local reader, _reader_state = support.attestation_reader()
 		local fake_clock = clock()
@@ -181,7 +205,7 @@ return function(ctx)
 			clock = fake_clock,
 		})
 		local instance = host_module.staged(ports)
-		fake_clock.advance(31)
+		fake_clock.advance(host_module.LIMITS.attestation_timeout + 1)
 		local state, code = instance.update(0)
 		eq(state, "failed", "graceful failure")
 		eq(code, host_module.CODE.STAGED_ATTESTATION_TIMEOUT, "timeout code")

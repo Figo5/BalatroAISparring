@@ -393,9 +393,9 @@ local instance, boot_code, bctx = support.bootstrap(ROOT, {
 	logger = { record = function() end },
 })
 assert(instance ~= nil, 'bootstrap: ' .. tostring(boot_code))
--- The match is not running yet; the loop must stay gated until the ordinary
--- MP start is observed.
-bctx.engine.MP.LOBBY.started = false
+-- The match is not running yet; the ordinary RUN stage is only reached by the
+-- real Multiplayer start, so the loop must stay gated until then.
+bctx.engine.set_main_menu()
 
 function boot_uses_wire_json()
 	return wire_json
@@ -451,11 +451,15 @@ function boot_set_ready_to_start(value)
 end
 
 function boot_engine_started()
-	return bctx.engine.MP.LOBBY.started == true
+	return bctx.engine.G.STAGE == bctx.engine.G.STAGES.RUN
 end
 
 function boot_set_match_started(value)
-	bctx.engine.MP.LOBBY.started = value == true
+	if value == true then
+		bctx.engine.set_run()
+	else
+		bctx.engine.set_main_menu()
+	end
 end
 
 function boot_shutdown(reason)
@@ -564,7 +568,7 @@ def _coordinate(module, tmp: Path, mode: str, gauntlet, run_seed: str, expect_se
 
     hd = human.globals().boot_describe()
     ad = ai.globals().boot_describe()
-    assert hd["coordinated"] and ad["coordinated"], f"never coordinated: human={hd} ai={ad}"
+    assert hd["coordinated"] and ad["coordinated"], f"never coordinated: human={dict(hd.items())} ai={dict(ad.items())}"
     assert hd["last_error"] is None, f"human boot error: {hd}"
     assert ad["last_error"] is None, f"ai boot error: {ad}"
     assert hd["state"] != "stopped" and ad["state"] != "stopped"

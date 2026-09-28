@@ -77,8 +77,7 @@ local ui = {
   notify = sendWarnMessage,    -- optional
 }
 
-local menu = PracticeMenu.factory(ui)
-local controller = MenuController.factory({
+local menu = PracticeMenu.factory(ui)local controller = MenuController.factory({
   ui = ui,
   menu = menu,
   host = trusted_launcher_host,  -- available/request_start/poll_start/quit/diagnostics_path
@@ -95,6 +94,8 @@ controller.uninstall()              -- idempotent; abandons any pending ack with
 
 The host adapter owns provenance: it must be constructed only by the trusted bootstrap and must bind the session credential before exposing `request_start`/`quit`. `host.quit` is the only path to the game's normal quit, invoked exactly once after a confirmed ack.
 
+`PracticeMenu.factory` accepts **any** table for `ui.G`, because the live `G` is `Game = Object:extend()` and carries a metatable (`work/reference/game/engine/object.lua`). The nested constant tables (`G.UIT`, `G.C`) are still validated as plain tables, so a malformed UI is rejected with `menu_bad_ui` while a real engine instance is accepted.
+
 ## Tests
 
-`python tests/run_menu.py --require-all` runs the real modules under Lua 5.1 and LuaJIT 2.1 against the honest fake UI tree in `tests/menu/fakeui.lua`. It checks: every base Play-menu button is retained; install/in-normal-run has no effect; repeated install/uninstall is clean; only an explicit confirmed ack quits; cancel/unavailable/rejection/timeout never quit; selection bounds and payload immutability; and that the UI layer contains no engine mutators, RNG or process IO. The fixture is not the actual engine.
+`python tests/run_menu.py --require-all` runs the real modules under Lua 5.1 and LuaJIT 2.1 against the honest fake UI tree in `tests/menu/fakeui.lua`. It checks: every base Play-menu button is retained; install/in-normal-run has no effect; repeated install/uninstall is clean; only an explicit confirmed ack quits; cancel/unavailable/rejection/timeout never quit; selection bounds and payload immutability; an actual Object-shaped (metatable) `G` is accepted; and that the UI layer contains no engine mutators, RNG or process IO. The fixture is not the actual engine.

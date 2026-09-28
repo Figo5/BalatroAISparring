@@ -131,7 +131,11 @@ CompanionHost.LIMITS = {
 	max_req_id = 32,
 	max_update_errors = 5,
 	identity_tolerance = 2.0,
-	attestation_timeout = 30.0,
+	-- The host waits up to 90 s for both staged roles' probes before it writes
+	-- the session attestation (practice_host.DEFAULT_ATTESTATION_TIMEOUT), so the
+	-- companion must wait strictly longer (host timeout + margin) or a slow
+	-- second role would fail permanently while the host is still waiting.
+	attestation_timeout = 120.0,
 	attestation_file = "aisparring-launcher-attestation.json",
 }
 
@@ -690,7 +694,7 @@ function CompanionHost.thread_transport(ports, info)
 		return nil, CODE.TRANSPORT_UNAVAILABLE
 	end
 
-	local state = { connected = false, last_error = nil }
+	local state = { connected = false, last_error = nil, worker_stopped = false }
 
 	local transport = {}
 	function transport.send(text)
@@ -727,6 +731,7 @@ function CompanionHost.thread_transport(ports, info)
 						state.last_error = state.last_error or CODE.TRANSPORT_ERROR
 					elseif event == "stopped" then
 						state.connected = false
+						state.worker_stopped = true
 					end
 				end
 			end
@@ -738,6 +743,9 @@ function CompanionHost.thread_transport(ports, info)
 	end
 	function transport.last_error()
 		return state.last_error
+	end
+	function transport.worker_stopped()
+		return state.worker_stopped
 	end
 	function transport.close()
 		pcall(to_worker.push, to_worker, '{"t":"stop"}')
@@ -851,8 +859,30 @@ function CompanionHost.live_host(ports)
 		return CompanionHost.thread_transport(ports, info)
 	end
 
+	-- A transport whose worker has errored or stopped can never answer a new
+	-- request; reusing it makes one transient failure permanent. Probe the
+	-- optional status methods so a fixture and the real worker behave alike.
+	local function transport_is_dead(candidate)
+		if type(candidate) ~= "table" then
+			return true
+		end
+		if type(rawget(candidate, "last_error")) == "function" then
+			local ok, value = pcall(candidate.last_error)
+			if ok and value ~= nil then
+				return true
+			end
+		end
+		if type(rawget(candidate, "worker_stopped")) == "function" then
+			local ok, value = pcall(candidate.worker_stopped)
+			if ok and value == true then
+				return true
+			end
+		end
+		return false
+	end
+
 	local function ensure_transport(info)
-		if transport ~= nil and transport_port == info.port then
+		if transport ~= nil and transport_port == info.port and not transport_is_dead(transport) then
 			return transport, CODE.OK
 		end
 		if transport ~= nil and type(rawget(transport, "close")) == "function" then
@@ -1174,7 +1204,10 @@ function CompanionHost.live(ports)
 		if not installed then
 			return "inert"
 		end
-		return controller.update(dt)
+		-- The controller reads its own trusted clock. Passing the LÖVE frame
+		-- delta here made `now - started_at` negative, so the bounded 10 s
+		-- acknowledgement timeout never fired.
+		return controller.update()
 	end
 	function instance.uninstall()
 		if installed then

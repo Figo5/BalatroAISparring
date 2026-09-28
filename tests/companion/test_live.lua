@@ -276,4 +276,61 @@ return function(ctx)
 		eq(name, nil, "cannot open")
 		eq(code, controller.CODE.NOT_MAIN_MENU, "code")
 	end)
+
+	test("the acknowledgement timeout fires through the companion update", function()
+		-- Regression: the live companion update used to pass the frame delta as
+		-- the controller clock, so `now - started_at` was always negative and the
+		-- 10 s acknowledgement timeout never fired.
+		local instance, state = build_live()
+		instance.install()
+		local controller = instance.controller()
+		eq(controller.open_confirm(), true, "confirm prompt")
+		eq(controller.confirm_start(), true, "start sent")
+		-- Never accept the ack; advance the real injected clock past the bound.
+		state.set_now(state.now() + 30)
+		local status = instance.update(0.016)
+		eq(status, "failed", "update surfaces the timeout")
+		eq(controller.state(), "failed", "failed state")
+		eq(state.quits(), 0, "timeout never quits")
+	end)
+
+	test("a dead worker transport is rebuilt for the next attempt", function()
+		local made = {}
+		local ports = {
+			companion = { role = "live", discovery_path = "C:/repo/work/aisparring-host/practice_host.json" },
+			read_discovery = function()
+				return support.marker()
+			end,
+			identity = support.identity(),
+			transport_factory = function()
+				local built = support.transport()
+				made[#made + 1] = built
+				return built
+			end,
+			encode = support.encoder({}),
+			json_null = support.NULL,
+			JSON = {},
+			decode = function()
+				return nil
+			end,
+			quit = function()
+				return true
+			end,
+		}
+		local host = host_module.live_host(ports)
+		eq(host.available(), true, "available")
+		eq(#made, 1, "first transport built")
+		local first = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		is_true(first ~= nil, "first request")
+		made[1].error_code = "companion_transport_error"
+		eq(host.poll_start(first).status, "error", "error surfaced")
+		-- The next attempt must rebuild a fresh worker, not reuse the dead one.
+		local second = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		is_true(second ~= nil, "second request")
+		eq(#made, 2, "a fresh transport was built")
+		made[2].push({ ok = true, code = "practice_host_start_accepted", ticket = "t2" })
+		local response = host.poll_start(second)
+		eq(response.status, "ok", "new worker accepted")
+		eq(response.ticket, "t2", "ticket from the new worker")
+	end)
 end

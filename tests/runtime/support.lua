@@ -75,8 +75,16 @@ function Support.shape_mp(engine, opts)
 		end,
 	}
 	MP.Rulesets = { ruleset_mp_majorleague = ruleset }
+	-- The real `MP.current_ruleset()` returns a metatable proxy over the active
+	-- layer/ruleset view (work/reference/mp/rulesets/_rulesets.lua): an empty
+	-- table answering every field through its metatable. Reproduce that exact
+	-- shape so a rawget of `force_lobby_options` fails just like in the game.
 	MP.current_ruleset = function()
-		return ruleset
+		return setmetatable({}, {
+			__index = function(_, key)
+				return ruleset[key]
+			end,
+		})
 	end
 
 	local function base_config()
@@ -130,7 +138,9 @@ function Support.shape_mp(engine, opts)
 		end
 	end
 	funcs.lobby_start_game = function()
-		MP.LOBBY.started = true
+		-- The ordinary Multiplayer start advances the engine to the real RUN
+		-- stage. There is no `MP.LOBBY.started` in the pinned source.
+		G.STAGE = G.STAGES.RUN
 	end
 
 	MP.ACTIONS = MP.ACTIONS or {}
@@ -148,16 +158,34 @@ function Support.shape_mp(engine, opts)
 		MP.LOBBY.code = nil
 	end
 	MP.ACTIONS.stop_game = function()
-		MP.LOBBY.started = false
+		G.STAGE = G.STAGES.MAIN_MENU
 	end
 
 	MP.LOBBY.code = code
 	MP.LOBBY.ready_to_start = false
 	MP.LOBBY.connected = opts.connected ~= false
 	MP.LOBBY.username = "Guest"
-	-- Match start is a real observable; fixtures enable it by default so the
-	-- decision loop runs, while the coordinator fixture drives it explicitly.
-	MP.LOBBY.started = opts.started ~= false
+	-- The real match-started observable is the ordinary RUN stage reached while
+	-- the lobby is joined. The fixture never invents `MP.is_started` or
+	-- `MP.LOBBY.started`; it drives the real stage and state enums instead.
+	local run = opts.started ~= false and code ~= nil
+	G.STAGES = G.STAGES or { MAIN_MENU = 1, RUN = 2 }
+	if run then
+		G.STAGE = G.STAGES.RUN
+	else
+		G.STAGE = G.STAGES.MAIN_MENU
+		G.STATE = G.STATES.MENU
+	end
+	engine.set_run = function()
+		G.STAGE = G.STAGES.RUN
+	end
+	engine.set_main_menu = function()
+		G.STAGE = G.STAGES.MAIN_MENU
+		G.STATE = G.STATES.MENU
+	end
+	engine.set_match_code = function(value)
+		MP.LOBBY.code = value
+	end
 	-- The already-resolved run seed of an initialized run (source:
 	-- G.GAME.pseudorandom.seed). Never exported to policy.
 	G.GAME.pseudorandom = { seed = opts.run_seed or "RUNSEED42" }

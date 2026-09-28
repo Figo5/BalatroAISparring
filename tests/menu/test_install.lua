@@ -108,4 +108,20 @@ return function()
 		eq(fx.ui.funcs.aisp_open_menu, nil, "owned callback removed")
 		eq(fx.ui.funcs.aisp_confirm_start, nil, "all owned callbacks removed")
 	end)
+
+	test("menu_accepts_an_actual_metatable_game_table", function()
+		-- The live `G` is `Game = Object:extend()` and carries a metatable
+		-- (work/reference/game/engine/object.lua). The factory accepts any table
+		-- for G while still validating the plain nested constant tables.
+		local fx = fixture()
+		local plain = fx.ui.G
+		local object = setmetatable({}, {})
+		for key, value in pairs(plain) do
+			object[key] = value
+		end
+		truthy(getmetatable(object) ~= nil, "metatable present")
+		fx.ui.G = object
+		local menu, code = fx.modules.PracticeMenu.factory(fx.ui)
+		truthy(menu ~= nil, "Object-shaped G accepted: " .. tostring(code))
+	end)
 end

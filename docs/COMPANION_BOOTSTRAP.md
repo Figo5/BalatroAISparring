@@ -130,7 +130,10 @@ LÖVE worker (`integration/control_thread.lua`, newline JSON, `127.0.0.1` only,
 2 MiB out / 64 KiB in). `host.poll_start(id)` drains one response nonblockingly.
 Only a confirmed accepted ack lets the reviewed controller invoke the injected
 normal quit (`love.event.quit`) exactly once; cancel, rejection, timeout and
-error never quit.
+error never quit. The controller reads its own trusted clock — the live companion
+update calls `controller.update()` with no argument — so the bounded 10 s
+acknowledgement timeout actually fires (passing the frame delta as "now" made
+`now - started_at` negative and the timeout dead).
 
 ### 4.3 Transport
 
@@ -138,6 +141,12 @@ The default transport is the reviewed `control_thread.lua` relay worker wrapped
 over its two channels; tests inject a transport. The worker never carries
 credentials in either direction beyond the authenticated request envelope, and
 the secret is never logged or placed on a status surface.
+
+A transport whose worker has errored (`last_error()`) or stopped
+(`worker_stopped()`) can never answer a new request, so `ensure_transport`
+rebuilds it on the next attempt instead of reusing the dead one. One transient
+worker failure therefore does not stick forever; no start request is replayed
+automatically and the companion still never quits before an accepted ack.
 
 ## 5. Staged path
 
@@ -199,8 +208,11 @@ nonblocking **pending** state (`state = "awaiting_attestation"`) and retries eac
 `Game:update`; it does not fail permanently at first module load. Only once the
 file appears and validates does the companion construct the real
 `RuntimeBootstrap`, call `install()` (which sends the authenticated `hello`) and
-then await the ack. A deadline (`attestation_timeout`, 30 s) is a graceful local
-failure; no policy capability is ever minted before the hello ack.
+then await the ack. A deadline (`attestation_timeout`, 120 s = the host's 90 s
+probe wait plus margin) is a graceful local failure; no policy capability is ever
+minted before the hello ack. The bound is deliberately **larger** than the host's
+`practice_host.DEFAULT_ATTESTATION_TIMEOUT` (90 s) so a slow second role cannot
+make the first role fail permanently while the host is still waiting.
 
 The file is read from
 `<AISP_EXPECTED_ROLE_SAVE_ROOT>/aisparring-launcher-attestation.json` through the
@@ -332,8 +344,11 @@ schema/version/host/port/secret/enum/identity rejection; request validation,
 identity binding and gauntlet index mapping; explicit `gauntlet: null`; ack/
 reject/timeout behaviour through the reviewed controller; `Game:update` ordering,
 idempotence and fault containment; staged role crossing, no-attestation-source,
-wrong nonce/role/hash/path, deferred attestation (pending then boot) and timeout,
-strict env descriptor reading, human non-activation and AI activation only after
+wrong nonce/role/hash/path, deferred attestation (pending then boot), the
+host-plus-margin attestation bound (still pending at the host's 90 s, then a
+bounded timeout), the acknowledgement timeout through the real companion update,
+the dead-worker transport rebuild, strict env descriptor reading, human
+non-activation and AI activation only after
 the hello ack, secret-free status, and the staged-window identification (no
 window operation before attestation, the exact human/AI titles, exactly one AI
 minimize, the human never minimized, the live companion untouched, and a
