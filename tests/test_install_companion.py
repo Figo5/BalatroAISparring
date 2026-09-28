@@ -10,6 +10,7 @@ helper over the fixture trees, never written by hand.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -25,6 +26,7 @@ for path in (str(TOOLS), str(REPO)):
         sys.path.insert(0, path)
 
 import install_companion  # noqa: E402
+import isolation_certificate  # noqa: E402
 import launch_practice  # noqa: E402
 import staging  # noqa: E402
 
@@ -83,12 +85,21 @@ def _place_staged_copies(env: dict) -> None:
         shutil.copytree(source, dest)
 
 
+def _write_open_record(staging_root: Path, session_id: str, status: str = "open") -> None:
+    """Write an open/failed-pending staged session record the certificate API blocks on."""
+    path = (
+        Path(staging_root)
+        / isolation_certificate.EVIDENCE_DIR
+        / isolation_certificate.OPEN_SUBDIR
+        / f"{session_id}.json"
+    )
+    _write_text(path, json.dumps({"session_id": session_id, "status": status}))
+
+
 def _make_source(tmp: Path, version: str = install_companion.EXPECTED_VERSION) -> Path:
     source = tmp / "source" / "AISparring"
     shutil.copytree(REPO / "AISparring", source)
     if version != install_companion.EXPECTED_VERSION:
-        import json
-
         manifest = source / install_companion.MOD_MANIFEST_NAME
         data = json.loads(manifest.read_text(encoding="utf-8"))
         data["version"] = version
@@ -259,8 +270,8 @@ def test_build_package_contents_configs_junk_and_version():
             text = (directory / install_companion.CONFIG_NAME).read_text(encoding="utf-8")
             assert text == staged_text
             assert "discovery_path" not in text
-        assert staging._tree_digest(staged["human"], install_companion.PACKAGE_HASH_POLICY) == staging._tree_digest(
-            staged["ai"], install_companion.PACKAGE_HASH_POLICY
+        assert staging._tree_digest(staged["human"], install_companion.PACKAGE_MODULE_POLICY) == staging._tree_digest(
+            staged["ai"], install_companion.PACKAGE_MODULE_POLICY
         )
 
         for junk in ("__pycache__", "debug.log", "save", ".env"):
@@ -833,6 +844,152 @@ def test_install_refuses_dangling_target_reparse():
         assert result["code"] == "target_exists", result
         assert os.path.lexists(str(dangling))
         assert _stage_leftovers(env["stage_parent"]) == []
+
+
+# ---------------------------------------------------------------------------
+# Open staged session (N1), manifest-bound binding (N2), StagingError cleanup (N3),
+# target race (N4), nested-exclusion (N5)
+# ---------------------------------------------------------------------------
+
+def test_install_refuses_open_staged_session_record():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+        _write_open_record(env["staging_root"], "session-open-1")
+        result = _install(env)
+        assert result["code"] == "staged_session_open_unmeasured", result
+        assert not (env["mods"] / "AISparring").exists()
+        assert _mods_temp_leaks(env["mods"]) == []
+        assert _stage_leftovers(env["stage_parent"]) == []
+
+
+def test_install_refuses_open_session_record_created_during_copy():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+
+        def open_session(source, destination):
+            _REAL_COPY_STAGE_TREE(source, destination)
+            _write_open_record(env["staging_root"], "session-open-2")
+
+        with patched(install_companion, _copy_stage_tree=open_session):
+            result = _install(env)
+        assert result["code"] == "staged_session_open_unmeasured", result
+        assert not (env["mods"] / "AISparring").exists()
+        assert _mods_temp_leaks(env["mods"]) == []
+        assert _stage_leftovers(env["stage_parent"]) == []
+
+
+def test_install_refuses_open_session_listing_error():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+
+        def boom(staging_root):
+            raise staging.StagingError("open_records_unreadable")
+
+        with patched(install_companion.isolation_certificate, list_open_records=boom):
+            result = _install(env)
+        assert result["code"] == "staged_session_open_unmeasured", result
+        assert not (env["mods"] / "AISparring").exists()
+        assert _stage_leftovers(env["stage_parent"]) == []
+
+
+def test_install_refuses_staging_and_package_swapped_together():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+        real_acceptance = install_companion.load_acceptance
+
+        def swap_both(path, digest):
+            verdict = real_acceptance(path, digest)
+            for role in install_companion.STAGED_ROLES:
+                _write_text(
+                    env["package_root"] / "staged" / role / install_companion.TARGET_NAME / "core.lua",
+                    "-- older module bytes\n",
+                )
+                staged = staging.role_paths(env["staging_root"], role).mods / install_companion.TARGET_NAME / "core.lua"
+                _write_text(staged, "-- older module bytes\n")
+            return verdict
+
+        result = _install(env, acceptance_check=swap_both)
+        assert result["code"] == "staged_package_mismatch", result
+        assert any(item.startswith("staged_role_mismatch") for item in result["problems"]), result
+        assert not (env["mods"] / "AISparring").exists()
+        assert _stage_leftovers(env["stage_parent"]) == []
+
+
+def test_install_refuses_staging_swapped_during_certificate_check():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+
+        def swapping_certificate(staging_root, live=None):
+            for role in install_companion.STAGED_ROLES:
+                staged = staging.role_paths(env["staging_root"], role).mods / install_companion.TARGET_NAME / "core.lua"
+                _write_text(staged, "-- swapped mid-certificate\n")
+            return {"ok": True, "code": "ok", "problems": [], "certificate_id": "fixture"}
+
+        result = _install(env, certificate_check=swapping_certificate)
+        assert result["code"] == "staged_package_mismatch", result
+        assert not (env["mods"] / "AISparring").exists()
+        assert _stage_leftovers(env["stage_parent"]) == []
+
+
+def test_install_staging_error_during_final_verify_leaves_no_receipt_or_stage():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+        real_assert = staging.assert_no_links
+        calls = {"count": 0}
+
+        def flaky_assert_no_links(root, what="tree"):
+            calls["count"] += 1
+            if calls["count"] >= 2:
+                raise staging.StagingError("simulated_stage_link_failure")
+            return real_assert(root, what)
+
+        with patched(staging, assert_no_links=flaky_assert_no_links):
+            result = _install(env)
+        assert result["code"] == "simulated_stage_link_failure", result
+        assert not (env["mods"] / "AISparring").exists()
+        assert _mods_temp_leaks(env["mods"]) == []
+        assert _stage_leftovers(env["stage_parent"]) == []
+        assert _receipt_leftovers(env["tmp"] / "work") == []
+
+
+def test_install_refuses_target_created_during_final_closed_check():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+        marker = env["mods"] / "AISparring" / "marker.txt"
+        calls = {"count": 0}
+
+        def closed_check():
+            calls["count"] += 1
+            if calls["count"] == 2:
+                _write_text(marker, "appeared during final check\n")
+            return {"ok": True, "code": "ok", "problems": []}
+
+        result = _install(env, closed_check=closed_check)
+        assert result["code"] == "target_exists", result
+        assert calls["count"] == 2, calls
+        assert marker.is_file()
+        assert _mods_temp_leaks(env["mods"]) == []
+        assert _stage_leftovers(env["stage_parent"]) == []
+
+
+def test_verify_package_detects_nested_manifest_and_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+        module = env["package_root"] / "live" / "AISparring"
+        _write_text(module / "ai" / "config.lua", "return {}\n")
+        verdict = install_companion.verify_package(env["package_root"])
+        assert not verdict["ok"], verdict
+        assert any(item.startswith("package_added") for item in verdict["problems"]), verdict
+        result = _install(env)
+        assert result["code"] == "package_unverified", result
+        assert not (env["mods"] / "AISparring").exists()
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _ready(Path(tmp))
+        module = env["package_root"] / "live" / "AISparring"
+        _write_text(module / "manifest.json", '{"nested": true}\n')
+        verdict = install_companion.verify_package(env["package_root"])
+        assert not verdict["ok"], verdict
+        assert "package_added:live/AISparring/manifest.json" in verdict["problems"], verdict
 
 
 def _run_all() -> int:

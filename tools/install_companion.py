@@ -40,6 +40,12 @@ Hard guarantees:
 * the certificate is bound to the exact staged role bytes and to the accepted
   package digest: a certificate measured for older modules cannot authorize a
   newer package, and the target root must be the validated live ``appdata/Mods``;
+* the expected staged role bytes come from the digest-checked manifest, not a
+  fresh re-hash of mutable package directories, and the binding is checked both
+  immediately before and immediately after the certificate check;
+* an open/unmeasured staged session record (``list_open_records``) refuses the
+  install at plan time and again immediately before the rename, including when
+  the record listing itself raises;
 * unreadable process enumeration, volume mismatch and root mismatches fail closed.
 
 Nothing here is a live-operation claim. Actual installation remains a reviewed,
@@ -74,6 +80,7 @@ TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
+import isolation_certificate  # noqa: E402
 import launch_practice  # noqa: E402
 import staging  # noqa: E402
 
@@ -120,10 +127,16 @@ PACKAGE_EXCLUDE_SUFFIXES = tuple(
     dict.fromkeys((*staging.RUNTIME_STATE_SUFFIXES, ".pyc", ".pyo", ".tmp"))
 )
 
-PACKAGE_HASH_POLICY = staging.HashPolicy(exclude_names=(PACKAGE_MANIFEST_NAME,))
+PACKAGE_HASH_POLICY = staging.HashPolicy(exclude_rel=(PACKAGE_MANIFEST_NAME,))
+PACKAGE_MODULE_POLICY = staging.HashPolicy()
 # Role bodies (live/staged) may differ only by their generated ``config.lua``; the
-# shared module bytes must be identical, so the body comparison ignores the config.
-PACKAGE_BODY_POLICY = staging.HashPolicy(exclude_names=(PACKAGE_MANIFEST_NAME, CONFIG_NAME))
+# shared module bytes must be identical, so the body comparison ignores exactly
+# that one top-level file. The package manifest is excluded by relative path at the
+# package root, not by name at any depth, so a nested ``manifest.json`` inside
+# ``AISparring`` is still hashed and re-verified; individual ``AISparring`` folders
+# are hashed with ``PACKAGE_MODULE_POLICY`` (empty) so a nested manifest or config
+# cannot slip past the staged-copy/live-vs-staged comparisons.
+PACKAGE_BODY_POLICY = staging.HashPolicy(exclude_rel=(CONFIG_NAME,))
 
 
 class InstallError(staging.StagingError):
@@ -291,15 +304,24 @@ def _same_filesystem(first, second) -> bool:
         return False
 
 
-def _live_files_from_verified_manifest(package_root, accepted_digest):
+def _live_files_from_verified_manifest(
+    package_root,
+    accepted_digest,
+    prefix=None,
+    missing_code="package_live_manifest_missing",
+):
     """Re-read the package manifest at execute time and revalidate the accepted digest.
 
-    Returns ``(files, code)``. ``files`` is the ``live/AISparring`` subtree of the
-    manifest, or ``None`` on refusal. A manifest that was swapped together with the
-    live files between verification and staging recomputes a different
-    ``package_digest`` and is refused (``package_changed_after_acceptance``), so the
-    reviewer-approved bytes can never be silently replaced by a self-consistent
-    newer manifest.
+    Returns ``(files, code)``. ``files`` is the manifest subtree under ``prefix``
+    (``live/AISparring/`` by default, or ``staged/<role>/AISparring/`` for the
+    certificate binding), or ``None`` on refusal. A manifest that was swapped
+    together with the live files between verification and staging recomputes a
+    different ``package_digest`` and is refused (``package_changed_after_acceptance``),
+    so the reviewer-approved bytes can never be silently replaced by a
+    self-consistent newer manifest. Reading the expected bytes from this
+    digest-checked manifest (rather than re-hashing mutable directories) closes the
+    timing race where a rewritten package/staging pair could satisfy a stale
+    certificate.
     """
     root = Path(package_root)
     try:
@@ -318,42 +340,48 @@ def _live_files_from_verified_manifest(package_root, accepted_digest):
         return None, "package_manifest_invalid"
     if accepted_digest is not None and recomputed != accepted_digest:
         return None, "package_changed_after_acceptance"
-    prefix = f"live/{TARGET_NAME}/"
+    if prefix is None:
+        prefix = f"live/{TARGET_NAME}/"
     subset = {
         rel[len(prefix):]: meta for rel, meta in files.items() if rel.startswith(prefix)
     }
     if not subset:
-        return None, "package_live_manifest_missing"
+        return None, missing_code
     return subset, "ok"
 
 
-def package_staging_binding(staging_root, package_root, roles=STAGED_ROLES) -> dict:
-    """Bind the certificate's measured staging area to the exact package staged roles.
+def package_staging_binding(staging_root, expected_roles, roles=STAGED_ROLES) -> dict:
+    """Bind the certificate's measured staging area to the verified package staged roles.
 
     The isolation certificate measures ``staging/roles/<role>/.../Mods`` (including
-    ``AISparring``) as its layer M. Requiring the staged ``AISparring`` digest to equal
-    the package's ``staged/<role>/AISparring`` digest under the same hash policy means
-    a certificate measured for older module bytes can never authorize a newer package.
+    ``AISparring``) as its layer M. ``expected_roles`` is the digest-checked
+    manifest's ``staged/<role>/AISparring`` subtree for each role (never a fresh
+    re-hash of the mutable package directory), so requiring the staged
+    ``AISparring`` digest to equal it means a certificate measured for older
+    module bytes can never authorize a newer package — even if the package's staged
+    folders were rewritten after verification to match an older staging area.
     """
     problems: list = []
     for role in roles:
-        package_dir = Path(package_root) / "staged" / role / TARGET_NAME
+        expected = expected_roles.get(role)
+        if not isinstance(expected, Mapping) or not expected:
+            problems.append(f"staged_role_unbound:{role}")
+            continue
         try:
             staged_mods = staging.role_paths(staging_root, role).mods
         except staging.StagingError:
             problems.append(f"staged_role_unavailable:{role}")
             continue
         try:
-            package_digest_value = staging._tree_digest(package_dir, PACKAGE_HASH_POLICY)
             staged_digest_value = staging._tree_digest(
-                staged_mods / TARGET_NAME, PACKAGE_HASH_POLICY
+                staged_mods / TARGET_NAME, PACKAGE_MODULE_POLICY
             )
         except staging.StagingError:
             problems.append(f"staged_role_unreadable:{role}")
             continue
-        if package_digest_value is None or staged_digest_value is None:
+        if staged_digest_value is None:
             problems.append(f"staged_role_missing:{role}")
-        elif package_digest_value != staged_digest_value:
+        elif staged_digest_value != staging._digest_of(dict(expected)):
             problems.append(f"staged_role_mismatch:{role}")
     problems = sorted(set(problems))
     return {
@@ -376,7 +404,7 @@ def _verify_stage_tree(stage_dir, expected) -> None:
     """
     staging.assert_no_links(stage_dir, "install staging copy")
     try:
-        current = staging.hash_tree(stage_dir, PACKAGE_HASH_POLICY)
+        current = staging.hash_tree(stage_dir, PACKAGE_MODULE_POLICY)
     except staging.StagingError as error:
         raise InstallError(error.code, error.message)
     if current != expected:
@@ -436,7 +464,7 @@ def build_package(
         return _refuse("package_write_failed", [str(error)])
 
     staged_digests = {
-        role: staging._tree_digest(directory, PACKAGE_HASH_POLICY)
+        role: staging._tree_digest(directory, PACKAGE_MODULE_POLICY)
         for role, directory in staged_dirs.items()
     }
     if len(set(staged_digests.values())) != 1 or None in staged_digests.values():
@@ -519,7 +547,7 @@ def verify_package(package_root=None, version: str = EXPECTED_VERSION) -> dict:
         if not staged_config.is_file() or staged_config.read_text(encoding="utf-8") != staged_text:
             problems.append(f"staged_config_mismatch:{role}")
         staged_digests.append(
-            staging._tree_digest(root / "staged" / role / TARGET_NAME, PACKAGE_HASH_POLICY)
+            staging._tree_digest(root / "staged" / role / TARGET_NAME, PACKAGE_MODULE_POLICY)
         )
     if len(set(staged_digests)) != 1:
         problems.append("staged_copies_differ")
@@ -763,15 +791,36 @@ def _combined_process_gate(closed_check, enumerator, staging_root, live_install_
     by the launcher/isolation owner): a staged session or a foreign Balatro.exe is
     refused regardless of its image path. The installer never launches or owns a
     staged process, so the only acceptable state is no Balatro process at all.
+
+    It finally refuses an open/unmeasured staged session record
+    (`isolation_certificate.list_open_records`), a session that crashed or was killed
+    before its live-diff result was recorded. Such a session leaves no process to
+    find, so both process gates above would pass while it might be about to revoke
+    the certificate. This fails closed both at plan time and immediately before the
+    rename, including when the listing itself raises.
     """
     verdict = _safe_closed(closed_check)
     if not verdict.get("ok"):
         return verdict
-    return _safe_closed(
+    verdict = _safe_closed(
         lambda: launch_practice.check_no_staged_session(
             enumerator, staging_root, live_install_root=live_install_root
         )
     )
+    if not verdict.get("ok"):
+        return verdict
+    try:
+        open_records = isolation_certificate.list_open_records(staging_root)
+    except staging.StagingError as error:
+        return _refuse("staged_session_open_unmeasured", [error.code])
+    except Exception as error:  # noqa: BLE001
+        return _refuse("staged_session_open_unmeasured", [str(error)])
+    if open_records:
+        return _refuse(
+            "staged_session_open_unmeasured",
+            [f"open_sessions:{len(open_records)}"],
+        )
+    return {"ok": True, "code": "ok", "problems": []}
 
 
 def _assert_no_reparse_under(anchor, path, what: str) -> None:
@@ -959,6 +1008,35 @@ def install_companion(
     if not acceptance_verdict.get("ok"):
         return {**base, "ok": False, "code": "acceptance_unverified", "problems": acceptance_verdict.get("problems", [])}
 
+    # The certificate binding must be judged against the digest-checked manifest's
+    # staged role bytes, never a fresh re-hash of the mutable package directories, and
+    # it must hold both immediately before and immediately after the certificate check.
+    staged_expectations: dict = {}
+    for role in STAGED_ROLES:
+        expected_role, role_code = _live_files_from_verified_manifest(
+            package_root,
+            package_verdict.get("digest"),
+            prefix=f"staged/{role}/{TARGET_NAME}/",
+            missing_code="package_staged_manifest_missing",
+        )
+        if expected_role is None:
+            return {**base, "ok": False, "code": role_code, "problems": [role_code]}
+        staged_expectations[role] = expected_role
+
+    def _binding_refusal():
+        try:
+            verdict = package_staging_binding(staging_root, staged_expectations)
+        except staging.StagingError as error:
+            return {**base, "ok": False, "code": error.code, "problems": [error.code]}
+        if not verdict.get("ok"):
+            return {**base, "ok": False, "code": verdict["code"],
+                    "problems": verdict.get("problems", [])}
+        return None
+
+    refusal = _binding_refusal()
+    if refusal is not None:
+        return refusal
+
     try:
         certificate_verdict = certificate_check(staging_root, live=live)
     except staging.StagingError as error:
@@ -974,13 +1052,11 @@ def install_companion(
         return {**base, "ok": False, "code": "certificate_mismatch",
                 "problems": ["acceptance_certificate_mismatch"]}
 
-    try:
-        binding_verdict = package_staging_binding(staging_root, package_root)
-    except staging.StagingError as error:
-        return {**base, "ok": False, "code": error.code, "problems": [error.code]}
-    if not binding_verdict.get("ok"):
-        return {**base, "ok": False, "code": binding_verdict["code"],
-                "problems": binding_verdict.get("problems", [])}
+    # Re-bind after the certificate check so a staging area switched *during* the
+    # check cannot pass with a certificate measured for a different tree.
+    refusal = _binding_refusal()
+    if refusal is not None:
+        return refusal
 
     overlap_roots = {"staging": staging_root, "package": package_root, "backup": backup_root}
     try:
@@ -1089,7 +1165,7 @@ def install_companion(
                 "target": str(target),
                 "pending_receipt": str(pending_receipt),
             }
-    except InstallError as error:
+    except staging.StagingError as error:
         _cleanup_stage(temp_dir, stage_parent)
         _cleanup_receipt(pending_receipt)
         _cleanup_receipt(final_receipt)

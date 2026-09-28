@@ -74,12 +74,20 @@ gate, and the closed-game check is repeated immediately before the commit:
      `certificate_id` (`certificate_mismatch` otherwise), so a certificate
      measured for older modules can never authorize a newer package;
    - the staged `AISparring` in `staging/roles/<role>/.../Mods` (the tree the
-     certificate measures as layer M) to have the same `PACKAGE_HASH_POLICY`
-     digest as the package's `staged/<role>/AISparring` for **both** roles
-     (`staged_package_mismatch` otherwise).
+     certificate measures as layer M) to have the same module digest as the
+     digest-checked manifest's `staged/<role>/AISparring` subtree for **both**
+     roles (`staged_package_mismatch` otherwise). The expected bytes come from
+     the immutable verified manifest, never from a fresh re-hash of the mutable
+     `package_root/staged/<role>` directories, and this binding is checked both
+     immediately before and immediately after `check_certificate`, so a package
+     and staging area rewritten together after verification, or a staging area
+     switched during the certificate check, cannot pass.
    `verify_package` separately requires the package's `live` and both `staged`
-   role bodies (everything except the generated `config.lua`) to be identical
-   (`live_staged_body_mismatch` otherwise).
+   role bodies (everything except the generated top-level `config.lua`) to be
+   identical (`live_staged_body_mismatch` otherwise). Files are excluded by exact
+   relative path at the package root only, and each `AISparring` folder is hashed
+   with an empty policy, so a nested `manifest.json` or `config.lua` is still
+   hashed, verified and compared rather than silently skipped.
 4. **Target** — exactly `<resolved live Mods>/AISparring`, where the given
    `--mods-root` must equal the validated live `appdata/Mods` root
    (`mods_root_not_live` otherwise; `live_roots_unavailable` when the live roots
@@ -99,9 +107,12 @@ gate, and the closed-game check is repeated immediately before the commit:
    the launcher's unowned-process gate
    (`launch_practice.check_no_staged_session`): any Balatro process that is not
    the live install — a staged session **or a foreign `Balatro.exe` from another
-   Steam library or copy** — is refused regardless of its image path. The
-   installer launches and owns no staged process, so the only accepted state is
-   no Balatro process at all.
+   Steam library or copy** — is refused regardless of its image path. An
+   open/unmeasured staged session record that leaves no process behind is refused
+   too (`staged_session_open_unmeasured` via
+   `isolation_certificate.list_open_records`, including when the listing raises).
+   The installer launches and owns no staged process, so the only accepted state is
+   no Balatro process and no open staged session at all.
 7. **Prepare (outside live Mods)** — the complete module is copied into a fresh
    owned `.aisparring-install-<token>` temp under the known **staging parent**
    (`<repo>/work/aisparring-install-stage` by default, or an explicit fixture
@@ -209,10 +220,23 @@ returns a bounded refusal (`package_manifest_invalid`).
 
 Recorded from
 `work/runtime-venv/Scripts/python.exe tests/test_install_companion.py` on the
-isolated fixture trees only: **40/40 cases passed**. No live install, Mods,
+isolated fixture trees only: **48/48 cases passed**. No live install, Mods,
 save, Steam tree, process, network or game launch was touched; no Git or
 packaging operation was run against live paths. This is a fixture result, not a
 review pass and not a native proof.
+
+Re-review (N1–N5) tests added for this pass: an open staged session record in
+place at plan time and one created during the copy both refuse
+(`staged_session_open_unmeasured`), as does a listing error; a package staged
+folder and the staging area rewritten to the same older bytes after verification
+refuse (`staged_package_mismatch`) because the expected bytes are the
+digest-checked manifest, not a re-hash; a staging area switched during the
+certificate check is caught by the post-certificate re-bind; a `StagingError`
+raised during the final staged re-hash leaves no pending receipt and no staging
+temp (the handler now catches the parent `staging.StagingError`); a target created
+during the second (final) closed check refuses with `target_exists`; and a nested
+`AISparring/manifest.json` or nested `config.lua` is now detected as an added file
+rather than silently skipped.
 
 Remaining real gates before any actual installation (not performed here):
 
