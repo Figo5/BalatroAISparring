@@ -361,6 +361,91 @@ return function(ctx)
 		is_true(seen.SKIP_BLIND ~= true, "boss skip offered")
 	end)
 
+	test("smods_pack_with_card_offers_skip", function()
+		-- H1: SMODS boosters stay skippable with an empty hand once a real pack
+		-- card exists.
+		local engine = support.engine({
+			state = STATES.SMODS_BOOSTER_OPENED,
+			pack_cards = { support.card({ rank = "2" }) },
+			hand = {},
+		})
+		local result = produce(engine)
+		is_true(result ~= nil)
+		local seen = false
+		for _, item in ipairs(result.ui_view.certificates.items) do
+			if item.type == "SKIP_BOOSTER" then
+				seen = true
+			end
+		end
+		is_true(seen, "SMODS pack with a real card must offer an escape")
+	end)
+
+	test("smods_empty_opening_pack_offers_no_skip", function()
+		-- A: before the opened booster's cards materialize, the real UI cannot
+		-- skip, so the adapter must not offer it.
+		local engine = support.engine({ state = STATES.SMODS_BOOSTER_OPENED, pack_cards = {}, hand = {} })
+		local result = produce(engine)
+		is_true(result ~= nil)
+		for _, item in ipairs(result.ui_view.certificates.items) do
+			is_true(item.type ~= "SKIP_BOOSTER", "premature skip offered before pack cards exist")
+		end
+	end)
+
+	test("ankh_full_slots_not_offered", function()
+		-- B: a held Ankh with full joker slots is a `use_card` no-op
+		-- (`Card:check_use`), so the adapter must not offer it.
+		local ankh = support.card({ set = "Spectral", center_set = "Spectral", consumeable_data = {}, center = "c_ankh", usable = true })
+		local filler = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+		local engine = support.engine({ consumeables = { ankh }, jokers = { filler }, joker_slots = 1 })
+		local result = produce(engine)
+		is_true(result ~= nil)
+		for _, item in ipairs(result.ui_view.certificates.items) do
+			is_true(item.type ~= "USE_CONSUMABLE", "full-slot Ankh offered as a usable consumable")
+		end
+	end)
+
+	test("ankh_with_free_slots_offered", function()
+		-- Positive control: the same Ankh is offered when a joker slot is free.
+		local ankh = support.card({ set = "Spectral", center_set = "Spectral", consumeable_data = {}, center = "c_ankh", usable = true })
+		local engine = support.engine({ consumeables = { ankh }, jokers = {}, joker_slots = 1 })
+		local result = produce(engine)
+		is_true(result ~= nil)
+		local seen = false
+		for _, item in ipairs(result.ui_view.certificates.items) do
+			if item.type == "USE_CONSUMABLE" then
+				seen = true
+			end
+		end
+		is_true(seen, "usable Ankh with a free slot must be offered")
+	end)
+
+	test("forced_selection_candidates_include_forced", function()
+		-- Medium/H3: the adapter must not offer a play/discard that omits a
+		-- blind-forced card (the executor refuses those). Every offered selection
+		-- contains the forced ordinal, and at least one is offered.
+		local forced = support.card({ rank = "Ace" })
+		forced.ability.forced_selection = true
+		local engine = support.engine({
+			hand = { forced, support.card({ rank = "2" }), support.card({ rank = "3" }) },
+		})
+		local result = produce(engine)
+		is_true(result ~= nil)
+		local offered = false
+		for _, item in ipairs(result.ui_view.certificates.items) do
+			if item.type == "PLAY_CARDS" or item.type == "DISCARD_CARDS" then
+				local has_forced = false
+				for _, r in ipairs(item.card_refs) do
+					if r == "hand:1" then
+						has_forced = true
+					end
+				end
+				is_true(has_forced, item.type .. " omitted a forced card")
+				offered = true
+			end
+		end
+		is_true(offered, "no play/discard candidate was offered with a forced card")
+	end)
+
 	test("face_down_identity_is_catalogue_invariant", function()
 		-- H2: changing a hidden card's rank/suit must not change a single
 		-- policy-visible candidate. The card may still be selected positionally,

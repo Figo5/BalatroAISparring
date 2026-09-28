@@ -6,7 +6,9 @@ No live game capture, no game launch, no Mods write, no Git operation, no policy
 This is not a playability claim; the remaining wiring is listed in §9.
 
 This revision implements the `docs/CLAUDE_ENGINE_REVIEW.md` repairs
-(C1, C2, H1-H5, M1-M3, L1-L5). Each fix is source-derived from
+(C1, C2, H1-H5, M1-M3, L1-L5) and the `docs/CLAUDE_ENGINE_FINAL_REVIEW.md` /
+`docs/CLAUDE_POLICY_FINAL_REVIEW.md` repairs (engine A/B, policy NEW-1/NEW-2 and
+the forced-selection catalogue alignment). Each fix is source-derived from
 `work/reference/game/*` (vanilla 1.0.1o) and `work/reference/smods-booster.toml` /
 `work/reference/mp/*`; no predicate is faked and no new rule is approximated.
 
@@ -167,14 +169,14 @@ what stops the adapter offering an action the executor would refuse (H4c).
 | `DISCARD_CARDS` | same gates + `discards_left > 0` |
 | `SELL_JOKER` | face-up and `Card:can_sell_card() == true` (area type `joker`, not eternal, tutorial/seed/ante clause — L4) |
 | `SELL_CONSUMABLE` | same predicate on the `consumeables` area: vanilla `G.consumeables` is created with `config.type = 'joker'` (`game.lua:2239`) so `Card:can_sell_card` accepts consumables |
-| `USE_CONSUMABLE` (empty target) | consumeable visible, no `ability.consumeable.max_highlighted`, and `Card:can_use_consumeable() == true` (mirrors Ankh's `check_use` too, H4c/H5) |
+| `USE_CONSUMABLE` (empty target) | consumeable visible, no `ability.consumeable.max_highlighted`, and `Card:can_use_consumeable() == true`; Ankh additionally requires a free joker slot via the shared `check_use` predicate (H4c/H5/B) |
 | `BUY_ITEM` | shop item kind `card`/`joker`/`consumable`, cost affordable, slot room for joker/consumable (`capacity_ok`) |
 | `OPEN_BOOSTER` | item in `shop_booster`, kind `booster`, cost affordable |
 | `BUY_VOUCHER` | `spendable >= cost` (including `cost = 0`) |
 | `REROLL` | `reroll_cost == 0` or `spendable >= reroll_cost` |
 | `LEAVE_SHOP` | phase `SHOP` |
-| `SELECT_BOOSTER_ITEM` | pack present, `pack_choices > 0`, one ref; joker needs free slot room unless negative edition (L3); consumable requires `Card:can_use_consumeable() == true`, never a free slot (C1) |
-| `SKIP_BOOSTER` | under `SMODS_BOOSTER_OPENED` the state alone is authoritative (H1, see below); otherwise pack first card present and (planet/standard/buffoon pack or hand non-empty or hand limit ≤ 0) |
+| `SELECT_BOOSTER_ITEM` | pack present, `pack_choices > 0`, one ref; joker needs free slot room unless negative edition (L3); consumable requires `Card:can_use_consumeable() == true` **and** the shared Ankh `check_use` slot predicate, never a free slot (C1/B) |
+| `SKIP_BOOSTER` | a real pack card exists FIRST (`G.pack_cards.cards[1]`) **and** (state is `SMODS_BOOSTER_OPENED`/planet/standard/buffoon, or the hand is non-empty, or the hand limit ≤ 0) (H1/A) |
 | `REORDER_JOKERS` / `REORDER_HAND` | ≥ 2 visible cards in the area and no pinned card; reverse order plus each single adjacent swap (bounded, never a no-op) |
 | `SELECT_TARGETS` | active target context (injected port only) |
 
@@ -182,15 +184,23 @@ Consumables in a pack are USED on selection, not stored, so their gate is
 `Card:can_use_consumeable` (`button_callbacks.lua:2102`), never a free consumable
 slot (C1). Without it, choosing Talisman/Deja Vu/Trance/Medium/Aura/Cryptid with
 nothing highlighted crashes inside the queued event, and Judgement/Soul/Wraith can
-over-fill the joker slots.
+over-fill the joker slots. A pack Ankh additionally needs a free joker slot: it
+passes `can_use_consumeable` with a full board, but `G.FUNCS.use_card` then
+early-returns on `Card:check_use` (`card.lua:1581-1588`), so the adapter and the
+executor both apply the same shared `check_use` predicate (B). The card is
+identified by its engine `ability.name` or its real center key `c_ankh`
+(`game.lua:814-815`, `G.P_CENTERS.c_ankh.name == "Ankh"`, `game.lua:581`), the
+same source the vanilla predicate uses.
 
 Under SMODS every mod booster is opened in the `SMODS_BOOSTER_OPENED` state and
 SMODS extends `can_skip_booster` to that state (`smods-booster.toml:34-37`,
-`124-126`). The opener (`SMODS.OPENED_BOOSTER`, which the adapter must not read)
-owns the pack contents, so the state itself is the authoritative skip signal even
-while `G.pack_cards` is (re)materializing; the vanilla pack states keep the
-`G.pack_cards.cards[1]` guard (H1). A Buffoon/Celestial/Standard pack therefore
-always offers an escape (H1) instead of leaving the AI with no legal action.
+`124-126`). The vanilla UI still requires a pack card FIRST
+(`G.pack_cards.cards[1]`, `button_callbacks.lua:2133`), and after opening the
+booster leaves the play area while its cards are created a beat later
+(`card.lua:1721-1790`). Keeping the pack-card guard for **every** state, SMODS
+included, stops the AI skipping a paid pack before any card appears; once a real
+pack card exists, a Buffoon/Celestial/Standard/SMODS pack with an empty hand still
+offers its skip escape (H1/A).
 
 **Bounded, deterministic and structured.** The play/discard catalogue is built
 from raw, non-effectful card fields only, in priority order: visible rank groups
@@ -205,7 +215,11 @@ starve the play/discard/shop catalogue. Rank/suit identity is taken only from
 `no_suit` card may still be selected positionally but never forms a rank or suit
 group, so hidden identities cannot leak or change the policy-visible catalogue
 (H2). The catalog is intentionally **non-exhaustive**; `ai/actions.lua` is the
-authority on membership and the executor is the authority on legality.
+authority on membership and the executor is the authority on legality. A
+play/discard selection that omits a blind-forced hand card
+(`ability.forced_selection`, e.g. Cerulean Bell) is filtered out of the
+catalogue, matching the executor's `exec_illegal` refusal, so a deterministic
+policy cannot repeatedly pick a selection the executor must reject.
 
 ## 5. Executor: committed callbacks and critical legality
 
@@ -226,7 +240,7 @@ bounded session token, the adapter, the reader, the revision and live `G`/`MP`.
 | `LEAVE_SHOP` | `G.FUNCS.toggle_shop` | — |
 | `USE_CONSUMABLE` | `G.FUNCS.use_card` | highlight `target:N` first, re-check `can_use_consumeable`, then `e.config.ref_table = consumable` |
 | `SELECT_TARGETS` | none | sets the hand highlight only |
-| `REORDER_JOKERS` / `REORDER_HAND` | none (the engine has no discrete reorder callback) | permutes the target `CardArea.cards` to the validated permutation, then `CardArea:set_ranks()` / `CardArea:align_cards()` via normal metatable lookup |
+| `REORDER_JOKERS` / `REORDER_HAND` | none (the engine has no discrete reorder callback) | permutes the target `CardArea.cards` to the validated permutation, then `CardArea:set_ranks()` / `CardArea:align_cards()` via normal metatable lookup, then **re-reads `area.cards`** and requires the exact validated order/length (NEW-1) |
 | cash out | `G.FUNCS.cash_out` | the cash-out element (below) (`advance_ui()`) |
 
 **Trusted UI-element resolution (C2).** The executor prefers the injected
@@ -260,7 +274,8 @@ removing it when `Card:check_use` rejects (Ankh with full joker slots,
 executor checks immediately after the callback that the anchored source left its
 area; if it did not, the commit is a no-op and returns `exec_callback_failed`
 with **no latch**, so the bounded stall timer can never fire on it. Validation also
-mirrors the Ankh `check_use` and refuses the action up front.
+mirrors the Ankh `check_use` through the same shared predicate the adapter uses and
+refuses the action up front for a held or pack consumable (B).
 
 **Forced selection (H3).** When a blind forces a card into the hand
 (`ability.forced_selection`, e.g. Cerulean Bell), `CardArea:remove_from_highlighted`
@@ -312,6 +327,10 @@ cannot be committed twice.
 - Same-state pure actions are exempt: `SELECT_TARGETS` (highlight only) and
   `REORDER_*` (synchronous permutation) never latch, so a legitimate reorder is not
   blocked indefinitely.
+- **NEW-2:** `advance_ui()` clears the latched control when the adapter reports no
+  pending control. If the engine leaves `ROUND_EVAL` without the AI pressing
+  cash-out, the stale `cash_out` control can no longer keep `capture` from
+  resuming; the next `capture` proceeds normally.
 - A callback that returns `false` (or throws, or leaves a use-card source in
   place) sets no latch — a rejected/no-op commit leaves the executor free.
 
@@ -345,6 +364,11 @@ Reorders (L1) reject any area containing a pinned card (the engine's
 `CardArea:align_cards` forcibly re-sorts pinned jokers, `cardarea.lua:528`) and
 commit via the real `CardArea:set_ranks` / `CardArea:align_cards` methods through
 normal metatable lookup (a `rawget` of a method is always nil on a real CardArea).
+**NEW-1:** after those calls the executor re-reads the live `area.cards` (which
+`set_ranks`/`align_cards` or another hook may have replaced or re-sorted) and
+requires the exact validated card order and length; any mismatch returns
+`exec_callback_failed`, so a reorder the engine never honours cannot keep being
+submitted as a fake success and the decision loop's bounded error limit stops it.
 
 `dispatch` refuses unless:
 1. an action with the same `id` was freshly `validate`d by this executor;
@@ -550,3 +574,13 @@ forced-selection inclusion and highlight-set equality (H3); the cash-out,
 (C2); `gates_clear` on its own blocking a shop commit (M2); SMODS booster skipping
 and metatable-resolved reorder methods (H1/L1); and targeted consumables validating
 and committing through the post-highlight predicate check (M3).
+
+Final-review coverage added: the SMODS skip requires a real pack card for both the
+adapter and the executor and an empty opening pack offers no skip (A); a full-slot
+Ankh is not offered and not executable for a held **and** a pack consumable, with a
+free-slot positive control (B); a play/discard omitting a forced card is filtered
+from the catalogue (Medium); a reorder that `align_cards` reverts fails with
+`exec_callback_failed` (NEW-1); and `advance_ui` clears a stale `cash_out` control
+so `capture` resumes after the engine leaves `ROUND_EVAL` (NEW-2). The independent
+ROOT checker `tests/astra_playable_attacks.py` reproduces all three former failures
+and now passes 14/14 cases on both Lua runtimes.

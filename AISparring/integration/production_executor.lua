@@ -410,6 +410,31 @@ local function call_predicate(card, name)
 	return result
 end
 
+-- `Card:check_use` (card.lua:1581-1588) makes `G.FUNCS.use_card` a no-op for an
+-- Ankh while the joker area is full, for both a held consumable and a pack card
+-- that is USED on selection. The real engine sets `ability.name` from the center
+-- (`Card:set_ability`, card.lua:278) and stamps each center with its key
+-- (`game.lua:814-815`), so Ankh is identified by its engine name or its real
+-- center key `c_ankh` (`G.P_CENTERS.c_ankh.name == "Ankh"`, game.lua:581). This
+-- is the same predicate the adapter uses, so their candidate and commit views
+-- agree.
+local function is_ankh(card)
+	if rget(rget(card, "ability"), "name") == "Ankh" then
+		return true
+	end
+	return rget(rpath(card, "config", "center"), "key") == "c_ankh"
+end
+
+local function check_use_ok(G, card)
+	if not is_ankh(card) then
+		return true
+	end
+	local jokers = rget(G, "jokers")
+	local jcount = dense_count(rget(jokers, "cards"), 256)
+	local jlimit = rpath(jokers, "config", "card_limit")
+	return jcount ~= nil and is_nat(jlimit) and jcount < jlimit
+end
+
 -- Engine areas a `G.FUNCS.use_card` commit removes its target from synchronously
 -- (`button_callbacks.lua:2209`). After such a commit the anchored source must be
 -- gone; otherwise the callback was a no-op early return (e.g. Ankh with full
@@ -992,8 +1017,10 @@ function ProductionExecutor.factory(ports)
 		elseif kind == "consumable" then
 			-- C1: a pack consumable is USED on selection. Require the engine's
 			-- own `Card:can_use_consumeable` (button_callbacks.lua:2102), never a
-			-- free-slot check.
-			if call_predicate(card, "can_use_consumeable") ~= true then
+			-- free-slot check. B: the same `check_use` slot predicate that
+			-- refuses a held Ankh also refuses a pack Ankh (its `use_card`
+			-- no-op), so the candidate and commit boundaries agree.
+			if call_predicate(card, "can_use_consumeable") ~= true or not check_use_ok(G, card) then
 				return nil, CODE.ILLEGAL
 			end
 		end
@@ -1010,21 +1037,18 @@ function ProductionExecutor.factory(ports)
 		local hand = rget(G, "hand")
 		local hand_first = rget(rget(hand, "cards"), 1)
 		local hand_limit = rpath(hand, "config", "card_limit")
-		-- H1: mirror `G.FUNCS.can_skip_booster` as patched by SMODS
-		-- (smods-booster.toml:124-126). Under SMODS the opener owns the pack
-		-- contents, so `SMODS_BOOSTER_OPENED` is itself skippable even while
-		-- `G.pack_cards` is empty; the vanilla states keep the
-		-- `G.pack_cards.cards[1]` guard.
-		local skippable
-		if state_symbol(G, "SMODS_BOOSTER_OPENED") then
-			skippable = true
-		else
-			local cards = rpath(G, "pack_cards", "cards")
-			skippable = type(rget(cards, 1)) == "table"
-				and (state_symbol(G, "PLANET_PACK") or state_symbol(G, "STANDARD_PACK")
-					or state_symbol(G, "BUFFOON_PACK") or hand_first ~= nil
-					or (is_nat(hand_limit) and hand_limit <= 0))
-		end
+		-- H1/A: mirror `G.FUNCS.can_skip_booster` as patched by SMODS
+		-- (smods-booster.toml:124-126), but the real UI always requires a pack
+		-- card FIRST (`G.pack_cards.cards[1]`, button_callbacks.lua:2133). After
+		-- opening, the booster leaves the play area and its cards are created a
+		-- beat later, so a state-only skip would let the AI skip a paid pack
+		-- before any card appears. Keep the pack-card guard for every state.
+		local cards = rpath(G, "pack_cards", "cards")
+		local pack_first = type(rget(cards, 1)) == "table"
+		local skippable = pack_first and (state_symbol(G, "SMODS_BOOSTER_OPENED")
+			or state_symbol(G, "PLANET_PACK") or state_symbol(G, "STANDARD_PACK")
+			or state_symbol(G, "BUFFOON_PACK") or hand_first ~= nil
+			or (is_nat(hand_limit) and hand_limit <= 0))
 		if not skippable then
 			return nil, CODE.ILLEGAL
 		end
@@ -1117,18 +1141,13 @@ function ProductionExecutor.factory(ports)
 		if not gates_clear(G) then
 			return nil, CODE.ILLEGAL
 		end
-		-- H5: mirror `Card:check_use` (card.lua:1581-1588). Ankh passes
-		-- `can_use_consumeable` with full joker slots but `use_card` then
-		-- `check_use` early-returns; refuse it here instead of committing a
-		-- no-op.
-		local name = rget(rget(source, "ability"), "name")
-		if name == "Ankh" then
-			local jokers = rget(G, "jokers")
-			local jcount = dense_count(rget(jokers, "cards"), 256)
-			local jlimit = rpath(jokers, "config", "card_limit")
-			if jcount == nil or not is_nat(jlimit) or jcount >= jlimit then
-				return nil, CODE.ILLEGAL
-			end
+		-- H5/B: mirror `Card:check_use` (card.lua:1581-1588) via the shared
+		-- predicate. Ankh passes `can_use_consumeable` with full joker slots but
+		-- `use_card` then `check_use` early-returns; refuse it here instead of
+		-- committing a no-op. The adapter applies the same predicate so it never
+		-- offers what this refuses.
+		if not check_use_ok(G, source) then
+			return nil, CODE.ILLEGAL
 		end
 		local refs = rget(action, "target_refs")
 		local count = 0
@@ -1498,6 +1517,21 @@ function ProductionExecutor.factory(ports)
 					return nil, CODE.CALLBACK_FAILED
 				end
 			end
+			-- NEW-1: `set_ranks`/`align_cards` (or another engine/mod hook) can
+			-- replace or re-sort `area.cards`, so the local `cards` table is not
+			-- authoritative. Re-read the live area and require the exact
+			-- validated order and length; otherwise report a clean failure so
+			-- the decision loop's bounded error limit stops a reorder that never
+			-- sticks instead of looping forever.
+			local applied = rget(area, "cards")
+			if dense_count(applied, MAX_SELECTION) ~= #target.cards then
+				return nil, CODE.CALLBACK_FAILED
+			end
+			for i = 1, #target.cards do
+				if rawget(applied, i) ~= target.cards[i] then
+					return nil, CODE.CALLBACK_FAILED
+				end
+			end
 			return true
 		end
 		return nil, CODE.UNKNOWN_TYPE
@@ -1569,6 +1603,11 @@ function ProductionExecutor.factory(ports)
 			end
 			local step = adapter.step()
 			if type(step) ~= "table" or step.control == nil then
+				-- NEW-2: no control is pending, so any latched control is stale
+				-- (e.g. the engine left ROUND_EVAL without the AI pressing
+				-- cash-out). Clear it before reporting NO_CONTROL so the next
+				-- `capture` can proceed instead of being blocked forever.
+				last_control = nil
 				return nil, CODE.NO_CONTROL
 			end
 			if step.control == "cash_out" then

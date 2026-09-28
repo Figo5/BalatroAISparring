@@ -1128,11 +1128,50 @@ local function certificate_builder()
 	return { items = items, add = add }
 end
 
-local function cert_play_discard(builder, t, hand_cards, max_k)
+-- Engine ordinals (1-based) of blind-forced hand cards. A forced card cannot be
+-- un-highlighted (`CardArea:remove_from_highlighted`, cardarea.lua:187-188), so
+-- a play/discard that omits one is a selection the executor refuses. Read only
+-- the raw `ability.forced_selection` flag; hidden identities are never touched.
+local function forced_hand_ordinals(G)
+	local cards, count = area_cards(G, "hand", LIMITS.hand)
+	if cards == nil then
+		return nil
+	end
+	local out = {}
+	for i = 1, count do
+		local card = rawget(cards, i)
+		if type(card) == "table" and rget(rget(card, "ability"), "forced_selection") == true then
+			out[#out + 1] = i
+		end
+	end
+	return out
+end
+
+local function selection_has_forced(selection, forced)
+	if forced == nil or #forced == 0 then
+		return true
+	end
+	local present = {}
+	for i = 1, #selection do
+		present[selection[i]] = true
+	end
+	for i = 1, #forced do
+		if present[forced[i]] ~= true then
+			return false
+		end
+	end
+	return true
+end
+
+local function cert_play_discard(builder, t, hand_cards, max_k, forced)
 	local cap = LIMITS.selection
 	local selections = hand_selections(hand_cards, #hand_cards, max_k, cap)
 	for i = 1, #selections do
-		builder.add({ type = t, certified = true, card_refs = build_hand_selection_refs(selections[i]) })
+		-- H3 alignment: never offer a selection the executor must refuse because
+		-- it omits a forced card. The executor still re-checks the same rule.
+		if selection_has_forced(selections[i], forced) then
+			builder.add({ type = t, certified = true, card_refs = build_hand_selection_refs(selections[i]) })
+		end
 	end
 end
 
@@ -1173,6 +1212,29 @@ local function needs_targets(card)
 	return rawget(consumeable, "max_highlighted") ~= nil
 end
 
+-- `Card:check_use` (card.lua:1581-1588) makes `G.FUNCS.use_card` a no-op for an
+-- Ankh while the joker area is full. The real engine sets `ability.name` from the
+-- center (`Card:set_ability`, card.lua:278) and stamps each center with its key
+-- (`game.lua:814-815`), so Ankh is identified by its engine name or its real
+-- center key `c_ankh` (`G.P_CENTERS.c_ankh.name == "Ankh"`, game.lua:581).
+local function is_ankh(card)
+	if rget(rget(card, "ability"), "name") == "Ankh" then
+		return true
+	end
+	return rget(rpath(card, "config", "center"), "key") == "c_ankh"
+end
+
+-- True when the engine's real `check_use` slot predicate lets this card commit.
+local function check_use_ok(G, card)
+	if not is_ankh(card) then
+		return true
+	end
+	local jokers = rget(G, "jokers")
+	local jcount = dense_count(rget(jokers, "cards"), LIMITS.jokers)
+	local jlimit = rpath(jokers, "config", "card_limit")
+	return jcount ~= nil and is_nat(jlimit) and jcount < jlimit
+end
+
 local function cert_use_consumables(builder, G)
 	local consumeables, count = area_cards(G, "consumeables", LIMITS.consumables)
 	if consumeables == nil then
@@ -1188,15 +1250,10 @@ local function cert_use_consumables(builder, G)
 		-- consumable slots.
 		local offered = type(card) == "table" and is_face_up(card) and not needs_targets(card)
 			and call_predicate(card, "can_use_consumeable") == true
-		if offered and rget(rget(card, "ability"), "name") == "Ankh" then
-			-- `Card:check_use` (card.lua:1581-1588) makes `use_card` a no-op
-			-- when the joker slots are full, so Ankh must not be offered then.
-			local jokers = rget(G, "jokers")
-			local jcount = dense_count(rget(jokers, "cards"), LIMITS.jokers)
-			local jlimit = rpath(jokers, "config", "card_limit")
-			if jcount == nil or not is_nat(jlimit) or jcount >= jlimit then
-				offered = false
-			end
+		if offered and not check_use_ok(G, card) then
+			-- Ankh with full joker slots: `use_card` is a no-op (`check_use`),
+			-- so it must not be offered (H4c/H5).
+			offered = false
 		end
 		if offered then
 			builder.add({
@@ -1419,8 +1476,10 @@ local function cert_booster(builder, G)
 					-- never a free-slot check. Without it, picking a
 					-- highlight-required Tarot (Talisman/Aura/Cryptid/...) with
 					-- nothing highlighted crashes inside the queued event, and
-					-- Judgement/Soul/Wraith can over-fill the joker slots.
-					if call_predicate(card, "can_use_consumeable") == true then
+					-- Judgement/Soul/Wraith can over-fill the joker slots. B:
+					-- the same `check_use` slot predicate that refuses a held
+					-- Ankh also applies to a pack Ankh (its `use_card` no-op).
+					if call_predicate(card, "can_use_consumeable") == true and check_use_ok(G, card) then
 						builder.add({ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { card_ref } })
 					end
 				else
@@ -1439,19 +1498,17 @@ local function cert_booster(builder, G)
 	local hand_first = rget(rget(hand, "cards"), 1)
 	local hand_limit = rpath(hand, "config", "card_limit")
 	local pack_first = type(rawget(cards, 1)) == "table"
-	-- H1: SMODS routes every mod booster through `SMODS_BOOSTER_OPENED` and
-	-- extends `can_skip_booster` to that state (smods-booster.toml:124-126).
-	-- Under SMODS the opened booster object (SMODS.OPENED_BOOSTER, which the
-	-- adapter must not read) owns the pack contents, so the state itself is the
-	-- authoritative skip signal even while `G.pack_cards` is (re)materializing;
-	-- for the vanilla pack states the `G.pack_cards.cards[1]` guard still applies.
-	local skippable
-	if state_is("SMODS_BOOSTER_OPENED") then
-		skippable = true
-	else
-		skippable = pack_first and (state_is("PLANET_PACK") or state_is("STANDARD_PACK")
-			or state_is("BUFFOON_PACK") or hand_first ~= nil or (is_nat(hand_limit) and hand_limit <= 0))
-	end
+	-- H1/A: SMODS routes every mod booster through `SMODS_BOOSTER_OPENED` and
+	-- extends `can_skip_booster` to that state (smods-booster.toml:124-126), but
+	-- the real UI still requires a pack card FIRST (`G.pack_cards.cards[1]`,
+	-- button_callbacks.lua:2133). After opening, the booster leaves the play area
+	-- and its cards are created a beat later (card.lua:1721-1790), so a
+	-- state-only skip would let the AI skip a paid pack before any card appears.
+	-- Keep the pack-card guard for every state, SMODS included.
+	local skippable = pack_first and (state_is("SMODS_BOOSTER_OPENED")
+		or state_is("PLANET_PACK") or state_is("STANDARD_PACK")
+		or state_is("BUFFOON_PACK") or hand_first ~= nil
+		or (is_nat(hand_limit) and hand_limit <= 0))
 	if skippable then
 		builder.add({ type = "SKIP_BOOSTER", certified = true })
 	end
@@ -1508,11 +1565,12 @@ local function build_certificates(G, MP, phase, context, hand_cards, target)
 		local discards_left = rpath(game, "current_round", "discards_left")
 		local block_play = rget(rget(game, "blind"), "block_play")
 		if hand_cards ~= nil and #hand_cards > 0 then
+			local forced = forced_hand_ordinals(G)
 			if is_int(hands_left) and hands_left > 0 and (block_play == nil or block_play == false) then
-				cert_play_discard(builder, "PLAY_CARDS", hand_cards, LIMITS.max_play)
+				cert_play_discard(builder, "PLAY_CARDS", hand_cards, LIMITS.max_play, forced)
 			end
 			if is_int(discards_left) and discards_left > 0 then
-				cert_play_discard(builder, "DISCARD_CARDS", hand_cards, LIMITS.max_play)
+				cert_play_discard(builder, "DISCARD_CARDS", hand_cards, LIMITS.max_play, forced)
 			end
 		end
 		cert_sell_jokers(builder, G)

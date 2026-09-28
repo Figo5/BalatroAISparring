@@ -55,13 +55,38 @@ assert(catalogue('Ace','Hearts') == catalogue('3','Clubs'),
   'hidden rank/suit changed the policy-visible candidate catalogue')
 """,
     "smods_booster_can_skip_with_no_hand": """
-local e,p = setup({state=support.STATES.SMODS_BOOSTER_OPENED,pack_cards={},hand={}})
+local e,p = setup({state=support.STATES.SMODS_BOOSTER_OPENED,pack_cards={support.card({rank='2'})},hand={}})
 local list = candidates(p)
 for _,a in ipairs(list) do if a.type=='SKIP_BOOSTER' then
   assert(p.executor.validate(a), 'SMODS skip rejected by executor')
   return
 end end
 error('SMODS booster with no usable card has no escape action')
+""",
+    "smods_empty_opening_pack_cannot_skip": """
+local e,p = setup({state=support.STATES.SMODS_BOOSTER_OPENED,pack_cards={},hand={}})
+local list = candidates(p)
+for _,a in ipairs(list) do assert(a.type~='SKIP_BOOSTER', 'opening animation offered premature skip') end
+assert(p.executor.validate({type='SKIP_BOOSTER',id='empty-pack'})~=true,
+  'executor accepted skip before pack cards exist')
+""",
+    "spectral_ankh_full_slots_not_offered": """
+local card = support.card({set='Spectral',center_set='Spectral',consumeable_data={},center='c_ankh',usable=true})
+local filler = support.card({set='Joker',center_set='Joker',center='j_joker'})
+local e,p = setup({state=support.STATES.SMODS_BOOSTER_OPENED,pack_cards={card},jokers={filler},joker_slots=1,hand={}})
+local list = candidates(p)
+for _,a in ipairs(list) do assert(a.type~='SELECT_BOOSTER_ITEM', 'full-slot Ankh offered despite real check_use refusal') end
+assert(p.executor.validate({type='SELECT_BOOSTER_ITEM',card_refs={'booster:1'},id='full-slot-ankh'})~=true,
+  'executor accepted full-slot pack Ankh despite real check_use refusal')
+""",
+    "reverted_reorder_is_not_success": """
+local first = support.card({set='Joker',center_set='Joker',center='j_joker'})
+local second = support.card({set='Joker',center_set='Joker',center='j_mult'})
+local e,p = setup({state=support.STATES.SHOP,jokers={first,second}})
+e.G.jokers.align_cards = function(self) self.cards={first,second} end
+local action = {type='REORDER_JOKERS',order={'joker:2','joker:1'},id='reverted-order'}
+assert(p.executor.validate(action), 'positive reorder precondition failed')
+assert(p.executor.dispatch(action)~=true, 'reverted order reported successful, enabling endless policy loop')
 """,
     "pack_targeted_card_not_offered_without_targets": """
 local card = support.card({set='Spectral',center_set='Spectral',consumeable_data={},center='c_cryptid',usable=false})

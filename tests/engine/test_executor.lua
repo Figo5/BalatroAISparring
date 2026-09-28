@@ -583,12 +583,93 @@ return function(ctx)
 	end)
 
 	test("skip_booster_smods_state_dispatch", function()
-		-- H1: SMODS boosters are always skippable in `SMODS_BOOSTER_OPENED`.
-		local engine, pipeline = setup({ state = STATES.SMODS_BOOSTER_OPENED, pack_cards = {} })
+		-- H1: SMODS boosters are skippable in `SMODS_BOOSTER_OPENED` with no hand.
+		-- A: the real skip still requires a pack card to exist first, so the
+		-- fixture uses a real pack card rather than an empty pack.
+		local engine, pipeline = setup({
+			state = STATES.SMODS_BOOSTER_OPENED,
+			pack_cards = { support.card({ rank = "2" }) },
+			hand = {},
+		})
 		local action = { type = "SKIP_BOOSTER", id = "skip-smods" }
 		is_true(pipeline.executor.validate(action) == true)
 		is_true(pipeline.executor.dispatch(action) == true)
 		eq(engine.calls[#engine.calls].name, "skip_booster")
+	end)
+
+	test("skip_booster_smods_empty_pack_refused", function()
+		-- A: while the opened booster's cards have not materialized
+		-- (`G.pack_cards.cards[1]` absent) the real UI cannot skip, so neither
+		-- the executor may accept one.
+		local _, pipeline = setup({ state = STATES.SMODS_BOOSTER_OPENED, pack_cards = {}, hand = {} })
+		local action = { type = "SKIP_BOOSTER", id = "skip-smods-empty" }
+		local ok, code = pipeline.executor.validate(action)
+		eq(ok, nil)
+		eq(code, "exec_illegal")
+	end)
+
+	test("select_booster_ankh_full_slots_refused", function()
+		-- B: a pack Ankh with full joker slots is a `use_card` no-op
+		-- (`Card:check_use`), even though `can_use_consumeable` passes, so the
+		-- executor refuses it. The adapter uses the same predicate.
+		local ankh = support.card({ set = "Spectral", center_set = "Spectral", consumeable_data = {}, center = "c_ankh", usable = true })
+		local filler = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+		local _, pipeline = setup({
+			state = STATES.SMODS_BOOSTER_OPENED,
+			pack_cards = { ankh },
+			jokers = { filler },
+			joker_slots = 1,
+			hand = {},
+		})
+		local action = { type = "SELECT_BOOSTER_ITEM", card_refs = { "booster:1" }, id = "pack-ankh-full" }
+		local ok, code = pipeline.executor.validate(action)
+		eq(ok, nil)
+		eq(code, "exec_illegal")
+	end)
+
+	test("reorder_reverted_by_align_cards_fails", function()
+		-- NEW-1: `align_cards` can replace/re-sort `area.cards`; a reorder that
+		-- does not stick must be a clean failure, never a "successful" submit
+		-- that lets a deterministic policy loop in the shop forever.
+		local first = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+		local second = support.card({ set = "Joker", center = "j_mult", area_type = "joker" })
+		local engine, pipeline = setup({ state = STATES.SHOP, jokers = { first, second } })
+		engine.G.jokers.align_cards = function(self)
+			self.cards = { first, second }
+		end
+		local action = { type = "REORDER_JOKERS", order = { "joker:2", "joker:1" }, id = "reorder-reverts" }
+		is_true(pipeline.executor.validate(action) == true)
+		local ok, code = pipeline.executor.dispatch(action)
+		eq(ok, nil)
+		eq(code, "exec_callback_failed")
+	end)
+
+	test("advance_ui_no_control_clears_stale_control", function()
+		-- NEW-2: if the engine leaves ROUND_EVAL without the AI pressing
+		-- cash-out, the latched control is stale. `advance_ui` must clear it so
+		-- the next `capture` can proceed instead of being blocked forever.
+		local marker = { config = { button = "cash_out" } }
+		local element_for = function(name)
+			if name == "cash_out" then
+				return marker
+			end
+			return nil
+		end
+		local engine, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = {} }, { element_for = element_for })
+		local handle, code = pipeline.executor.capture()
+		eq(handle, nil)
+		eq(code, "exec_control_required")
+		eq(pipeline.executor.last_control_state(), "cash_out")
+
+		engine.G.STATE = STATES.SHOP
+		local ok, acode = pipeline.executor.advance_ui()
+		eq(ok, nil)
+		eq(acode, "exec_no_control")
+		eq(pipeline.executor.last_control_state(), nil)
+
+		local shop_handle, shop_code = pipeline.executor.capture()
+		is_true(shop_handle ~= nil, "capture after stale control: " .. tostring(shop_code))
+		eq(pipeline.executor.last_control_state(), nil)
 	end)
 
 	test("reorder_uses_metatable_area_methods", function()
