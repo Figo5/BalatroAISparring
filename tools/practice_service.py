@@ -1269,10 +1269,20 @@ class PracticeService:
             if self._state.terminal_summary is None:
                 self._state.terminal = True
                 self._state.terminal_phase = TERMINAL_CLOSED
-                self._state.terminal_reason = code
-                if self._state.terminal_result is None:
-                    self._state.terminal_result = "aborted"
-                summary = self._finalize_terminal_locked("aborted", code, {})
+                if self._state.human_end is not None:
+                    # An abort/void that lands during the AI-receipt wait must not
+                    # overwrite the human's authoritative result: keep the human
+                    # terminal result and reason, recording the abort code only as
+                    # ``last_error`` (already set above).
+                    result = self._state.terminal_result if self._state.terminal_result is not None else "aborted"
+                    reason = self._state.terminal_reason or "human_end"
+                else:
+                    self._state.terminal_reason = code
+                    if self._state.terminal_result is None:
+                        self._state.terminal_result = "aborted"
+                    result = "aborted"
+                    reason = code
+                summary = self._finalize_terminal_locked(result, reason, {})
         if job is not None:
             job.cancel()
         if summary is not None:

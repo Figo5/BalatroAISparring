@@ -212,7 +212,8 @@ checker is injectable (`runtime_checker=`) so fixtures never depend on `lupa`.
 Every check that does not need the user's game closed runs **before** the `start`
 acknowledgement (M-3): the fixed match port must be configured, the measurement API
 and certificate must be valid, the server adaptation must be proven, the staged
-endpoints must exist and the Major League ruleset digest must be derivable. A
+endpoints must exist, the certificate's role-parity Mods digest must be available
+and the Major League ruleset digest must be derivable. A
 failure here refuses the acknowledgement (`HostDaemon._op_start` → `default_start_gate`)
 so the user never quits Balatro only to watch the session fail after launch. The
 `serve` subcommand also refuses to start without `--match-port`. The exclusive open
@@ -303,7 +304,8 @@ digest, not a locally hashed tree.
   binaries survive; it never writes the upstream tree.
 - **Server process.** `default_server_runner()` launches the **verified absolute
   Node path** that `verify_server_adaptation` hashed (never a bare `node` resolved
-  by PATH) with the roles' exact retained-ownership sequence (M-1): on Windows the
+  by PATH; `_verified_node_path` has no `which` fallback and fails closed) with the
+  roles' exact retained-ownership sequence (M-1): on Windows the
   server is created `CREATE_SUSPENDED`, assigned to a **mandatory** kill-on-close
   Job Object, resumed, and its create time is read from the retained handle. Its
   image path is re-read through a separate query handle and must equal the launched
@@ -337,7 +339,11 @@ digest, not a locally hashed tree.
   would have to share a role's strictly-increasing sequence counter with the real
   role runtime. The supervisor treats a terminal phase as a normal completion
   **only** when `terminal_reason == "human_end"`; a role loss, pre-start timeout or
-  abort is a failure even though its phase reads `closed` (H-C). The host calls the
+  abort is a failure even though its phase reads `closed` (H-C). The staged human
+  window exiting is likewise a completion **only** when the service's real
+  `terminal_reason` is `human_end`; an unexpected mid-match human exit fails with
+  `practice_human_exited_before_end` and runs the measured failure cleanup (N-1).
+  The host calls the
   trusted `service.abort(code)` on any failure or void so both roles see
   `practice_aborted` and can stop through their normal MP flow. The secret
   gauntlet seed is served by the authenticated `setup` op to the human role only.
@@ -395,12 +401,24 @@ for the measured after-verdict. If the record has **no bound owned PIDs** (a
 failure before any role spawned), the certificate's measured
 `record_session_no_spawn` closure is used instead, so a pre-spawn failure cannot
 strand an open record that nothing in the product can close (H-A). If the
-after-diff cannot be measured (a live game is open, or the verdict errors), the
-open record **and** the `session_unmeasured` host lockout are retained; a new
-ticket (`practice_session_open_unmeasured`) and an `acknowledge` are both refused
-until a measured closure exists. Only a real `live_byte_diff_revoked` verdict
-raises the byte-diff lockout; any other refusal keeps `session_unmeasured`. A
-failed session can therefore never silently re-baseline the next one (C1).
+after-diff cannot be measured — a live game is open, or the verdict is refused for
+any reason other than a real byte diff — the owned session is closed and its
+retained handles must prove exit before the record is closed as a measured
+**failure** through
+`record_session_failure(session_id, reason=<code>)`, which raises the certificate's
+persistent lockout (H-A-1); the host's `session_unmeasured` lockout stands. If
+`close`/the owned-handle query fails, or an owned handle still runs, ownership is
+retained and the record is deliberately left open — a refused closure never
+falsely closes a record while an owned process remains, and a delayed (but proven)
+exit still completes the same closure. The
+next `start` is refused (`practice_host_ack_required` /
+`practice_session_open_unmeasured`) and the `acknowledge` op is refused until that
+explicit closure exists; once the record is closed as failed, `acknowledge` clears
+both lockouts so a stuck session is always recoverable without hand-editing
+evidence. A pre-launch live reappearance takes the same reviewed void/failure
+path. Only a real `live_byte_diff_revoked` verdict raises the byte-diff lockout;
+any other refusal closes as failed with `session_unmeasured`. A failed session can
+therefore never silently re-baseline the next one (C1).
 
 ## 9. Session report and per-session live diff
 
@@ -421,7 +439,12 @@ requires every owned handle stopped and the user's game closed
 (`session_closure_unproven` otherwise) — the host never passes caller
 snapshots or a `closed_check` boolean. Any live byte difference revokes the
 certificate generation, writes the append-only receipt and the persistent lockout
-plus the diff, and the host adds its own acknowledgement lockout. Only a measured
+plus the diff, and the host adds its own acknowledgement lockout. A refusal for any
+other reason (`session_closure_unproven`, `live_verdict_failed`, or a live game
+open at the measured check) closes the record as a measured **failure** through
+`record_session_failure` — but only once the owned handles are proven exited;
+otherwise ownership is retained and the record stays open, so the daemon is never
+wedged by a false closure (H-A-1). Only a measured
 passed verdict clears the `session_unmeasured` lockout. The host **never**
 auto-restores live from a backup: that is itself a live write and requires
 explicit user approval.
@@ -529,10 +552,19 @@ Balatro and is not game/review acceptance.
   `mark_attested` strictly after both probes and before the attestation files,
   server-before-roles ordering, descriptor-env-gap refusal, fail-closed-before-
   launch, attestation failure, the human-retention / no-deadline honesty, the
-  unmeasured-failure lockout that is never silently re-baselined (and is cleared
-  only on a measured pass), live-game-appears void + lockout, live-diff
-  revocation lockout, listener-failure cleanup (roles never spawned) and
-  launch-failure cleanup;
+  unmeasured-failure **failure closure and persistent lockout** that is never
+  silently re-baselined (and is cleared only by an explicit `acknowledge`), a real
+  certificate `session_closure_unproven` followed by a successful `acknowledge`, a
+  pre-launch live reappearance that closes the never-spawned record as failed and
+  then recovers through `acknowledge`, a failed `Job.close` with a still-running
+  owned human (ownership retained, no failure closure, record stays open), a
+  delayed-but-proven owned exit that still completes the failure closure and
+  `acknowledge`, a persistence exception/refusal that leaves `_record_started`
+  set, an unexpected human exit (failure) versus a
+  service-authoritative `human_end` (completion), live-game-appears void + lockout,
+  live-diff revocation lockout, listener-failure cleanup (roles never spawned) and
+  launch-failure cleanup, and the reserved-ticket release when the supervisor
+  factory raises;
 - server environment allowlisting (SQLite path stays in the repo) and developer
   launcher output confinement.
 
@@ -588,7 +620,11 @@ any method is absent. The exact surface it calls:
   `bind_open_session(staging_root, session_id, pids=, spawn_time=)`,
   `record_session_verdict(staging_root, session_id=, live=, **session=<retained
   LaunchSession>**, **live_closed=<enumerator check>**, backup_id=,
-  certificate_id=)`, `record_session_failure(staging_root, session_id=, reason=)`;
+  certificate_id=)`, `record_session_failure(staging_root, session_id=, reason=)`,
+  `record_session_no_spawn(staging_root, session_id=, live=, backup_id=)`. All of
+  these (including `record_session_no_spawn`) are required
+  `_MEASUREMENT_API_METHODS` members, so a missing/renamed closure method refuses
+  the session before the open record is written instead of degrading to a wedge;
 - `isolation_certificate.write_launcher_attestation(staging_root, session_id=,
   nonce=, control_port=, port=)`;
 - `isolation_certificate.collect_layer_m(staging_root)` (or

@@ -62,8 +62,23 @@ def terminal_session_rejects_first_seed():
         service.close()
 
 
+
+def authoritative_result_survives_receipt_wait_abort():
+    with tempfile.TemporaryDirectory() as folder:
+        service=fixture.make_service(folder)
+        wire=fixture.Session(service)
+        wire.handshake()
+        assert wire.send('human','end',{'result':'human_win'})['ok']
+        service.abort('ai_receipt_failed')
+        service.close()
+        terminal=[row for row in fixture.read_jsonl(Path(folder)/'logs'/'summary.jsonl') if row.get('terminal')]
+        assert len(terminal)==1,terminal
+        assert terminal[0]['result']=='human_win',terminal
+        assert service.terminal_reason=='human_end'
+
+
 def main():
-    cases=(abort_is_visible_to_host, resolved_seed_has_one_human_author, terminal_summary_waits_for_receipt, terminal_session_rejects_first_seed)
+    cases=(abort_is_visible_to_host, resolved_seed_has_one_human_author, terminal_summary_waits_for_receipt, terminal_session_rejects_first_seed, authoritative_result_survives_receipt_wait_abort)
     failures=0
     for case in cases:
         try:

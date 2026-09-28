@@ -161,6 +161,7 @@ CODE_FRESH_BACKUP_REQUIRED = "practice_requires_fresh_backup_baseline"
 CODE_ATTESTATION = "practice_attestation_failed"
 CODE_LIVE_APPEARED = "practice_live_game_appeared"
 CODE_HUMAN_EXIT_UNVERIFIED = "practice_human_exit_unverified"
+CODE_HUMAN_EXIT_BEFORE_END = "practice_human_exited_before_end"
 CODE_ACK_REQUIRED = "practice_host_ack_required"
 CODE_DESCRIPTOR_ENV_GAP = "practice_descriptor_env_unbound"
 CODE_STATIC_GATES_FAILED = "practice_static_gates_failed"
@@ -1187,6 +1188,7 @@ _MEASUREMENT_API_METHODS = (
     "bind_open_session",
     "record_session_verdict",
     "record_session_failure",
+    "record_session_no_spawn",
     "write_launcher_attestation",
     "list_open_records",
     "collect_layer_m",
@@ -2174,7 +2176,10 @@ class MatchSupervisor:
         plan = self._build_plan()
         pre_live = self._live_closed()
         if not pre_live.get("ok"):
-            return self._fail(CODE_LIVE_APPEARED)
+            # H-A-1: a live game reappearing before the roles spawn takes the reviewed
+            # void/failure-closure path, exactly like an in-run reappearance, so a
+            # never-spawned record can never be left open with no way to close it.
+            return self._void(CODE_LIVE_APPEARED)
         if self._attestation_rotator is not None:
             self._attestation_rotator(self.config)
         else:
@@ -2320,12 +2325,18 @@ class MatchSupervisor:
         verdict = self._record_live_verdict()
         self.live_verdict = verdict
         if verdict is not None and verdict.get("ok") is False:
-            # H-A: only a real measured byte diff is a live change; any other
-            # refusal (unmeasured closure) retains the unmeasured lockout instead.
+            # H-A: only a real measured byte diff is a live change. Any other refusal
+            # (an unmeasured closure) closes the record as failed + persistent lockout
+            # so the next ticket/acknowledge is not wedged (H-A-1).
             if verdict.get("code") == "live_byte_diff_revoked":
                 return self._fail(CODE_LIVE_CHANGED, live_verdict=verdict)
+            if self._record_started and self.config.require_certificate:
+                return self._finalize_refused_closure(verdict.get("code") or "live_verdict_failed")
             return self._finalize_unverified_human()
         if verdict is None or verdict.get("ok") is not True:
+            if self._record_started and self.config.require_certificate:
+                code = verdict.get("code") if isinstance(verdict, dict) else None
+                return self._finalize_refused_closure(code or "live_verdict_failed")
             return self._finalize_unverified_human()
         self._clear_unmeasured_lockout()
         self._set_phase("completed")
@@ -2464,6 +2475,48 @@ class MatchSupervisor:
             steam_root=self.config.steam_root,
         )
 
+    def _owned_exit_proven(self) -> bool:
+        """True only when every retained owned handle reports it has exited.
+
+        The proof is over the session's own retained process handles, never the
+        synthetic role statuses, so a still-running owned process always fails
+        closed. A query failure is itself treated as unproven (never a success).
+        """
+        session = self.session
+        if session is None:
+            return True
+        try:
+            return not any(
+                bool(item.is_running()) for item in getattr(session, "owned", ()) or ()
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _retire_session(self) -> bool:
+        """Close owned handles and prove exit before dropping ownership (H-A-1).
+
+        Returns ``True`` only once ``session.close()`` succeeded *and* every
+        retained owned handle reports it has exited (bounded reaping window). A
+        close/query failure, or an owned handle that is still running, returns
+        ``False`` and keeps ``self.session`` so an open record can never be
+        falsely closed while an owned process remains.
+        """
+        if self.session is None:
+            return True
+        self._terminate_roles()
+        try:
+            self.session.close()
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            self._reap_owned()
+        except Exception:  # noqa: BLE001
+            return False
+        if not self._owned_exit_proven():
+            return False
+        self.session = None
+        return True
+
     def _finalize_unverified_human(self) -> dict:
         """Human window still open / unmeasured: never claim a post-run zero diff.
 
@@ -2476,6 +2529,34 @@ class MatchSupervisor:
         self.human_retained = True
         return self._finalize(error_code=CODE_HUMAN_EXIT_UNVERIFIED, human_retained=True)
 
+    def _finalize_refused_closure(self, code: str, **extra) -> dict:
+        """A refused/unmeasurable after-verdict closes the open record as failed.
+
+        H-A-1: the record may only be closed as a measured *failure* once the
+        owned session is proven closed and exited. If ``close``/the owned-handle
+        query fails, or an owned handle still runs, ownership is retained, the
+        record stays open and no failure closure is written: a refused closure
+        must never falsely close a record while an owned process remains.
+
+        Once safe, the certificate closes the record as failed (raising its
+        persistent lockout) and the host's own ``session_unmeasured`` lockout
+        stands, so the next ticket and ``acknowledge`` behave exactly as a void.
+        """
+        self._stop_server()
+        self._stop_service()
+        self.phase = "failed"
+        self.code = code
+        self.error = _compact_error(code)
+        if not self._retire_session():
+            self.human_retained = True
+            return self._finalize(
+                error_code=code, human_retained=True, closure_unproven=True, **extra
+            )
+        self.human_retained = False
+        if self._record_started and self.config.require_certificate:
+            self._record_failure_closure(code)
+        return self._finalize(error_code=code, **extra)
+
     def _void(self, code: str, **extra) -> dict:
         """A live game appeared: stop practice, close the record as failed, lock out.
 
@@ -2483,7 +2564,9 @@ class MatchSupervisor:
         record must not be left open forever. Once the owned handles are confirmed
         exited the certificate closes the record as a measured *failure* and raises
         its persistent lockout; the existing ``acknowledge`` op then records an
-        append-only acknowledgement. Nothing is silently re-baselined.
+        append-only acknowledgement. Nothing is silently re-baselined. If an owned
+        handle cannot be proven exited, ownership is retained and the record stays
+        open rather than being falsely closed.
         """
         self.voided = True
         self._set_phase("void")
@@ -2493,37 +2576,40 @@ class MatchSupervisor:
             except Exception:  # noqa: BLE001
                 pass
         set_host_lockout(self.config, reason=code, session_id=self.session_id)
-        for item in getattr(self.session, "owned", ()) if self.session is not None else ():
-            try:
-                item.terminate()
-            except Exception:  # noqa: BLE001
-                pass
         self._stop_server()
         self._stop_service()
-        self.human_retained = False
-        self._reap_owned()
-        if self.session is not None:
-            try:
-                self.session.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self.session = None
-        if self._record_started and self.config.require_certificate:
-            self._record_failure_closure(code)
         self.code = code
         self.error = _compact_error(code)
+        if not self._retire_session():
+            self.human_retained = True
+            return self._finalize(
+                error_code=code, void=True, human_retained=True, closure_unproven=True, **extra
+            )
+        self.human_retained = False
+        if self._record_started and self.config.require_certificate:
+            self._record_failure_closure(code)
         return self._finalize(error_code=code, void=True, **extra)
 
-    def _record_failure_closure(self, code: str) -> None:
-        """Close the open record as a measured failure and raise the cert lockout (H-B)."""
+    def _record_failure_closure(self, code: str) -> bool:
+        """Close the open record as a measured failure and raise the cert lockout (H-B).
+
+        ``_record_started`` is cleared only after the certificate actually
+        persisted the closure. A raised or refused persistence leaves the record
+        open (and the caller's ownership intact) rather than pretending it closed.
+        """
         api = self._certificate_api
         if api is None or not callable(getattr(api, "record_session_failure", None)):
-            return
+            return False
         try:
-            api.record_session_failure(self.config.staging_root, session_id=self.session_id, reason=str(code))
+            verdict = api.record_session_failure(
+                self.config.staging_root, session_id=self.session_id, reason=str(code)
+            )
         except Exception:  # noqa: BLE001
-            pass
+            return False
+        if isinstance(verdict, Mapping) and verdict.get("ok") is False:
+            return False
         self._record_started = False
+        return True
 
     def _build_plan(self) -> dict:
         return {
@@ -2561,15 +2647,14 @@ class MatchSupervisor:
         return descriptors
 
     def _verified_node_path(self) -> Optional[str]:
-        """The verified absolute Node path (M-1), never a bare PATH-resolved name."""
+        """The verified absolute Node path (M-1), never a bare PATH-resolved name.
+
+        Only the path ``verify_server_adaptation`` hashed and recorded in the gate
+        verdict is accepted; there is deliberately no ``shutil.which`` fallback, so
+        an unverified PATH-resolved interpreter can never be launched (fail closed).
+        """
         verdict = self._gates.get("server") if isinstance(self._gates, Mapping) else None
         candidate = verdict.get("node_executable") if isinstance(verdict, Mapping) else None
-        if not candidate:
-            which = self._which or shutil.which
-            try:
-                candidate = which(self.config.node_executable) or which("node")
-            except Exception:  # noqa: BLE001
-                candidate = None
         if isinstance(candidate, str) and candidate and Path(candidate).is_file():
             return candidate
         return None
@@ -2635,7 +2720,17 @@ class MatchSupervisor:
                 if "ai" in exited and not terminal:
                     return {"ok": False, "code": CODE_ROLE_EXITED, "role": "ai"}
                 if "human" in exited:
-                    # The human closing its staged window ends the isolated session.
+                    # N-1: the human closing its staged window ends the isolated
+                    # session only when the real service terminal reason is the
+                    # authoritative human END. A mid-match close or crash is an
+                    # abnormal end the host must report (measured cleanup follows).
+                    reason = str(getattr(self.service, "terminal_reason", "") or "")
+                    if reason != "human_end":
+                        return {
+                            "ok": False,
+                            "code": CODE_HUMAN_EXIT_BEFORE_END,
+                            "reason": reason,
+                        }
                     return {"ok": True, "code": CODE_OK, "role": "human"}
             if terminal:
                 # Only the human coordinator END authorizes a normal completion.
@@ -2696,33 +2791,57 @@ class MatchSupervisor:
         return self._finalize(error_code=code, **extra)
 
     def _shutdown_after_spawn(self) -> None:
-        """Close owned handles (except a retained human), then measure the after-diff.
+        """Close owned handles, then measure the after-diff or close as failed.
 
         Every exit after the persistent record exists takes the certificate's own
         measured verdict once live is actually closed. If no role was ever spawned
         (the record has no bound PIDs) the certificate's no-spawn closure is used
         instead, so a pre-spawn failure cannot strand an open record (H-A). If the
-        closure cannot be measured (a live game is open or the verdict errors), the
-        open record and the unmeasured lockout are deliberately retained so the next
-        session cannot silently rebaseline (C1).
+        closure cannot be measured -- a live game is open, or the verdict is refused
+        for any non-diff reason -- the owned session is closed and, only once its
+        exit is proven, the record is closed as a measured *failure* (H-A-1), which
+        raises the certificate lockout while the host's ``session_unmeasured``
+        lockout stands. If an owned handle cannot be proven exited, ownership is
+        retained and the record stays open. Only a real measured
+        ``live_byte_diff_revoked`` verdict raises the byte-diff lockout, and only a
+        measured pass clears the unmeasured lockout, so a session can never silently
+        rebaseline (C1).
         """
         self._stop_server()
         self._stop_service()
         self._terminate_roles()
         self._reap_owned()
+        failure_code: Optional[str] = None
         live = self._live_closed()
-        if live.get("ok"):
+        if not live.get("ok"):
+            # The live tree is changing: no after-snapshot is taken, but a still-open
+            # record is closed as failed so it can never be left open forever.
+            failure_code = CODE_LIVE_APPEARED
+        else:
             spawned = self.session is not None and bool(getattr(self.session, "owned", ()))
             verdict = self._record_live_verdict() if spawned else self._record_no_spawn_verdict()
             if isinstance(verdict, dict) and verdict.get("ok") is True:
                 self._clear_unmeasured_lockout()
-        if self.session is not None:
-            try:
-                self.session.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self.session = None
+            elif not (
+                isinstance(verdict, dict)
+                and verdict.get("ok") is False
+                and verdict.get("code") == "live_byte_diff_revoked"
+            ):
+                # Refused/unmeasured for a non-diff reason: close the record as failed
+                # after the owned session is closed, so the next ticket/acknowledge is
+                # not wedged (H-A-1). The exact byte-diff classification is preserved:
+                # only the measured revocation branch above raises it.
+                failure_code = (verdict or {}).get("code") if isinstance(verdict, dict) else None
+                failure_code = failure_code or "session_closure_unproven"
+        if not self._retire_session():
+            # An owned handle could not be proven exited (or close/query failed):
+            # retain ownership and leave the record open rather than falsely
+            # recording a failure closure while an owned process remains.
+            self.human_retained = True
+            return
         self.human_retained = False
+        if failure_code is not None and self._record_started and self.config.require_certificate:
+            self._record_failure_closure(failure_code)
 
     def _finalize(self, error_code: Optional[str] = None, **extra) -> dict:
         report = {
@@ -3234,26 +3353,44 @@ class HostDaemon:
                 "code": gate.get("code") or CODE_INTERNAL,
                 "problems": gate.get("problems") or [],
             }
-        ticket.request = clean
-        # Retire a finished previous ticket's owned handles, but never a retained
-        # human window (its handle stays owned by this daemon until it exits).
-        if previous is not None and previous.supervisor is not None:
-            try:
-                still_human = callable(getattr(previous.supervisor, "human_active", None)) and previous.supervisor.human_active()
-            except Exception:  # noqa: BLE001
-                still_human = False
-            if not still_human:
+        try:
+            ticket.request = clean
+            # Retire a finished previous ticket's owned handles, but never a retained
+            # human window (its handle stays owned by this daemon until it exits).
+            if previous is not None and previous.supervisor is not None:
                 try:
-                    previous.supervisor.cleanup()
+                    still_human = callable(getattr(previous.supervisor, "human_active", None)) and previous.supervisor.human_active()
+                except Exception:  # noqa: BLE001
+                    still_human = False
+                if not still_human:
+                    try:
+                        previous.supervisor.cleanup()
+                    except Exception:  # noqa: BLE001
+                        pass
+            supervisor = self._supervisor_factory(self.config, clean)
+            ticket.supervisor = supervisor
+            thread = threading.Thread(
+                target=self._run_ticket, args=(ticket, supervisor), name="practice-host-supervisor", daemon=True
+            )
+            ticket.thread = thread
+            # A concurrent stop() can retire this daemon (and this ticket) after the
+            # reservation ran. Re-check under the lock so a stopped daemon never
+            # launches an orphan supervisor thread.
+            with self._lock:
+                retired = self._ticket is not ticket or self._server is None
+            if retired:
+                _release()
+                try:
+                    supervisor.cleanup()
                 except Exception:  # noqa: BLE001
                     pass
-        supervisor = self._supervisor_factory(self.config, clean)
-        ticket.supervisor = supervisor
-        thread = threading.Thread(
-            target=self._run_ticket, args=(ticket, supervisor), name="practice-host-supervisor", daemon=True
-        )
-        ticket.thread = thread
-        thread.start()
+                return {"ok": False, "code": CODE_HOST_CLOSED}
+            thread.start()
+        except BaseException:
+            # A factory/workspace-mkdir/thread-start failure must never leak the
+            # reserved slot (a later start would otherwise be stuck ``ticket_active``).
+            _release()
+            raise
         return {
             "ok": True,
             "code": CODE_ACCEPTED,
@@ -3362,6 +3499,15 @@ def default_start_gate(config, *, certificate_api=None, which=None, ruleset_read
     if not endpoints.get("ok"):
         return {"ok": False, "code": CODE_STAGED_ENDPOINTS, "endpoints": endpoints}
     if config.require_certificate:
+        # The role-parity Mods digest is also checked here, before the user quits the
+        # game, so a stale certificate refuses the acknowledgement instead of only
+        # failing after the human window has already been closed.
+        if not certificate_content_hash(certificate_api, config.staging_root):
+            return {
+                "ok": False,
+                "code": CODE_CERTIFICATE_REQUIRED,
+                "problems": ["role_parity_digest_unavailable"],
+            }
         reader = ruleset_reader or ruleset_contract.expected_ruleset
         try:
             ruleset = reader(config.staging_root)

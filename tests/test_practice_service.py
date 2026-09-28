@@ -911,6 +911,32 @@ def test_aborted_and_terminal_reason_are_real_service_state():
         assert service.terminal_phase == ps.TERMINAL_CLOSED
 
 
+def test_abort_during_ai_receipt_wait_preserves_human_result():
+    """Low: an abort during the AI-receipt wait keeps the human's authoritative result.
+
+    The abort code is recorded only as the last error; the single terminal summary
+    still carries the human END's result and reason.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp)
+        session = Session(service)
+        session.handshake()
+        human = session.send("human", "end", {"result": "human_win", "human_lives": 3, "ai_lives": 0})
+        assert human["ok"] and human["terminal_phase"] == ps.TERMINAL_AWAITING_AI
+        service.abort("ai_receipt_failed")
+        assert service.aborted is True
+        assert service.terminal_reason == "human_end"
+        assert service.terminal_summary()["terminal_result"] == "human_win"
+        assert service.terminal_phase == ps.TERMINAL_CLOSED
+        service.close()
+        terminal = [row for row in read_jsonl(Path(tmp) / "logs" / "summary.jsonl") if row.get("terminal")]
+        assert len(terminal) == 1, terminal
+        assert terminal[0]["result"] == "human_win"
+        assert terminal[0]["reason"] == "human_end"
+        assert terminal[0]["human_lives"] == 3
+        assert terminal[0]["ai_end_received"] is False
+
+
 def test_status_seed_is_human_only_and_accepted_once():
     """M-6: only the human role, exactly once, only in an initialized run.
 

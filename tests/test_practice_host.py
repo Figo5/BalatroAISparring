@@ -1503,6 +1503,7 @@ def _gate_ok(config, **extra):
         "ruleset": {},
         "live_map": {"install": str(config.live_install_root)},
         "open_record": None,
+        "server": {"ok": True, "code": practice_host.CODE_OK, "node_executable": sys.executable},
     }
     verdict.update(extra)
     return verdict
@@ -1798,6 +1799,40 @@ def test_supervisor_never_claims_zero_diff_while_human_window_open():
         assert by_role["human"].terminated == 1
 
 
+def test_supervisor_fails_on_unexpected_human_exit():
+    """N-1: a human window that closes mid-match is a failure, not a completion."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession(roles=("human", "ai"))
+        session.owned[0].running = False
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: FakeService(cfg),
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        result = supervisor.run()
+        assert result["ok"] is False, result
+        assert result["code"] == practice_host.CODE_HUMAN_EXIT_BEFORE_END, result
+
+
+def test_supervisor_accepts_human_exit_after_authoritative_end():
+    """N-1: a human window that closes after the service recorded human_end completes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession(roles=("human", "ai"))
+        session.owned[0].running = False
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="awaiting_ai"),
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert result["code"] == practice_host.CODE_OK
+
+
 def test_supervisor_records_revocation_lockout_on_live_diff():
     with tempfile.TemporaryDirectory() as tmp:
         config = make_config(tmp)
@@ -1819,7 +1854,7 @@ def test_supervisor_records_revocation_lockout_on_live_diff():
         assert supervisor.live_verdict["changed_roots"] == ["install"]
 
 
-def test_supervisor_never_rebaselines_after_an_unmeasured_failure():
+def test_supervisor_closes_unmeasured_failure_as_failed_and_never_rebaselines():
     with tempfile.TemporaryDirectory() as tmp:
         config = make_config(tmp)
         session = FakeSession()
@@ -1837,10 +1872,13 @@ def test_supervisor_never_rebaselines_after_an_unmeasured_failure():
         )
         result = supervisor.run()
         assert result["ok"] is False
-        # The pre-spawn unmeasured lockout is retained when the after-diff cannot be
-        # measured, so the next session can never silently re-baseline (C1).
+        # H-A-1: the still-open record is now closed as a measured failure so it can
+        # never wedge the next ticket or acknowledgement.
+        assert supervisor._record_started is False
+        assert api.failure_calls and api.failure_calls[-1]["reason"] == "live_verdict_failed"
+        # The persistent lockout is retained: the next session can never silently
+        # re-baseline (C1); only an explicit acknowledge clears it.
         assert practice_host.read_host_lockout(config)["locked"] is True
-        assert supervisor._record_started is True
         assert supervisor.open_record == "/stage/open/s.json"
         report = json.loads(supervisor.workspace.report_path.read_text(encoding="utf-8"))
         assert report["open_record"] == "/stage/open/s.json"
@@ -2459,6 +2497,32 @@ def test_daemon_start_reserves_ticket_atomically_before_preflight():
             daemon.stop()
 
 
+def test_daemon_releases_reserved_ticket_when_factory_raises():
+    """Low: a supervisor-factory/workspace failure must not leak the ticket slot."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+
+        def factory(cfg, request):
+            raise RuntimeError("supervisor workspace init failed")
+
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            start_gate=lambda: {"ok": True, "code": practice_host.CODE_OK},
+            supervisor_factory=factory,
+        )
+        daemon.start()
+        try:
+            refused = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert refused["code"] == practice_host.CODE_INTERNAL, refused
+            # The reservation is released, so a later start is not stuck ``ticket_active``.
+            assert daemon._ticket is None
+        finally:
+            daemon.stop()
+
+
 def _real_open_record(config, session_id, live, *, pids=None, backup_id="b" * 64):
     staging_root = Path(config.staging_root)
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -2567,6 +2631,324 @@ def test_supervisor_void_closes_record_as_failed_and_allows_acknowledge():
         ack = daemon._op_acknowledge({"confirm": True})
         assert ack["ok"] is True and ack["cleared"] is True, ack
         assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+
+
+class _StubbornHumanSession:
+    """A retained-session stand-in whose owned handles still read as running.
+
+    Mirrors the real ``LaunchSession`` surface the certificate's closure check uses
+    (``session_id``/``nonce``/``is_running``) without owning a real process, so the
+    real ``record_session_verdict`` returns ``session_closure_unproven``.
+    """
+
+    def __init__(self, session_id, nonce):
+        self.session_id = session_id
+        self.nonce = nonce
+        self.spawn_time = 1000.0
+        self.owned = []
+        self.closed = 0
+
+    def is_running(self):
+        return [{"role": "human", "pid": 7, "running": True}]
+
+    def close(self):
+        self.closed += 1
+
+
+def test_supervisor_prelaunch_live_reappearance_closes_record_and_recovers():
+    """H-A-1: a live game reappearing before the spawn still closes the record."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        install = Path(tmp) / "live" / "install"
+        appdata = Path(tmp) / "live" / "appdata"
+        install.mkdir(parents=True, exist_ok=True)
+        appdata.mkdir(parents=True, exist_ok=True)
+        live = {"install": str(install), "appdata": str(appdata)}
+        session_id = "s-prelaunch-live"
+        _real_open_record(config, session_id, live)
+        live_info = launch_practice.ProcessInfo(99, 1.0, _live_image(config), name="Balatro")
+        # Closed for the live-exit wait, then live reappears at the pre-launch check.
+        enumerator = SwitchEnumerator(closed_calls=1, then=[live_info])
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            certificate_api=isolation_certificate,
+            enumerator=enumerator,
+            gate_evaluator=lambda: _gate_ok(
+                config,
+                open_record=str(
+                    isolation_certificate._open_record_path(Path(config.staging_root), session_id)
+                ),
+                live_map=live,
+            ),
+        )
+        supervisor.session_id = session_id
+
+        result = supervisor.run()
+        assert result["code"] == practice_host.CODE_LIVE_APPEARED, result
+        assert supervisor.voided is True
+        assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+        closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert closed["status"] == "failed"
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is True
+
+        daemon = practice_host.HostDaemon(
+            config, certificate_api=isolation_certificate, opener=_live_opener(config), enumerator=FakeEnumerator([])
+        )
+        ack = daemon._op_acknowledge({"confirm": True})
+        assert ack["ok"] is True and ack["cleared"] is True, ack
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+
+
+def test_supervisor_refused_closure_closes_record_and_recovers():
+    """H-A-1: a real ``session_closure_unproven`` refusal closes the record as failed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        install = Path(tmp) / "live" / "install"
+        appdata = Path(tmp) / "live" / "appdata"
+        install.mkdir(parents=True, exist_ok=True)
+        appdata.mkdir(parents=True, exist_ok=True)
+        live = {"install": str(install), "appdata": str(appdata)}
+        session_id = "s-unproven"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = _StubbornHumanSession(session_id, "n" * 32)
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            certificate_api=isolation_certificate,
+            verdict_recorder=None,
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        supervisor.session = session
+        supervisor.service = FakeService(None, ended=True, terminal_phase="awaiting_ai")
+        supervisor.session_id = session_id
+        supervisor._gates = {"live_map": live}
+        supervisor.open_record = str(
+            isolation_certificate._open_record_path(Path(config.staging_root), session_id)
+        )
+        supervisor._record_started = True
+        supervisor._unmeasured_lockout = True
+        practice_host.set_host_lockout(config, reason="session_unmeasured", session_id=session_id)
+
+        result = supervisor._finalize_after_run()
+        assert result["ok"] is False, result
+        assert result["code"] == "session_closure_unproven", result
+        assert supervisor.human_retained is False
+        assert session.closed == 1
+        assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+        closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert closed["status"] == "failed"
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is True
+
+        daemon = practice_host.HostDaemon(
+            config, certificate_api=isolation_certificate, opener=_live_opener(config), enumerator=FakeEnumerator([])
+        )
+        ack = daemon._op_acknowledge({"confirm": True})
+        assert ack["ok"] is True and ack["cleared"] is True, ack
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+
+
+class _StuckOwnedRole:
+    """Owned handle whose terminate cannot stop it (mirrors a stuck Job Object)."""
+
+    def __init__(self, role, pid):
+        self.role = role
+        self.pid = pid
+        self.running = True
+        self.terminated = 0
+
+    def is_running(self):
+        return self.running
+
+    def terminate(self, timeout=10.0):
+        self.terminated += 1
+        return {"role": self.role, "pid": self.pid, "terminated": False}
+
+
+class _FailedCloseSession:
+    """Session whose close raises while its owned human still runs (root repro)."""
+
+    def __init__(self, session_id, nonce):
+        self.session_id = session_id
+        self.nonce = nonce
+        self.spawn_time = 1000.0
+        self.owned = [_StuckOwnedRole("human", 7)]
+        self.closed = 0
+
+    def is_running(self):
+        return [
+            {"role": item.role, "pid": item.pid, "running": item.is_running()}
+            for item in self.owned
+        ]
+
+    def close(self):
+        self.closed += 1
+        raise OSError("synthetic failed Job close")
+
+
+class _LingeringOwnedRole:
+    """Owned handle that only reports exit a few queries after ``terminate``."""
+
+    def __init__(self, role, pid, steps=3):
+        self.role = role
+        self.pid = pid
+        self.running = True
+        self.terminated = 0
+        self._steps = int(steps)
+        self._countdown = None
+
+    def is_running(self):
+        if self._countdown is None:
+            return self.running
+        if self._countdown > 0:
+            self._countdown -= 1
+            return True
+        return False
+
+    def terminate(self, timeout=10.0):
+        self.terminated += 1
+        self._countdown = self._steps
+        return {"role": self.role, "pid": self.pid, "terminated": True}
+
+
+class _LingeringSession:
+    """Session whose owned handle exits only after a bounded delay."""
+
+    def __init__(self, session_id, nonce, steps=3):
+        self.session_id = session_id
+        self.nonce = nonce
+        self.spawn_time = 1000.0
+        self.owned = [_LingeringOwnedRole("human", 7, steps)]
+        self.closed = 0
+
+    def is_running(self):
+        return [
+            {"role": item.role, "pid": item.pid, "running": item.is_running()}
+            for item in self.owned
+        ]
+
+    def close(self):
+        self.closed += 1
+
+
+def _refused_closure_supervisor(config, session_id, session, live):
+    supervisor = _supervisor(
+        config,
+        make_request(),
+        certificate_api=isolation_certificate,
+        verdict_recorder=None,
+        launch_runner=lambda plan, **kwargs: session,
+    )
+    supervisor.session = session
+    supervisor.service = None
+    supervisor.session_id = session_id
+    supervisor._gates = {"live_map": live}
+    supervisor.open_record = str(
+        isolation_certificate._open_record_path(Path(config.staging_root), session_id)
+    )
+    supervisor._record_started = True
+    supervisor._unmeasured_lockout = True
+    practice_host.set_host_lockout(config, reason="session_unmeasured", session_id=session_id)
+    return supervisor
+
+
+def test_supervisor_failed_close_retains_owned_process_and_open_record():
+    """Root repro: a failed Job close while the owned human still runs must
+    neither drop the handle nor record a failure closure."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        install = Path(tmp) / "live" / "install"
+        appdata = Path(tmp) / "live" / "appdata"
+        install.mkdir(parents=True, exist_ok=True)
+        appdata.mkdir(parents=True, exist_ok=True)
+        live = {"install": str(install), "appdata": str(appdata)}
+        session_id = "s-failed-close"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = _FailedCloseSession(session_id, "n" * 32)
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+
+        result = supervisor._finalize_refused_closure("session_closure_unproven")
+        assert result["ok"] is False, result
+        # Ownership retained: the handle is never dropped on a swallowed failure.
+        assert supervisor.session is session
+        assert supervisor.human_retained is True
+        # The open record stands and no failure closure/receipt was written.
+        assert supervisor._record_started is True
+        assert isolation_certificate.list_open_records(Path(config.staging_root))
+        still_open = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert still_open["status"] == "open"
+        assert not [row for row in _receipts(config) if row.get("session_id") == session_id]
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+        assert practice_host.read_host_lockout(config)["locked"] is True
+
+
+def test_supervisor_eventual_exit_closes_record_and_recovers():
+    """A delayed (but proven) owned exit still closes the record; ack then clears."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        install = Path(tmp) / "live" / "install"
+        appdata = Path(tmp) / "live" / "appdata"
+        install.mkdir(parents=True, exist_ok=True)
+        appdata.mkdir(parents=True, exist_ok=True)
+        live = {"install": str(install), "appdata": str(appdata)}
+        session_id = "s-eventual-exit"
+        _real_open_record(config, session_id, live, pids={"human": [7]})
+        session = _LingeringSession(session_id, "n" * 32, steps=3)
+        supervisor = _refused_closure_supervisor(config, session_id, session, live)
+
+        result = supervisor._finalize_refused_closure("session_closure_unproven")
+        assert result["ok"] is False, result
+        assert result["code"] == "session_closure_unproven", result
+        assert supervisor.human_retained is False
+        assert supervisor.session is None
+        assert session.closed == 1
+        assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+        closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert closed["status"] == "failed"
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is True
+
+        daemon = practice_host.HostDaemon(
+            config,
+            certificate_api=isolation_certificate,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+        )
+        ack = daemon._op_acknowledge({"confirm": True})
+        assert ack["ok"] is True and ack["cleared"] is True, ack
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+
+
+def test_record_failure_closure_keeps_record_open_on_persist_failure():
+    """Persistence-exception: a raised/refused closure must not clear the flag."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        supervisor = _supervisor(config, make_request())
+        supervisor.session_id = "s-persist"
+        supervisor._record_started = True
+
+        class _RaisingApi:
+            def record_session_failure(self, *args, **kwargs):
+                raise RuntimeError("certificate write failed")
+
+        supervisor._certificate_api = _RaisingApi()
+        assert supervisor._record_failure_closure("session_closure_unproven") is False
+        assert supervisor._record_started is True
+
+        class _RefusingApi:
+            def record_session_failure(self, *args, **kwargs):
+                return {"ok": False, "code": "open_session_missing"}
+
+        supervisor._certificate_api = _RefusingApi()
+        assert supervisor._record_failure_closure("session_closure_unproven") is False
+        assert supervisor._record_started is True
+
+        class _OkApi:
+            def record_session_failure(self, *args, **kwargs):
+                return {"ok": True, "code": "session_failed_recorded"}
+
+        supervisor._certificate_api = _OkApi()
+        assert supervisor._record_failure_closure("session_closure_unproven") is True
+        assert supervisor._record_started is False
 
 
 def test_supervisor_fails_on_real_service_prestart_timeout():

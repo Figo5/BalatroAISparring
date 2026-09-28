@@ -245,7 +245,10 @@ human terminal `end`, only `status`, `end` and `decision_result` are accepted
   `ai_errors`) and flags a human/AI winner disagreement as `result_conflict`. Error,
   `error` op, role-lost watchdog, pre-start timeout, explicit `abort()` and
   `close()` all funnel through the same idempotent writer, so a session produces at
-  most one terminal summary — never full state.
+  most one terminal summary — never full state. If the human coordinator already
+  reported an authoritative END (and the terminal phase is `awaiting_ai`), a later
+  abort/close preserves that human `result`/`reason` and records the abort code only
+  as `last_error`; the abort never overwrites the human's result.
 - **Post-end decision receipts.** `decision_result` is still accepted after the
   human END for sequences this service issued (bounded by the recent-commit ring),
   so the AI's final receipt is recorded rather than lost.
