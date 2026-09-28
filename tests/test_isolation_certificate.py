@@ -176,8 +176,13 @@ def _write_probes(paths, nonce=NONCE, port=PORT):
         encoding="utf-8",
     )
     (save / staging.PROBE_P2).write_text(
-        f"probe=p2\npatch={staging.PATCH_ID}\nnonce={nonce}\nurl=127.0.0.1\nport={port}\n"
-        f"mods={paths.mods}\nsave={save}\nattempts=4\nconnect_refused=true\nreconnect=3\nkeepalive=true\n",
+        f"probe=p2\nschema={staging.P2_OBSERVER_SCHEMA}\npatch={staging.PATCH_ID}\nnonce={nonce}\n"
+        f"url=127.0.0.1\nport={port}\nmods={paths.mods}\nsave={save}\n"
+        "connect_attempts=1\nconnect_failures=1\nfirst_result=none\n"
+        "first_error=connection refused\nfirst_time=1.0\n"
+        "last_result=none\nlast_error=connection refused\nlast_time=1.0\n"
+        "reconnect_attempts=3\nreconnect_failures=3\nreconnects=1\n"
+        "keepalive_failures=1\ncloses=1\n",
         encoding="utf-8",
     )
     # M2: a fresh Lovely log and the actual main.lua dump under the exact staged Mods.
@@ -441,7 +446,7 @@ def _record_phase(fixture, phase, exit_codes=None, prepared=None, session_id=Non
     live = fixture["live_map"]
     session_id = session_id or f"phase-{phase.lower()}"
     if prepared is None:
-        setup = _fake_dead_port_setup() if phase == "P2" else None
+        setup = _phase_setup(phase)
         prepared = ic.prepare_session(
             staging_root,
             live=live,
@@ -1226,8 +1231,17 @@ def test_record_receipt_failure_raises_global_lockout():
         assert ic.lockout(fixture["staging_root"])["locked"] is True
 
 
+def _phase_setup(phase):
+    """The tool-owned pre-spawn setup the launcher persists for a measurement phase."""
+    if phase == "P2":
+        return _fake_dead_port_setup()
+    if phase == "CRASH":
+        return {"kind": "crash", "stimulus": "env_gated_guard_error"}
+    return None
+
+
 def _prepare_and_probes(fixture, phase, session_id, **kwargs):
-    setup = _fake_dead_port_setup() if phase == "P2" else None
+    setup = _phase_setup(phase)
     prepared = ic.prepare_session(
         fixture["staging_root"],
         live=fixture["live_map"],
@@ -1381,6 +1395,91 @@ def test_h3_caller_observation_is_not_accepted():
             pass
         else:
             raise AssertionError("caller observation must not be accepted")
+
+
+def test_receipt_binds_requested_phase_and_port_to_prepared_record():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        prepared, bind = _prepare_and_probes(fixture, "P1A", "bind-phase")
+        session = _FakeSession("bind-phase", fixture["staging_root"], prepared["nonce"], bind, ("bootstrap",))
+        wrong_phase = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P1B", session_id="bind-phase", session=session,
+            live=fixture["live_map"], live_closed=lambda: True,
+        )
+        assert not wrong_phase["ok"] and "prepared_phase_mismatch" in wrong_phase["problems"]
+        assert ic.load_open_record(fixture["staging_root"], "bind-phase")["status"] == "failed"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            for phase in ("P1A", "P1B", "FULL_P1"):
+                assert _record_phase(fixture, phase)["ok"]
+        prepared, bind = _prepare_and_probes(fixture, "P2", "bind-port")
+        session = _FakeSession("bind-port", fixture["staging_root"], prepared["nonce"], bind, ("ai",))
+        wrong_port = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P2", session_id="bind-port", session=session,
+            live=fixture["live_map"], port=PORT + 1, live_closed=lambda: True,
+        )
+        assert not wrong_port["ok"] and "prepared_port_mismatch" in wrong_port["problems"]
+
+
+def test_p2_classifier_ignores_foreign_flags_and_start_marker():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            for phase in ("P1A", "P1B", "FULL_P1"):
+                assert _record_phase(fixture, phase)["ok"]
+        prepared, bind = _prepare_and_probes(fixture, "P2", "p2-foreign")
+        role = staging.role_paths(fixture["staging_root"], "ai")
+        artifact = role.data / "Balatro" / staging.PROBE_P2
+        artifact.write_text(
+            f"probe=p2\npatch={staging.PATCH_ID}\nnonce={prepared['nonce']}\nurl=127.0.0.1\nport={PORT}\n"
+            f"mods={role.mods}\nsave={role.data / 'Balatro'}\nattempts=1\nstarted=1\n"
+            "connect_refused=true\nconnect_failed=true\nfailure=true\nreconnect=3\nkeepalive=true\n",
+            encoding="utf-8",
+        )
+        session = _FakeSession("p2-foreign", fixture["staging_root"], prepared["nonce"], bind, ("ai",))
+        result = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P2", session_id="p2-foreign", session=session,
+            live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+        )
+        assert result["ok"], result
+        receipt = ic.load_phase_receipt(fixture["staging_root"], result["receipt_id"])
+        assert receipt["measured"]["artifact_schema_ok"] is False
+        assert "initial_failure" not in receipt["measured"]["covered_subgates"]
+        assert "initial_failure" in receipt["measured"]["pending_subgates"]
+
+
+def test_p2_receipt_coverage_is_rederived_from_copied_artifact():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            receipt_ids = _receipt_ids(fixture)
+            old_id = receipt_ids["P2"]
+            path = ic._receipt_path(fixture["staging_root"], old_id)
+            body = json.loads(path.read_text(encoding="utf-8"))
+            # A forged receipt under-claims what its own copied artifact observed.
+            body["measured"]["covered_subgates"] = ["initial_failure"]
+            body["measured"]["pending_subgates"] = ["reconnect", "keepalive"]
+            body["measured"]["reconnects"] = 0
+            body["measured"]["reconnect_failures"] = 0
+            body["measured"]["keepalive_failures"] = 0
+            forged = {key: value for key, value in body.items() if key != "receipt_id"}
+            new_id = ic._digest(forged)
+            body["receipt_id"] = new_id
+            ic._receipt_path(fixture["staging_root"], new_id).write_text(
+                json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            receipt_ids["P2"] = new_id
+            verdict = ic.build_certificate(
+                fixture["staging_root"], receipt_ids=receipt_ids, live=fixture["live_map"], port=PORT
+            )
+        assert not verdict["ok"]
+        assert any("P2_coverage_not_rederived" in problem for problem in verdict["problems"]), verdict
 
 
 def test_h3_crash_and_p2_derive_from_tool_evidence():

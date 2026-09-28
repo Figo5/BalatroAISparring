@@ -74,12 +74,20 @@ exited launch session. The recorder:
 `build_certificate` re-parses every receipt copy, requires **distinct nonces per
 phase**, requires the certificate tool map to equal `bound_tool_specs()` exactly
 (M3, so an empty/subset map cannot drop a binding), and refuses P1B/FULL_P1 whose
-Mods digest no longer matches the current layer M. P2 never stamps a broad pass
+  Mods digest no longer matches the current layer M. P2 never stamps a broad pass
   from one event: the receipt lists `pending_subgates` and the certificate stays
   **partial** while any remain (`P2_pending:<subgate>`). A staged start/`started`
   marker never counts as a measured connection failure; `initial_failure`,
-  `reconnect` and `keepalive` are covered only by real engine attempt evidence.
-  `check_certificate` re-validates the receipts, the
+  `reconnect` and `keepalive` are covered only by the exact fields emitted by the
+  env-gated observer that runs inside the real staged network thread (an observed
+  first connect return `~= 1`, a completed bounded retry cycle that failed, and the
+  real keepalive-failure branch respectively). The observer's recorded times are
+  observed wall-clock `socket.gettime` values, not a monotonic guarantee, and the
+  pinned timers are unchanged; `tests/test_p2_observer.py` is the regression harness
+  for the patch, the trace-equivalence of the gate-off thread and the original
+  reconnect/keepalive branches. A dead port cannot produce the
+  reconnect/keepalive branches, so those stay pending until further controlled local
+  stimulus exists. `check_certificate` re-validates the receipts, the
 evidence dumps, recomputes the certificate id from the
 layers/tools/receipts/evidence and refuses on any drift.
 
@@ -91,8 +99,11 @@ layers/tools/receipts/evidence and refuses on any drift.
   `backup_id`, verified `backup_label` and per-root `files_digest` are bound into
   the record, and the measured `before` snapshot must match those digests for the
   identical live-root keys. A caller-supplied `backup_id` must equal the evidence
-  id or its authenticated manifest label (the host's fresh-backup label), so a
-  caller can never substitute or mismatch real evidence. The nonce is always
+  id or its authenticated manifest label. The current host passes the verifier's
+  content id (`check_backup_evidence(...)['backup_id']`), re-runs the verifier
+  freshly via `backup_verify`, and refuses the prepared session if the returned
+  evidence id disagrees, so a caller can never substitute or mismatch real
+  evidence. The nonce is always
   minted internally (no caller override, L5), and a previously used session id is
   refused before any write (`session_id_reused`, L6). It rotates stale
   probes/attestations, takes the `before` full snapshot and writes one exclusive

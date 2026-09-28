@@ -788,6 +788,38 @@ def test_lovely_patch_matches_reference_main_and_save_manager():
     assert staging.SAVE_THREAD_LITERAL in save
 
 
+def test_mp_p2_observer_patches_are_env_gated_and_bound_to_pinned_source():
+    patches = staging.staging_patches("C:/stage/save", "C:/stage/Mods", mp_guard=8788)
+    observer = [patch for patch in patches if patch["target"] == staging.MP_SOCKET_SOURCE_TARGET]
+    assert observer, "the P2 source observers must be staged with the MP guard"
+    state = next(patch for patch in observer if patch["pattern"] == staging.MP_SOCKET_REQUIRE_LITERAL)
+    assert staging.P2_OBSERVER_SCHEMA in state["payload"]
+    assert staging.PROBE_P2 in state["payload"]
+    assert staging.MEASURE_P2_ENV in state["payload"]
+    connect = next(patch for patch in observer if patch["pattern"] == staging.MP_SOCKET_CONNECT_LITERAL)
+    assert connect["position"] == "after"
+    assert "connectionResult" in connect["payload"] and "errorMessage" in connect["payload"]
+    # The old startup-marker overclaim is gone, and the guard fails closed when the
+    # observer was not applied to the real network thread.
+    assert "started=1" not in staging.render_lovely_toml(patches)
+    guard = next(patch for patch in patches if patch["pattern"] == staging.MP_THREAD_START_LITERAL)
+    assert "AISP_P2_FLUSH" in guard["payload"] and staging.MEASURE_P2_ENV in guard["payload"]
+    assert staging.MEASURE_P2_ENV not in staging.render_lovely_toml(
+        staging.staging_patches("C:/stage/save", "C:/stage/Mods")
+    )
+    source = staging.REFERENCE_MP_SOCKET
+    if source.is_file():
+        text = source.read_text(encoding="utf-8")
+        for patch in observer:
+            assert patch["pattern"] in text, patch["pattern"]
+        core = source.parent.parent / "core.lua"
+        if core.is_file():
+            core_text = core.read_text(encoding="utf-8")
+            assert core_text.index("local SOCKET = MP.load_mp_file") < core_text.index(
+                staging.MP_THREAD_START_LITERAL
+            )
+
+
 def test_render_lovely_toml_structure():
     patches = staging.staging_patches("C:/stage/save", "C:/stage/Mods", mp_guard=8788)
     text = staging.render_lovely_toml(patches)

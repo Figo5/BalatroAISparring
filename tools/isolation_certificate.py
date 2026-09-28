@@ -82,6 +82,9 @@ PHASE_EVIDENCE = {
     "P2": ("steam_marker", "steam_post", "mp", "guard", "p2"),
 }
 PHASE_PREREQUISITE = {"P1A": None, "P1B": "P1A", "FULL_P1": "P1B", "CRASH": "FULL_P1", "P2": "FULL_P1"}
+# The single exact P2 artifact schema emitted by the env-gated source observer that
+# runs inside the real staged network thread. A bare start marker is never read.
+P2_ARTIFACT_SCHEMA = getattr(staging, "P2_OBSERVER_SCHEMA", "aisparring.p2_observer.v1")
 PROBE_BY_LABEL = {
     "main": staging.PROBE_MAIN,
     "guard": staging.PROBE_GUARD,
@@ -859,12 +862,24 @@ def _owned_exit_codes(session) -> dict:
     return codes
 
 
-def _measure_crash(session) -> dict:
+def _measure_crash(session, record: Mapping) -> dict:
     """CRASH evidence derived from the retained handles and the measured stimulus.
 
     No caller-supplied observation is read: the abnormal exit code comes from the
-    owned Popen handles and cleanup is the retained-ownership exit measurement.
+    owned Popen handles and cleanup is the retained-ownership exit measurement. The
+    stimulus label is only bound when the *prepared open record* actually held the
+    tool's CRASH setup, so an arbitrary abnormal exit cannot be relabelled as the
+    proven stimulus.
     """
+    setup = record.get("measurement_setup") if isinstance(record, Mapping) else None
+    stimulus = setup.get("stimulus") if isinstance(setup, Mapping) else None
+    prepared_crash = bool(
+        isinstance(record, Mapping)
+        and record.get("phase") == "CRASH"
+        and isinstance(setup, Mapping)
+        and setup.get("kind") == "crash"
+        and stimulus == "env_gated_guard_error"
+    )
     codes = _owned_exit_codes(session)
     abnormal = {
         role: code
@@ -873,9 +888,11 @@ def _measure_crash(session) -> dict:
     }
     exited = _owned_all_exited(session)
     return {
-        "crash_stimulus": "env_gated_guard_error",
+        "crash_stimulus": stimulus if prepared_crash else None,
+        "crash_stimulus_bound": prepared_crash,
+        "crash_stimulus_prepared_phase": record.get("phase") if isinstance(record, Mapping) else None,
         "crash_exit_codes": codes,
-        "crash_observed": bool(abnormal),
+        "crash_observed": bool(prepared_crash and abnormal),
         "cleanup_ok": bool(exited),
         "owned_exited": bool(exited),
         "exit_code_measured": all(value is not None for value in codes.values()) if codes else False,
@@ -885,13 +902,104 @@ def _measure_crash(session) -> dict:
 P2_REQUIRED_SUBGATES = ("initial_failure", "reconnect", "keepalive")
 
 
+def _p2_counter(value):
+    """A non-negative integer counter from the observer artifact, else ``None``."""
+    if _is_int(value) and value >= 0:
+        return int(value)
+    return None
+
+
+def _p2_derive(fields: Mapping, dead) -> dict:
+    """Derive the P2 subgate coverage from one parsed observer artifact.
+
+    This is the single exact-schema classifier: the same function classifies the
+    freshly read staged artifact at record time and re-derives coverage from the
+    immutable *copied* artifact at validation time, so a receipt can never claim a
+    subgate its own copied evidence does not support.
+    """
+    fields = fields if isinstance(fields, Mapping) else {}
+    schema_ok = str(fields.get("schema") or "") == P2_ARTIFACT_SCHEMA
+
+    def counter(key):
+        # Raw parsed probe fields are strings; coerce before classifying so the
+        # record-time path and the copied-artifact re-derivation agree exactly.
+        return _p2_counter(_coerce_int(fields.get(key))) if schema_ok else None
+
+    connect_attempts = counter("connect_attempts")
+    connect_failures = counter("connect_failures")
+    reconnect_attempts = counter("reconnect_attempts")
+    reconnect_failures = counter("reconnect_failures")
+    reconnects = counter("reconnects")
+    keepalive_failures = counter("keepalive_failures")
+    closes = counter("closes")
+    first_result = fields.get("first_result")
+    # The pinned thread tests a connect failure as ``connectionResult ~= 1``. The
+    # *initial* failure is the first returned attempt's own result (``none`` when the
+    # socket returned nil, matching the pinned comparison), never a later reconnect
+    # retry and never an attempt count alone.
+    first_failed = bool(
+        schema_ok
+        and connect_attempts is not None
+        and connect_attempts >= 1
+        and first_result is not None
+        and str(first_result).strip() != "1"
+    )
+    failed_attempt = bool(
+        first_failed
+        and connect_failures is not None
+        and connect_failures >= 1
+        and connect_failures <= connect_attempts
+    )
+    endpoint_url = fields.get("url")
+    endpoint_port = _p2_counter(_coerce_int(fields.get("port")))
+    endpoint_bound = bool(
+        endpoint_url == "127.0.0.1"
+        and _is_port(endpoint_port)
+        and _is_port(dead)
+        and int(endpoint_port) == int(dead)
+    )
+    covered: list = []
+    if failed_attempt and endpoint_bound:
+        covered.append("initial_failure")
+    # A reconnect subgate is proven only by a *completed* bounded retry cycle that
+    # ended in failure (reconnects >= 1 and reconnect_failures >= 1); a partially
+    # finished retry stays pending.
+    if (
+        schema_ok
+        and reconnects is not None
+        and reconnects >= 1
+        and reconnect_failures is not None
+        and reconnect_failures >= 1
+    ):
+        covered.append("reconnect")
+    if schema_ok and keepalive_failures is not None and keepalive_failures >= 1:
+        covered.append("keepalive")
+    return {
+        "schema_ok": bool(schema_ok),
+        "connect_attempts": connect_attempts,
+        "connect_failures": connect_failures,
+        "reconnect_attempts": reconnect_attempts,
+        "reconnect_failures": reconnect_failures,
+        "reconnects": reconnects,
+        "keepalive_failures": keepalive_failures,
+        "closes": closes,
+        "endpoint_url": endpoint_url,
+        "endpoint_port": endpoint_port,
+        "endpoint_bound": endpoint_bound,
+        "covered": covered,
+        "pending": [name for name in P2_REQUIRED_SUBGATES if name not in covered],
+    }
+
+
 def _measure_p2(staging_root, record: Mapping, session, port) -> dict:
     """P2 evidence derived from the tool's dead-port setup and the staged artifact.
 
     The dead-port setup (both-family listener absence + a real refused connect) is
-    measured and persisted by the tool *before* spawn; the attempt/reconnect/
-    keepalive subgates come from the env-gated staged MP instrumentation artifact
-    copied into the receipt. No caller observation is accepted.
+    measured and persisted by the tool *before* spawn. The attempt/failure/reconnect/
+    keepalive subgates come only from the exact schema emitted by the env-gated
+    observer *inside the real staged network thread* and copied into the receipt.
+    The tool's own refused probe and a bare start marker prove the dead port, never a
+    Multiplayer connect failure.
     """
     setup = record.get("measurement_setup") or {}
     dead = None
@@ -912,41 +1020,72 @@ def _measure_p2(staging_root, record: Mapping, session, port) -> dict:
         dead = int(port) if _is_port(port) else None
 
     artifact = _read_p2_probe_fields(staging_root, record) or {}
-    # A start marker or an attempt count is not a measured connection failure: the
-    # initial-failure subgate is covered only when the engine artifact reports an
-    # explicit observed connect failure, never by the tool's own dead-port probe or
-    # by the mere intent to start the MP thread.
-    engine_attempts = artifact.get("attempts") if _is_int(artifact.get("attempts")) else None
-    observed_failure = any(
-        str(artifact.get(key)).strip().lower() in ("true", "1")
-        for key in ("connect_refused", "connect_failed", "failure")
-    )
-    covered: list = []
-    if observed_failure and engine_attempts is not None and engine_attempts >= 1:
-        covered.append("initial_failure")
-    if "initial_failure" in covered and _is_int(artifact.get("reconnect")) and artifact.get("reconnect") >= 1:
-        covered.append("reconnect")
-    if "initial_failure" in covered and str(artifact.get("keepalive")).strip().lower() in ("true", "1"):
-        covered.append("keepalive")
-    pending = [name for name in P2_REQUIRED_SUBGATES if name not in covered]
-    attempts = max(probe_attempts, engine_attempts or 0)
+    derived = _p2_derive(artifact, dead)
     return {
         "dead_port": dead,
         "refused": bool(refused),
-        "attempts": attempts,
+        "attempts": probe_attempts,
         "probe_attempts": probe_attempts,
-        "engine_attempts": engine_attempts,
+        "connect_attempts": derived["connect_attempts"],
+        "connect_failures": derived["connect_failures"],
         "attempt_timings": timings,
         "listener_absent": listener_absent,
         "pinned_endpoint": {
-            "url": artifact.get("url"),
-            "port": artifact.get("port"),
+            "schema": artifact.get("schema"),
+            "url": derived["endpoint_url"],
+            "port": derived["endpoint_port"],
             "nonce": artifact.get("nonce"),
+            "first_result": artifact.get("first_result"),
+            "first_error": artifact.get("first_error"),
+            "first_time": artifact.get("first_time"),
+            "last_result": artifact.get("last_result"),
+            "last_error": artifact.get("last_error"),
+            "last_time": artifact.get("last_time"),
         },
-        "covered_subgates": covered,
-        "pending_subgates": pending,
+        "reconnect_attempts": derived["reconnect_attempts"],
+        "reconnect_failures": derived["reconnect_failures"],
+        "reconnects": derived["reconnects"],
+        "keepalive_failures": derived["keepalive_failures"],
+        "closes": derived["closes"],
+        "artifact_schema_ok": derived["schema_ok"],
+        "covered_subgates": derived["covered"],
+        "pending_subgates": derived["pending"],
         "p2_artifact_present": bool(artifact),
     }
+
+
+def _validate_p2_artifact_binding(staging_root, receipt: Mapping) -> list:
+    """Re-derive P2 coverage from the immutable copied artifact and compare.
+
+    The receipt's measured coverage is never trusted on its own: the copied,
+    hashed ``p2`` probe is re-parsed and the same exact-schema classifier must
+    reproduce the recorded counters, endpoint and covered/pending subgates.
+    """
+    parsed = _probe_fields(staging_root, "ai", receipt).get("p2")
+    if not isinstance(parsed, Mapping):
+        return []
+    measured = receipt.get("measured") or {}
+    derived = _p2_derive(parsed.get("fields") or {}, measured.get("dead_port"))
+    problems: list = []
+    if list(derived["covered"]) != list(measured.get("covered_subgates") or []):
+        problems.append("P2_coverage_not_rederived")
+    if list(derived["pending"]) != list(measured.get("pending_subgates") or []):
+        problems.append("P2_pending_not_rederived")
+    for key in (
+        "connect_attempts",
+        "connect_failures",
+        "reconnect_attempts",
+        "reconnect_failures",
+        "reconnects",
+        "keepalive_failures",
+        "closes",
+    ):
+        if derived.get(key) != measured.get(key):
+            problems.append(f"P2_{key}_not_rederived")
+    endpoint = measured.get("pinned_endpoint") or {}
+    if derived["endpoint_url"] != endpoint.get("url") or derived["endpoint_port"] != endpoint.get("port"):
+        problems.append("P2_endpoint_not_rederived")
+    return problems
 
 
 def _read_p2_probe_fields(staging_root, record: Mapping) -> dict:
@@ -964,7 +1103,16 @@ def _read_p2_probe_fields(staging_root, record: Mapping) -> dict:
         return {}
     if fields.get("nonce") and fields.get("nonce") != record.get("nonce"):
         return {}
-    for key in ("port", "attempts", "reconnect", "keepalive"):
+    for key in (
+        "port",
+        "connect_attempts",
+        "connect_failures",
+        "reconnect_attempts",
+        "reconnect_failures",
+        "reconnects",
+        "keepalive_failures",
+        "closes",
+    ):
         if key in fields:
             fields[key] = _coerce_int(fields[key])
     return fields
@@ -1034,7 +1182,11 @@ def _validate_crash_observation(receipt: Mapping) -> list:
         problems.append("CRASH_cleanup_missing")
     if measured.get("crash_observed") is not True:
         problems.append("CRASH_not_observed")
-    if measured.get("crash_stimulus") != "env_gated_guard_error":
+    # The stimulus label must be bound to the *prepared* open record (CRASH phase +
+    # the tool's crash setup); an arbitrary abnormal exit is never relabelled.
+    if measured.get("crash_stimulus_bound") is not True:
+        problems.append("CRASH_stimulus_unbound")
+    elif measured.get("crash_stimulus") != "env_gated_guard_error":
         problems.append("CRASH_stimulus_unbound")
     return problems
 
@@ -1060,6 +1212,42 @@ def _validate_p2_observation(receipt: Mapping) -> list:
         problems.append("P2_endpoint_port_missing")
     elif _is_port(measured.get("dead_port")) and int(endpoint["port"]) != int(measured["dead_port"]):
         problems.append("P2_endpoint_port_mismatch")
+    # Coverage is never a caller/stored claim: every covered subgate must be backed
+    # by the exact observer fields recorded in the same measured block.
+    covered = measured.get("covered_subgates")
+    if not isinstance(covered, list):
+        problems.append("P2_coverage_unbound")
+        return problems
+    attempts = measured.get("connect_attempts")
+    failures = measured.get("connect_failures")
+    first_result = (measured.get("pinned_endpoint") or {}).get("first_result")
+    if "initial_failure" in covered:
+        if not (
+            _is_int(attempts)
+            and attempts >= 1
+            and failures is not None
+            and _is_int(failures)
+            and failures >= 1
+            and failures <= attempts
+            and first_result is not None
+            and str(first_result).strip() != "1"
+            and measured.get("artifact_schema_ok") is True
+        ):
+            problems.append("P2_initial_failure_unbound")
+    if "reconnect" in covered:
+        reconnect_failures = measured.get("reconnect_failures")
+        reconnects = measured.get("reconnects")
+        if not (
+            _is_int(reconnects)
+            and reconnects >= 1
+            and _is_int(reconnect_failures)
+            and reconnect_failures >= 1
+        ):
+            problems.append("P2_reconnect_unbound")
+    if "keepalive" in covered:
+        keepalive_failures = measured.get("keepalive_failures")
+        if not (_is_int(keepalive_failures) and keepalive_failures >= 1):
+            problems.append("P2_keepalive_unbound")
     return problems
 
 
@@ -1138,7 +1326,7 @@ def _measured_for_phase(phase: str, session, staging_root, record, layer_n, laye
         measured["role_parity_digest"] = next(iter(parities)) if len(parities) == 1 else None
         measured["port"] = int(port) if _is_port(port) else None
     elif phase == "CRASH":
-        measured.update(_measure_crash(session))
+        measured.update(_measure_crash(session, record))
     elif phase == "P2":
         measured.update(_measure_p2(staging_root, record, session, port))
     return measured
@@ -1209,6 +1397,17 @@ def record_phase_receipt(
         problems.append("open_session_missing")
     elif record.get("status") != "open":
         problems.append("open_session_not_open")
+    if record is not None:
+        # Bind the requested phase/port to the persisted prepared record *before*
+        # any evidence is derived, so a receipt can never relabel a different
+        # phase's or port's prepared/launched session as the one it claims.
+        if record.get("phase") != phase:
+            problems.append("prepared_phase_mismatch")
+        record_port = record.get("port")
+        if _is_port(record_port) != _is_port(port):
+            problems.append("prepared_port_mismatch")
+        elif _is_port(record_port) and int(record_port) != int(port):
+            problems.append("prepared_port_mismatch")
     if not callable(live_closed):
         problems.append("live_closed_check_unavailable")
     else:
@@ -1439,6 +1638,8 @@ def _validate_receipt(staging_root, phase: str, receipt: Mapping) -> list:
     problems.extend(_validate_receipt_probes(staging_root, phase, receipt))
     problems.extend(_validate_receipt_dumps(staging_root, phase, receipt))
     problems.extend(_validate_measurement_artifact(staging_root, receipt))
+    if phase == "P2":
+        problems.extend(_validate_p2_artifact_binding(staging_root, receipt))
     layer_n = collect_layer_n(staging_root, live=receipt.get("live_roots"))
     layer_m = collect_layer_m(staging_root, live=receipt.get("live_roots"))
     problems.extend(_validate_receipt_against_layers(phase, receipt, layer_n, layer_m, receipt.get("port")))

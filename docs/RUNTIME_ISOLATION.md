@@ -349,7 +349,7 @@ All entry points below are also re-exported as thin wrappers on `staging`
 | `staging.check_lovely_evidence(staging_root, role, spawn_time, expected_mods=None, require_dump=True)` | exact staged `Mods` binding plus fresh `Mods/lovely/{log,dump}` artefacts |
 | `isolation_certificate.snapshot_live(live, *, label=None)` | full byte manifest of live install + AppData + every Steam `2379780` profile app dir (never the whole Steam install) |
 | `isolation_certificate.prepare_session(staging_root, *, live, session_id, port=None, closed_check=None, phase=MATCH, backup_id=None, backup_verify=None, measurement_setup=None)` | closed-game prep: certificate/prerequisite + not-locked-out + refuse a reused session id (L6) + a real `closed_check` + the verified backup evidence bound to the before snapshot (R1) + rotate stale probes/attestation (safe staging writes) + internally minted nonce (no caller override, L5) |
-| `isolation_certificate.record_phase_receipt(staging_root, *, phase, session_id, session, live, port=None, live_closed=None)` | tool-owned receipt: requires `live_closed` (R2) and derives CRASH/P2 from retained handles + tool setup (H3); copies probes, the Lovely dump and a hashed `measurement.json` (M2) |
+| `isolation_certificate.record_phase_receipt(staging_root, *, phase, session_id, session, live, port=None, live_closed=None)` | tool-owned receipt: requires `live_closed` (R2), first binds the requested `phase`/`port` to the persisted prepared open record (refusing relabelling) and then derives CRASH/P2 from retained handles + tool setup (H3); copies probes, the Lovely dump and a hashed `measurement.json` (M2) |
 | `isolation_certificate.record_session_verdict(staging_root, *, session_id, live, backup_id=None, certificate_id=None, session=None, live_closed=None)` | append-only receipt; **computes** the after snapshot; live byte diff -> persistent lockout + revocation + stored raw before/after manifests |
 | `isolation_certificate.write_launcher_attestation(staging_root, *, session_id, nonce, control_port, port, spawn_time=None, live=None)` | re-verify **both** roles' probes, require phase `MATCH` and the current certificate id (L4), then write the fixed session-bound attestation to `<role save root>/aisparring-launcher-attestation.json` (outside Mods) |
 | `isolation_certificate.launcher_session_env_names()` | the exact session-descriptor env names derived from the real `launch_practice.SESSION_ENV_KEYS` (no speculative aliases) |
@@ -373,30 +373,52 @@ writes the session-bound attestation only after both roles' probes verify;
 Receipt phases are `P1A`, `P1B`, `FULL_P1`, `CRASH`, `P2`. Each receipt carries a
 session `nonce`, a `spawn_time`, `closure`, raw `before_files`/`after_files`, a
 `measured` mapping derived by the tool, copied probe/dump evidence and a hashed
-`measurement.json`. `P1A.measured` holds equal `bootstrap_install_digest` and
-`role_install_digests`; `P1B`/`FULL_P1` bind the role Mods digests, parity digest
-and port; `CRASH` binds the retained-handle exit codes, the env-gated stimulus and
-cleanup; `P2` binds the tool's both-family listener absence + refused connect,
-the pinned loopback endpoint and the covered/pending subgates. A staged
-`started` marker is never counted as a measured connection failure, and
-`build_certificate` stays **partial** while any P2 subgate
-(`initial_failure`/`reconnect`/`keepalive`) lacks real engine evidence, so a
-single event is never stamped as a broad P2 pass. There is deliberately **no rebase
-API**: historical certificate evidence is immutable, and recovery requires a new
-P1 run that produces a new measured generation.
+`measurement.json`. The requested `phase`/`port` must first equal the persisted
+prepared open record, so a receipt can never be relabelled. `P1A.measured` holds
+equal `bootstrap_install_digest` and `role_install_digests`; `P1B`/`FULL_P1` bind
+the role Mods digests, parity digest and port; `CRASH` binds the retained-handle
+exit codes, the env-gated stimulus (only when the prepared record actually held the
+CRASH setup) and cleanup. `P2` binds the tool's both-family listener absence +
+refused connect (the *port* proof only), the pinned loopback endpoint, and the
+attempt/failure/reconnect/keepalive fields emitted by the env-gated source observer
+that runs inside the real staged network thread (`networking/socket.lua`, injected
+after the exact `Networking.Client:connect(CONFIG_URL, CONFIG_PORT)` call). The
+observer emits one exact schema; `initial_failure` is covered only by an observed
+first connect return `~= 1` with a real failure count, `reconnect` only by a
+completed bounded retry cycle that failed, and `keepalive` only by the real
+keepalive-failure branch. The schema's `first_time`/`last_time` are observed
+wall-clock `socket.gettime` values, not a monotonic guarantee, and the pinned
+network timers are untouched. The patch, the emitted schema and the covered/pending
+mapping are regression-tested under both lupa runtimes (`tests/test_p2_observer.py`):
+the gate-off patched thread's whole connect/receive/sleep/send/channel-event trace
+must equal the unpatched source, and the real `tryReconnect` cycle (2/4/8-second
+delays) and keepalive-expiry branch are driven through the original timer loop with
+bounded fake time. A bare `started` marker, the tool's own refused probe or a
+caller-written flag never covers a subgate, and `build_certificate` stays
+**partial** while any P2 subgate (`initial_failure`/`reconnect`/`keepalive`) lacks a
+real branch outcome, so a single event is never stamped as a broad P2 pass. Because
+a dead port can only ever produce the initial-failure path, the reconnect and
+keepalive gates stay pending until further controlled local stimulus (a real
+listener that accepts then closes, and a connected listener that stops answering
+keepalive) is run; that stimulus is not yet in place, so no P2 full coverage is
+claimed. There is deliberately **no rebase API**: historical certificate evidence
+is immutable, and recovery requires a new P1 run that produces a new measured
+generation.
 
-## 11. Cross-owner host contract (report, not implemented here)
+## 11. Cross-owner host contract (current as of this repair)
 
-Host/service code is owned elsewhere. Two call sites already stay compatible with
-the repaired tool API and need no change: `practice_host._call_prepare_session`
-passes the fresh backup **label** (`create_live_backup`'s manifest `label`), which
-`prepare_session` accepts because it is the authenticated `backup_label`; and
-`_finalize` passes that same label to `record_session_verdict`, which accepts the
-record's evidence id or its authenticated label. If the host ever wants the
-cryptographic id instead, it should use `check_backup_evidence(...)["backup_id"]`.
-Any future host edit must keep using the real `check_backup_evidence` verdict and
-the real `closed_check`, and must pass the persisted open record (not a fabricated
-mapping) to `execute_launch`.
+Host/service code is owned elsewhere and was not modified here. The current host
+does **not** pass a label and does **not** rely on the certificate accepting one:
+`practice_host._prepare_session` runs the fresh verified backup, passes the real
+`check_backup_evidence(...)['backup_id']` (content-derived id) as `backup_id`, and
+re-runs the real verifier freshly via `backup_verify` so `prepare_session` re-reads
+the current files itself. It then refuses the prepared session unless the returned
+certificate evidence id is a content id and equals the verifier-derived baseline id
+(`prepared_backup_id_mismatch`). The manifest label remains display/directory
+metadata only. `record_session_verdict` still accepts the record's evidence id or
+its authenticated label. Any future host edit must keep using the real
+`check_backup_evidence` verdict and the real `closed_check`, and must pass the
+persisted open record (not a fabricated mapping) to `execute_launch`.
 
 ## 11. Sources
 
