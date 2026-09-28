@@ -2,7 +2,7 @@
 
 Local AI practice using Balatro Multiplayer's Major League rules, with separate human and AI game runtimes and a restricted policy worker.
 
-**0.1.0-dev is implemented in the repository but is not yet accepted, installed or playable.** Milestones 1 and 2 remain accepted. The current work adds a baseline policy, validated production executor, local server/host, staged runtime coordination and AI Sparring menus. Repository tests and real local-server checks pass; Claude re-review, actual Balatro isolation gates, compatibility checks and controlled installation remain pending. Live game files and saves have not been changed.
+**0.1.0-dev is implemented in the repository but is not yet accepted, installed or playable.** Milestones 1 and 2 remain accepted. The current work adds a baseline policy, validated production executor, local server/host, staged runtime coordination and AI Sparring menus. Earlier repository and real local-server checks passed, but the September 28 Claude reviews found additional runtime, engine, isolation and installer defects. Repairs and new regression checks are in progress; targeted re-review, actual Balatro isolation gates, compatibility checks and controlled installation remain pending. Live game files and saves have not been changed.
 
 The repository configuration remains inert. Do not copy it directly into Mods or bypass the launcher/certificate gates. The eventual installed companion supplies a menu; actual practice runs in isolated staged copies. It remains visible in Multiplayer's mod list and hash. No checks are hidden or bypassed, and no AI activity goes to official or ranked services.
 

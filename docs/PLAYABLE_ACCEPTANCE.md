@@ -12,8 +12,22 @@ Status: **in development, not installed, not yet playable**. Fixture and local-s
 | Public opponent HUD | Original Multiplayer presentation/privacy retained; rendering pending |
 | Lives, PvP/Nemesis, both result orientations, completion | Original server handlers and real local TCP lifecycle pass; complete engine lifecycle pending |
 | Failure recovery, local decisions and match summaries | Service/runtime fixtures pass; controlled engine failure check pending |
-| Claude safety/playability verdict | Prior Critical/High findings repaired in code; required actual-diff re-reviews pending usage reset |
+| Claude safety/playability verdict | Significant repairs are implemented; isolation evidence follow-up and actual-diff re-reviews remain pending |
 | Installed build ready for user | Pending review, backups, actual isolation gates and controlled live smoke |
+
+## September 28 review update — repairs in progress
+
+Claude reviewed commit `bbf61bf` with Opus 5.5 High. Policy/broker/loop was approved for controlled staged testing. Engine, runtime/UI, isolation and installer reviews found concrete blockers; DeepSeek is repairing them. See `CLAUDE_POLICY_FINAL_REVIEW.md`, `CLAUDE_ENGINE_FINAL_REVIEW.md`, `CLAUDE_RUNTIME_FINAL_REVIEW.md`, `CLAUDE_ISOLATION_FINAL_REVIEW.md` and `CLAUDE_INSTALLER_FINAL_REVIEW.md`.
+
+New independent checks reproduce incorrect SMODS empty-pack skipping, full-slot pack Ankh selection, successful reporting of a reverted reorder, rejection of a real Object-shaped G, failure to recognize the real RUN stage, failure to invoke metatable-proxied ruleset methods, and backup/session evidence binding failures. The earlier counts below are captured historical results, not evidence that these newly tested paths pass. Final counts will be refreshed after repairs and independent verification.
+
+The host/service review stopped at API 429 without a verdict. The client reports a **5:00 a.m. Eastern, September 28** reset. That review and targeted re-reviews of significant fixes remain required. No actual-game measurements, live staging, backups or installation have occurred.
+
+Repair verification after commits `03a4442`, `7bd38eb` and `83bb4fd`: engine 207 executions, installer 40 cases, runtime 190 executions, menu 86, companion 178, cross-service 6, independent runtime contracts 22, production adapter attacks 28. All pass. The preserved M1 (117), M2 (188 plus 1,040 properties), reader (122), boundary (219), policy (149) and decision-loop (164) suites also pass on the repaired tree. Python host repair checks pass 60/60; launcher 50/50, staging 45/45 and measurement lifecycle 10/10 pass. These are repository/synthetic tests, not native Balatro measurements.
+
+Independent backup/session checks pass 3/3 and actual Python attestation writer to both Lua readers passes 8/8 with synthetic files. A separate negative check found that a P2 startup marker/attempt counter incorrectly counted as an observed Multiplayer initial connection failure. The classifier repair now passes this check by requiring an explicit observed failure. The actual staged-thread outcome observer is still being implemented; reconnect/keepalive coverage remains pending and prevents certificate acceptance. Measurement exception coverage subsequently reached 11/11 passing cases. Do not treat the green fixture suites below as native evidence.
+
+Read-only normal-Multiplayer compatibility inspection: the pinned `networking/action_handlers.lua` lobby-info path sets readiness from guest presence/readiness; `ui/lobby/start_ready_button.lua` does not impose a blanket equality check on all mod hashes. The live companion remains visible in the ordinary mod list, with no suppression or bypass. Actual normal-human compatibility is still an in-game acceptance gate.
 
 ## Independent repository verification
 
@@ -64,6 +78,6 @@ The TCP test intentionally uses a shortened one-life lifecycle. It does not prov
 5. Controlled actual-engine actions, timer continuity, minimized AI progress, public HUD, results/failure recovery, followed by safe companion installation and normal-mod compatibility checks. Do not play an entire human run.
 6. Record exact installed path, commit, launcher and log directory and leave the user able to start playtesting. Only then declare playable and stop development.
 
-The last attempted Claude re-review returned a session-limit response with reset at **10:30 p.m. America/New_York, September 27, 2026**. That response is not a review verdict. No acceptance or installation is inferred.
+The latest attempted host/service review returned a session-limit response with reset at **5:00 a.m. America/New_York, September 28, 2026**. That response is not a review verdict. No acceptance or installation is inferred.
 
 Raw logs, sources, dependencies, proprietary runtime files and staging remain ignored. No live Balatro files have been modified.
