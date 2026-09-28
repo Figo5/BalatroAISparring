@@ -951,6 +951,8 @@ def _read_crash_probes(staging_root, record: Mapping, roles: Sequence[str]) -> d
             "fresh": bool(fresh),
             "nonce_bound": bool(nonce) and fields.get("nonce") == nonce,
             "patch_bound": fields.get("patch") == staging.PATCH_ID,
+            "msg": fields.get("msg"),
+            "stimulus_bound": staging.MEASUREMENT_CRASH_STIMULUS in str(fields.get("msg") or ""),
         }
     return probes
 
@@ -982,6 +984,7 @@ def _measure_crash(staging_root, session, record: Mapping) -> dict:
         probes.get(role, {}).get("fresh")
         and probes.get(role, {}).get("nonce_bound")
         and probes.get(role, {}).get("patch_bound")
+        and probes.get(role, {}).get("stimulus_bound")
         for role in roles
     )
     codes_ok = bool(codes) and all(code == end_code for code in codes.values())
@@ -997,6 +1000,7 @@ def _measure_crash(staging_root, session, record: Mapping) -> dict:
                 "fresh": bool(item.get("fresh")),
                 "nonce_bound": bool(item.get("nonce_bound")),
                 "patch_bound": bool(item.get("patch_bound")),
+                "stimulus_bound": bool(item.get("stimulus_bound")),
             }
             for role, item in probes.items()
         },
@@ -1048,6 +1052,7 @@ def _p2_cycles(fields: Mapping) -> list:
         while f"cycle{index}_attempt{attempt}_time" in fields:
             attempts.append(
                 {
+                    "start": _as_float(fields.get(f"cycle{index}_attempt{attempt}_start")),
                     "time": _as_float(fields.get(f"cycle{index}_attempt{attempt}_time")),
                     "result": fields.get(f"cycle{index}_attempt{attempt}_result"),
                 }
@@ -1090,11 +1095,44 @@ def _p2_keepalive_push_times(fields: Mapping) -> list:
 
 
 def _p2_cycle_delays(cycle: Mapping) -> Optional[list]:
-    times = [item.get("time") for item in (cycle.get("attempts") or [])]
+    """F2: scheduled sleep gaps from the previous attempt's *end* to the next start.
+
+    The pinned ``tryReconnect`` sleeps *before* each connect, so a real refused
+    connect's duration sits between an attempt's start and end and must never be
+    folded into the 2/4/8-second scheduled gap. Each gap is therefore measured from
+    the previous attempt's end (or the cycle start for the first attempt) to the
+    next attempt's start; an artifact that lacks the start timestamps cannot prove
+    the scheduled gaps and is refused (``None``).
+    """
+    attempts = cycle.get("attempts") or []
     start = cycle.get("start_time")
-    if start is None or any(value is None for value in times) or len(times) != len(P2_RECONNECT_DELAYS):
+    if start is None or len(attempts) != len(P2_RECONNECT_DELAYS):
         return None
-    return [times[0] - start] + [times[i] - times[i - 1] for i in range(1, len(times))]
+    gaps: list = []
+    previous_end = start
+    for item in attempts:
+        attempt_start = item.get("start")
+        attempt_end = item.get("time")
+        if attempt_start is None or attempt_end is None:
+            return None
+        gaps.append(attempt_start - previous_end)
+        previous_end = attempt_end
+    return gaps
+
+
+def _p2_connect_durations(cycles: Sequence[Mapping]) -> Optional[list]:
+    """F2: each observed connect's own duration (end - start), recorded separately."""
+    durations: list = []
+    for cycle in cycles or []:
+        for item in cycle.get("attempts") or []:
+            start = item.get("start")
+            end = item.get("time")
+            if start is None or end is None:
+                return None
+            if end < start:
+                return None
+            durations.append(round(end - start, 6))
+    return durations
 
 
 def _cycle_is_bounded_exhausted(cycle: Mapping) -> bool:
@@ -1124,18 +1162,34 @@ def _listener_view(fields: Optional[Mapping]) -> dict:
         value = fields.get(key)
         if value is None:
             return None
+        if isinstance(value, bool):
+            return value
         return str(value).strip().lower() == "true"
+
+    def text(key):
+        value = fields.get(key)
+        return None if value is None else str(value)
 
     return {
         "present": bool(fields),
+        "schema": text("schema"),
+        "phase": text("phase"),
+        "nonce": text("nonce"),
+        "port": _p2_counter(_coerce_int(fields.get("port"))),
+        "listener_pid": _p2_counter(_coerce_int(fields.get("listener_pid"))),
+        "peer_pid": _p2_counter(_coerce_int(fields.get("peer_pid"))),
+        "peer_host": text("peer_host"),
         "accepted": _p2_counter(_coerce_int(fields.get("accepted"))),
         "peer_is_owned_ai": flag("peer_is_owned_ai"),
         "sent_bytes": _p2_counter(_coerce_int(fields.get("sent_bytes"))),
+        "received_bytes": _p2_counter(_coerce_int(fields.get("received_bytes"))),
+        "received_total_bytes": _p2_counter(_coerce_int(fields.get("received_total_bytes"))),
         "closed": flag("closed"),
         "fin": flag("fin"),
         "close_time": _as_float(fields.get("close_time")),
         "open_until": _as_float(fields.get("open_until")),
         "peer_eof": flag("peer_eof"),
+        "peer_reset": flag("peer_reset"),
         "eof_time": _as_float(fields.get("eof_time")),
     }
 
@@ -1197,6 +1251,7 @@ def _p2_derive(fields: Mapping, dead) -> dict:
         and int(endpoint_port) == int(dead)
     )
     exhausted = [cycle for cycle in cycles if _cycle_is_bounded_exhausted(cycle)]
+    connect_durations = _p2_connect_durations(cycles) if schema_ok else None
     covered: list = []
     if failed_attempt and endpoint_bound:
         covered.append("initial_failure")
@@ -1223,6 +1278,7 @@ def _p2_derive(fields: Mapping, dead) -> dict:
         "endpoint_port": endpoint_port,
         "endpoint_bound": endpoint_bound,
         "cycles": cycles,
+        "connect_durations": connect_durations,
         "receive_errors": receive_errors,
         "keepalive_push_times": keepalive_push_times,
         "exhausted_cycles": exhausted,
@@ -1232,23 +1288,46 @@ def _p2_derive(fields: Mapping, dead) -> dict:
 
 
 def _listener_held_through(listener: Mapping, cycle: Mapping) -> bool:
-    """True only when the listener held the peer connection through cycle completion.
+    """True only when the listener's own release came at/after the cycle ended.
 
-    The SILENT phase requires the connection stay open until the bounded retry cycle
-    is exhausted; an honest premature peer EOF caps the hold at ``eof_time`` so a
-    receipt can never claim a hold that production already ended (this is the final
-    immutable-evidence check, distinct from the ongoing settle readiness check).
+    F1: the game closes its own socket at keepalive expiry, so a peer EOF must never
+    be read as the tool releasing the connection. ``open_until`` is the tool's
+    release time (set only by the listener's ``finish``); the observed peer EOF is
+    validated separately by :func:`_silent_expiry_eof_ok`.
     """
     hold = listener.get("open_until")
     end = cycle.get("end_time")
     if hold is None or end is None:
         return False
-    if listener.get("peer_eof") is True:
-        eof = listener.get("eof_time")
-        if eof is None:
-            return False
-        hold = min(hold, eof)
     return float(hold) >= float(end)
+
+
+def _silent_expiry_eof_ok(derived: Mapping, cycle: Mapping, listener: Mapping) -> bool:
+    """F1: only the game's own expiry close is a legitimate SILENT peer EOF.
+
+    The pinned source closes its client socket about five seconds after the fifth
+    keepAlive push and immediately before starting the bounded retry cycle, so an
+    honest expiry EOF falls at ``fifth_push + keepAliveRetryTimeout`` (within
+    tolerance) and no later than the cycle start plus tolerance. A missing EOF, an
+    early EOF, a reset or a tool-side close never satisfies this.
+    """
+    if listener.get("peer_eof") is not True:
+        return False
+    if listener.get("peer_reset") is True:
+        return False
+    pushes = derived.get("keepalive_push_times") or []
+    if len(pushes) != P2_KEEPALIVE_PUSHES or any(item is None for item in pushes):
+        return False
+    eof = listener.get("eof_time")
+    if eof is None:
+        return False
+    expected = pushes[-1] + P2_KEEPALIVE_INTERVAL
+    if abs(float(eof) - expected) > P2_KEEPALIVE_TOLERANCE:
+        return False
+    start = cycle.get("start_time")
+    if start is not None and float(eof) > float(start) + P2_KEEPALIVE_TOLERANCE:
+        return False
+    return True
 
 
 def _p2_phase_coverage(phase: str, derived: Mapping, listener: Mapping) -> dict:
@@ -1282,12 +1361,21 @@ def _p2_phase_coverage(phase: str, derived: Mapping, listener: Mapping) -> dict:
             and cycle.get("cause") in ("close", "keepalive")
         ):
             close_time = listener.get("close_time")
-            after_close = [
-                item
-                for item in (derived.get("receive_errors") or [])
-                if item.get("time") is not None and close_time is not None and item["time"] >= close_time
-            ]
-            if after_close:
+            errors = sorted(
+                (item for item in (derived.get("receive_errors") or []) if item.get("time") is not None),
+                key=lambda item: item["time"],
+            )
+            first_error = errors[0] if errors else None
+            cycle_start = cycle.get("start_time")
+            # F5: the listener FIN must precede the first receive error, which in
+            # turn must precede the retry cycle the error caused.
+            if (
+                close_time is not None
+                and first_error is not None
+                and float(first_error["time"]) >= float(close_time)
+                and cycle_start is not None
+                and float(first_error["time"]) <= float(cycle_start)
+            ):
                 covered.append("closure")
                 closure_path = "close_branch" if cycle.get("cause") == "close" else "keepalive_fallback"
     elif phase == "P2_SILENT":
@@ -1305,6 +1393,9 @@ def _p2_phase_coverage(phase: str, derived: Mapping, listener: Mapping) -> dict:
             listener.get("accepted") == 1
             and listener.get("peer_is_owned_ai") is True
             and listener.get("sent_bytes") == 0
+            # F1: SILENT never half-closes; only the tool's own release ends the hold.
+            and listener.get("closed") is not True
+            and listener.get("fin") is not True
             and cycle is not None
             and cycle.get("cause") == "keepalive"
             and derived.get("schema_ok")
@@ -1312,6 +1403,7 @@ def _p2_phase_coverage(phase: str, derived: Mapping, listener: Mapping) -> dict:
             and not derived.get("receive_errors")
             and spacing_ok
             and _listener_held_through(listener, cycle)
+            and _silent_expiry_eof_ok(derived, cycle, listener)
         ):
             covered.append("keepalive")
     subgate = P2_PHASE_SUBGATE.get(phase)
@@ -1319,10 +1411,12 @@ def _p2_phase_coverage(phase: str, derived: Mapping, listener: Mapping) -> dict:
     return {"covered": covered, "pending": pending, "closure_path": closure_path}
 
 
-def _p2_probe_problems(derived: Mapping, measured: Mapping, phase: Optional[str]) -> list:
+def _p2_probe_problems(derived: Mapping, measured: Mapping, phase: Optional[str], listener_view=None) -> list:
     """Compare a re-derived classifier view against the recorded measured block."""
     problems: list = []
-    coverage = _p2_phase_coverage(phase, derived, _listener_view(measured.get("listener"))) if phase in P2_PHASES else None
+    if listener_view is None:
+        listener_view = _listener_view(measured.get("listener"))
+    coverage = _p2_phase_coverage(phase, derived, listener_view) if phase in P2_PHASES else None
     expected_covered = coverage["covered"] if coverage else derived["covered"]
     expected_pending = coverage["pending"] if coverage else derived["pending"]
     if list(expected_covered) != list(measured.get("covered_subgates") or []):
@@ -1344,13 +1438,39 @@ def _p2_probe_problems(derived: Mapping, measured: Mapping, phase: Optional[str]
     ):
         if derived.get(key) != measured.get(key):
             problems.append(f"P2_{key}_not_rederived")
+    if derived.get("connect_durations") != measured.get("connect_durations"):
+        problems.append("P2_connect_durations_not_rederived")
     endpoint = measured.get("pinned_endpoint") or {}
     if derived["endpoint_url"] != endpoint.get("url") or derived["endpoint_port"] != endpoint.get("port"):
         problems.append("P2_endpoint_not_rederived")
     return problems
 
 
-def _measure_p2(staging_root, record: Mapping, session, port, phase: Optional[str] = None) -> dict:
+def _normalize_dead_port_proof(proof) -> Optional[dict]:
+    """F4: the exact tool-owned dead-port shape, or ``None`` when absent/invalid."""
+    if not isinstance(proof, Mapping) or proof.get("ok") is not True:
+        return None
+    port = proof.get("dead_port")
+    absent = proof.get("listener_absent") or {}
+    if not _is_port(port) or proof.get("refused") is not True:
+        return None
+    if absent.get("ipv4") is not True or absent.get("ipv6") is not True:
+        return None
+    if proof.get("timed_out") is True:
+        return None
+    return {
+        "ok": True,
+        "dead_port": int(port),
+        "host": "127.0.0.1",
+        "refused": True,
+        "listener_absent": {"ipv4": True, "ipv6": True},
+        "attempts": int(proof.get("attempts")) if _is_int(proof.get("attempts")) else 0,
+        "timings": list(proof.get("timings") or []),
+        "measured_unix": proof.get("measured_unix") if _is_int(proof.get("measured_unix")) else None,
+    }
+
+
+def _measure_p2(staging_root, record: Mapping, session, port, phase: Optional[str] = None, after_exit_proof=None) -> dict:
     """P2 evidence derived from the tool's setup, the staged artifact and listener.
 
     The dead-port setup (both-family listener absence + a real refused connect) is
@@ -1395,6 +1515,9 @@ def _measure_p2(staging_root, record: Mapping, session, port, phase: Optional[st
         "refused": bool(refused),
         "attempts": probe_attempts,
         "probe_attempts": probe_attempts,
+        # F4: the same dead port re-measured after the session has exited, so the
+        # receipt binds an after-exit proof and not only a pre-spawn claim.
+        "after_exit_dead_port": _normalize_dead_port_proof(after_exit_proof),
         "connect_attempts": derived["connect_attempts"],
         "connect_successes": derived["connect_successes"],
         "connect_failures": derived["connect_failures"],
@@ -1420,6 +1543,7 @@ def _measure_p2(staging_root, record: Mapping, session, port, phase: Optional[st
         "keepalive_pushes": derived["keepalive_pushes"],
         "closes": derived["closes"],
         "cycles": derived["cycles"],
+        "connect_durations": derived["connect_durations"],
         "listener": _listener_view(listener_fields),
         "closure_path": closure_path,
         "artifact_schema_ok": derived["schema_ok"],
@@ -1436,15 +1560,79 @@ def _validate_p2_artifact_binding(staging_root, receipt: Mapping) -> list:
     The receipt's measured coverage is never trusted on its own: the copied, hashed
     ``p2`` probe (and, for CLOSE/SILENT, the copied listener log) are re-parsed and
     the same classifier must reproduce the counters, endpoint, closure path and
-    covered/pending subgates.
+    covered/pending subgates. F3: the copied listener log - not the stored measured
+    block - is the source of the listener view, and its identity fields (schema,
+    phase, nonce, port, peer host/PID, listener PID, zero sends) are bound to the
+    receipt and its owned AI PIDs.
     """
+    problems: list = []
     parsed = _probe_fields(staging_root, "ai", receipt)
     artifact = parsed.get("p2")
     if not isinstance(artifact, Mapping):
-        return []
+        return problems
     measured = receipt.get("measured") or {}
     derived = _p2_derive(artifact.get("fields") or {}, measured.get("dead_port"))
-    return _p2_probe_problems(derived, measured, receipt.get("phase"))
+    phase = receipt.get("phase")
+    if phase in ("P2_CLOSE", "P2_SILENT"):
+        listener_item = parsed.get("listener")
+        if not isinstance(listener_item, Mapping):
+            problems.append("P2_listener_copy_missing")
+            return problems
+        raw = listener_item.get("fields") or {}
+        problems.extend(_validate_listener_binding(raw, receipt))
+        view = _listener_view(raw)
+        if view != measured.get("listener"):
+            problems.append("P2_listener_not_rederived")
+        problems.extend(_p2_probe_problems(derived, measured, phase, listener_view=view))
+    else:
+        problems.extend(_p2_probe_problems(derived, measured, phase))
+    return problems
+
+
+def _validate_listener_binding(raw: Mapping, receipt: Mapping) -> list:
+    """F3: bind the copied listener log's identity and ownership to the receipt."""
+    problems: list = []
+    if str(raw.get("probe")) != "listener":
+        problems.append("P2_listener_probe_mismatch")
+    if str(raw.get("schema")) != staging.LISTENER_SCHEMA:
+        problems.append("P2_listener_schema_mismatch")
+    if raw.get("patch") != staging.PATCH_ID:
+        problems.append("P2_listener_patch_mismatch")
+    if raw.get("nonce") != receipt.get("nonce"):
+        problems.append("P2_listener_nonce_mismatch")
+    if str(raw.get("phase")) != receipt.get("phase"):
+        problems.append("P2_listener_phase_mismatch")
+    if _coerce_int(raw.get("port")) != receipt.get("port"):
+        problems.append("P2_listener_port_mismatch")
+    if str(raw.get("peer_host")) != "127.0.0.1":
+        problems.append("P2_listener_peer_host_mismatch")
+    peer_pid = _coerce_int(raw.get("peer_pid"))
+    ai_pids = []
+    for value in ((receipt.get("pids") or {}).get("ai") or []):
+        try:
+            ai_pids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    if not _is_int(peer_pid) or int(peer_pid) not in ai_pids:
+        problems.append("P2_listener_peer_pid_not_owned")
+    listener_pid = _coerce_int(raw.get("listener_pid"))
+    if not _is_int(listener_pid) or int(listener_pid) <= 0:
+        problems.append("P2_listener_pid_missing")
+    if _coerce_int(raw.get("sent_bytes")) != 0:
+        problems.append("P2_listener_sent_bytes")
+    if str(raw.get("exclusive")).strip().lower() != "true":
+        problems.append("P2_listener_not_exclusive")
+    # F8: the retained byte count is bounded; the total received count is separate
+    # and never smaller than the retained prefix.
+    retained = _coerce_int(raw.get("received_bytes"))
+    total = _coerce_int(raw.get("received_total_bytes"))
+    if not _is_int(retained) or int(retained) < 0:
+        problems.append("P2_listener_received_bytes")
+    if not _is_int(total) or int(total) < 0:
+        problems.append("P2_listener_received_total_missing")
+    elif _is_int(retained) and int(total) < int(retained):
+        problems.append("P2_listener_received_total_inconsistent")
+    return problems
 
 
 def _read_p2_probe_fields(staging_root, record: Mapping) -> dict:
@@ -1570,7 +1758,10 @@ def _validate_crash_observation(receipt: Mapping) -> list:
     if not isinstance(probes, Mapping) or set(probes) != roles:
         problems.append("CRASH_probes_missing")
     elif not all(
-        item.get("fresh") is True and item.get("nonce_bound") is True and item.get("patch_bound") is True
+        item.get("fresh") is True
+        and item.get("nonce_bound") is True
+        and item.get("patch_bound") is True
+        and item.get("stimulus_bound") is True
         for item in probes.values()
     ):
         problems.append("CRASH_probe_unbound")
@@ -1600,6 +1791,17 @@ def _validate_p2_observation(phase: str, receipt: Mapping) -> list:
             problems.append("P2_listener_absent_ipv6_missing")
         if not _is_int(measured.get("attempts")) or measured.get("attempts", 0) < 1:
             problems.append("P2_attempts_missing")
+        # F4: P2_INITIAL also binds a fresh *after-exit* dead-port proof (refused and
+        # absent on both families), never only the pre-spawn measurement.
+        after = measured.get("after_exit_dead_port")
+        if not isinstance(after, Mapping) or after.get("ok") is not True:
+            problems.append("P2_after_exit_dead_port_missing")
+        else:
+            if _is_port(measured.get("dead_port")) and int(after.get("dead_port") or 0) != int(measured["dead_port"]):
+                problems.append("P2_after_exit_dead_port_mismatch")
+            absent_after = after.get("listener_absent") or {}
+            if after.get("refused") is not True or absent_after.get("ipv4") is not True or absent_after.get("ipv6") is not True:
+                problems.append("P2_after_exit_not_dead")
     endpoint = measured.get("pinned_endpoint") or {}
     if endpoint.get("url") != "127.0.0.1":
         problems.append("P2_endpoint_not_loopback")
@@ -1689,7 +1891,7 @@ def _validate_receipt_against_layers(phase: str, receipt: Mapping, layer_n: Mapp
     return problems
 
 
-def _measured_for_phase(phase: str, session, staging_root, record, layer_n, layer_m, port) -> dict:
+def _measured_for_phase(phase: str, session, staging_root, record, layer_n, layer_m, port, after_exit_proof=None) -> dict:
     measured: dict = {}
     if phase == "P1A":
         measured["bootstrap_install_digest"] = (layer_n.get("bootstrap") or {}).get("install_digest")
@@ -1706,7 +1908,7 @@ def _measured_for_phase(phase: str, session, staging_root, record, layer_n, laye
     elif phase == "CRASH":
         measured.update(_measure_crash(staging_root, session, record))
     elif phase in P2_PHASES:
-        measured.update(_measure_p2(staging_root, record, session, port, phase=phase))
+        measured.update(_measure_p2(staging_root, record, session, port, phase=phase, after_exit_proof=after_exit_proof))
     return measured
 
 
@@ -1752,6 +1954,7 @@ def record_phase_receipt(
     live,
     port=None,
     live_closed=None,
+    after_exit_proof=None,
 ) -> dict:
     """Tool-owned recorder: take after-snapshot, re-verify probes, write an immutable receipt.
 
@@ -1768,6 +1971,8 @@ def record_phase_receipt(
         problems.append("session_not_launched")
     if getattr(session, "session_id", session_id) != session_id:
         problems.append("session_id_mismatch")
+    if after_exit_proof is not None and phase != "P2_INITIAL":
+        problems.append("after_exit_proof_unexpected")
     if not _owned_all_exited(session):
         problems.append("owned_processes_running")
     record = _receipt_open_record(staging_root, session_id)
@@ -1861,7 +2066,7 @@ def record_phase_receipt(
         )
         strong_problems.extend(f"{role}:{item}" for item in lovely.get("problems", ()))
         selected = _select_dump_files(
-            paths, lovely.get("fresh_dumps") or [], require_socket=(phase in ("P2_CLOSE", "P2_SILENT"))
+            paths, lovely.get("fresh_dumps") or [], require_socket=(phase in P2_PHASES)
         )
         if not selected:
             strong_problems.append(f"{role}:lovely_dump_required_missing")
@@ -1871,7 +2076,9 @@ def record_phase_receipt(
 
     layer_n = collect_layer_n(staging_root, live=live)
     layer_m = collect_layer_m(staging_root, live=live)
-    measured = _measured_for_phase(phase, session, staging_root, record, layer_n, layer_m, port)
+    measured = _measured_for_phase(
+        phase, session, staging_root, record, layer_n, layer_m, port, after_exit_proof=after_exit_proof
+    )
     # N10/section 4: a P2 receipt is never closed as passed while its own defined
     # coverage is still pending. Each P2 phase proves exactly one coverage definition.
     if phase in P2_PHASES and measured.get("coverage_complete") is not True:
@@ -2724,8 +2931,16 @@ def prepare_session(
     lock = lockout(staging_root)
     if lock.get("locked"):
         problems.append("certificate_locked_out")
-    if list_open_records(staging_root):
-        problems.append("session_already_open")
+    try:
+        open_records = list_open_records(staging_root)
+    except staging.StagingError:
+        # F10: a malformed/unreadable open record is a refusal problem, not an
+        # escaping exception that would otherwise fail a session that was never
+        # prepared (or be mislabelled by the caller's failure recorder).
+        problems.append("open_records_unreadable")
+    else:
+        if open_records:
+            problems.append("session_already_open")
     if _receipt_open_record(staging_root, session_id) is not None:
         problems.append("session_id_reused")
     if phase == MATCH:

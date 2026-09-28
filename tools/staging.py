@@ -171,6 +171,10 @@ P2_PAYLOAD_MARKERS = (
     "AISP_P2_KEEPALIVE",
     "AISP_P2_RECV",
     "AISP_P2_KEEPALIVE_PUSH",
+    # F2: a tenth env-gated marker stamped *before* the pinned connect call so the
+    # retry-gap measurement uses each attempt's start (previous attempt end -> next
+    # attempt start) instead of the connect duration being folded into the sleep.
+    "AISP_P2_CONNECT_BEFORE",
 )
 
 PROOF_SCHEMA = "aisparring.isolation_proof.v2"
@@ -1497,7 +1501,7 @@ def measurement_crash_patch(patch_id: str = PATCH_ID) -> dict:
         "      if ai_orig then return ai_orig(ai_msg) end\n"
         "    end\n"
         "    if love.errorhandler ~= nil then love.errorhandler = ai_crash_handler else love.errhand = ai_crash_handler end\n"
-        "    error('AISparring measurement: staged crash fixture (" + patch_id + ")', 0)\n"
+        "    error('AISparring measurement stimulus " + MEASUREMENT_CRASH_STIMULUS + " (" + patch_id + ")', 0)\n"
         "  end\n"
         "end"
     )
@@ -1576,6 +1580,7 @@ def _mp_p2_observer_state_payload(patch_id: str) -> str:
         "  reconnect_attempts = 0, reconnect_failures = 0, reconnects = 0,\n"
         "  keepalive_failures = 0, closes = 0, keepalive_pushes = 0,\n"
         "  receive_errors = {}, keepalive_push_times = {}, cycles = {}, current_cycle = nil,\n"
+        "  pending_start = nil,\n"
         "}\n"
         "local AISP_P2_ON = (os.getenv('" + MEASURE_P2_ENV + "') == '1')\n"
         "local function AISP_P2_NOW() return (socket.gettime and socket.gettime()) or os.clock() end\n"
@@ -1627,6 +1632,7 @@ def _mp_p2_observer_state_payload(patch_id: str) -> str:
         "    local ai_attempts = ai_c.attempts or {}\n"
         "    ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_attempt_count=' .. tostring(#ai_attempts)\n"
         "    for ai_j = 1, #ai_attempts do\n"
+        "      ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_attempt' .. ai_j .. '_start=' .. tostring(ai_attempts[ai_j].start_time or 0)\n"
         "      ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_attempt' .. ai_j .. '_time=' .. tostring(ai_attempts[ai_j].time or 0)\n"
         "      ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_attempt' .. ai_j .. '_result=' .. ai_show(ai_attempts[ai_j].result)\n"
         "    end\n"
@@ -1643,6 +1649,8 @@ def _mp_p2_connect_observer_payload() -> str:
         "if AISP_P2_ON then\n"
         "  AISP_P2.attempts = AISP_P2.attempts + 1\n"
         "  local ai_now = AISP_P2_NOW()\n"
+        "  local ai_start = AISP_P2.pending_start or ai_now\n"
+        "  AISP_P2.pending_start = nil\n"
         "  if AISP_P2.attempts == 1 then\n"
         "    AISP_P2.first_result = connectionResult\n"
         "    AISP_P2.first_error = tostring(errorMessage)\n"
@@ -1654,7 +1662,7 @@ def _mp_p2_connect_observer_payload() -> str:
         "  if AISP_P2.current_cycle then\n"
         "    AISP_P2.reconnect_attempts = AISP_P2.reconnect_attempts + 1\n"
         "    local ai_attempts = AISP_P2.current_cycle.attempts\n"
-        "    ai_attempts[#ai_attempts + 1] = { time = ai_now, result = connectionResult }\n"
+        "    ai_attempts[#ai_attempts + 1] = { start_time = ai_start, time = ai_now, result = connectionResult }\n"
         "  end\n"
         "  if connectionResult == 1 then\n"
         "    AISP_P2.successes = AISP_P2.successes + 1\n"
@@ -1697,6 +1705,18 @@ def mp_p2_observer_patches(port: int, patch_id: str = PATCH_ID) -> list:
             "pattern": MP_SOCKET_CONNECT_LITERAL,
             "position": "after",
             "payload": _mp_p2_connect_observer_payload(),
+            "match_indent": False,
+            "times": 1,
+        },
+        {
+            "kind": "pattern",
+            "target": MP_SOCKET_SOURCE_TARGET,
+            "pattern": MP_SOCKET_CONNECT_LITERAL,
+            "position": "before",
+            "payload": (
+                "-- " + P2_PAYLOAD_MARKERS[9] + "\n"
+                "if AISP_P2_ON then AISP_P2.pending_start = AISP_P2_NOW() end"
+            ),
             "match_indent": False,
             "times": 1,
         },

@@ -163,23 +163,27 @@ P2_CLOSE_ARTIFACT = (
     "keepalive_pushes=0\ncloses=1\n"
     "cycle1_cause=close\ncycle1_start_time=101.0\ncycle1_outcome=exhausted\ncycle1_end_time=115.0\n"
     "cycle1_attempt_count=3\n"
-    "cycle1_attempt1_time=103.0\ncycle1_attempt1_result=none\n"
-    "cycle1_attempt2_time=107.0\ncycle1_attempt2_result=none\n"
-    "cycle1_attempt3_time=115.0\ncycle1_attempt3_result=none\n"
+    "cycle1_attempt1_start=103.0\ncycle1_attempt1_time=103.0\ncycle1_attempt1_result=none\n"
+    "cycle1_attempt2_start=107.0\ncycle1_attempt2_time=107.0\ncycle1_attempt2_result=none\n"
+    "cycle1_attempt3_start=115.0\ncycle1_attempt3_time=115.0\ncycle1_attempt3_result=none\n"
     "receive_error1_value=closed\nreceive_error1_time=100.5\n"
 )
 
+# F1/F2: source-faithful SILENT artifact. The pinned source pushes five keepAlives
+# (20 s then five 5 s retry timers) and then closes its own socket about 5 s after
+# the fifth push, immediately starting the 2/4/8-second retry cycle. Each attempt's
+# start and end are recorded separately so the scheduled gap excludes connect time.
 P2_SILENT_ARTIFACT = (
     "connect_attempts=4\nconnect_successes=1\nconnect_failures=3\n"
     "first_result=1\nfirst_error=nil\nfirst_time=100.0\nfirst_success_time=100.0\n"
-    "last_result=none\nlast_error=connection refused\nlast_time=140.0\n"
+    "last_result=none\nlast_error=connection refused\nlast_time=159.0\n"
     "reconnect_attempts=3\nreconnect_failures=3\nreconnects=1\nkeepalive_failures=1\n"
     "keepalive_pushes=5\ncloses=0\n"
-    "cycle1_cause=keepalive\ncycle1_start_time=120.0\ncycle1_outcome=exhausted\ncycle1_end_time=134.0\n"
+    "cycle1_cause=keepalive\ncycle1_start_time=145.0\ncycle1_outcome=exhausted\ncycle1_end_time=159.0\n"
     "cycle1_attempt_count=3\n"
-    "cycle1_attempt1_time=122.0\ncycle1_attempt1_result=none\n"
-    "cycle1_attempt2_time=126.0\ncycle1_attempt2_result=none\n"
-    "cycle1_attempt3_time=134.0\ncycle1_attempt3_result=none\n"
+    "cycle1_attempt1_start=147.0\ncycle1_attempt1_time=147.0\ncycle1_attempt1_result=none\n"
+    "cycle1_attempt2_start=151.0\ncycle1_attempt2_time=151.0\ncycle1_attempt2_result=none\n"
+    "cycle1_attempt3_start=159.0\ncycle1_attempt3_time=159.0\ncycle1_attempt3_result=none\n"
     "keepalive_push1_time=120.0\nkeepalive_push2_time=125.0\nkeepalive_push3_time=130.0\n"
     "keepalive_push4_time=135.0\nkeepalive_push5_time=140.0\n"
 )
@@ -229,15 +233,30 @@ def _write_probes(paths, nonce=NONCE, port=PORT, phase=None):
         encoding="utf-8",
     )
     (save / staging.PROBE_CRASH).write_text(
-        f"probe=crash\npatch={staging.PATCH_ID}\nnonce={nonce}\nsave={save}\nmsg=staged crash\n",
+        f"probe=crash\npatch={staging.PATCH_ID}\nnonce={nonce}\nsave={save}\n"
+        f"msg=AISparring measurement stimulus {staging.MEASUREMENT_CRASH_STIMULUS}\n",
         encoding="utf-8",
     )
+    if phase == "P2_SILENT":
+        # F1: the listener observes the game's own expiry close (peer EOF) but keeps
+        # holding its side; ``open_until`` is the tool's later release, and the
+        # listener never half-closes in SILENT.
+        listener_tail = (
+            "closed=false\nfin=false\nclose_time=\nopen_until=160.0\n"
+            "peer_eof=true\npeer_reset=false\neof_time=145.0\n"
+        )
+    else:
+        listener_tail = (
+            "closed=true\nfin=true\nclose_time=100.0\nopen_until=100.0\n"
+            "peer_eof=false\npeer_reset=false\neof_time=\n"
+        )
     (save / staging.PROBE_LISTENER).write_text(
         f"probe=listener\nschema={staging.LISTENER_SCHEMA}\npatch={staging.PATCH_ID}\nnonce={nonce}\n"
         f"phase={phase or 'P2_CLOSE'}\nport={port}\nfamilies=ipv4\nexclusive=true\nlistener_pid=1\n"
-        "accepted=1\npeer_pid=100\npeer_is_owned_ai=true\nsent_bytes=0\nreceived_bytes=8\n"
-        "received_sha256=" + "0" * 64 + "\nclosed=true\nfin=true\nclose_time=100.0\n"
-        + ("open_until=150.0\n" if phase == "P2_SILENT" else "open_until=100.0\n")
+        "accepted=1\npeer_pid=100\npeer_host=127.0.0.1\npeer_is_owned_ai=true\nsent_bytes=0\n"
+        "received_bytes=8\nreceived_total_bytes=8\n"
+        "received_sha256=" + "0" * 64 + "\n"
+        + listener_tail
         + f"save={save}\n",
         encoding="utf-8",
     )
@@ -551,6 +570,7 @@ def _record_phase(fixture, phase, exit_codes=None, prepared=None, session_id=Non
         live=live,
         port=PORT if phase != "P1A" else None,
         live_closed=lambda: True,
+        after_exit_proof=_fake_dead_port_setup() if phase == "P2_INITIAL" else None,
     )
 
 
@@ -1634,12 +1654,15 @@ def _run_phase_with_listener_overrides(fixture, session_id, artifact, listener_o
     )
     listener = {
         "accepted": "1", "peer_is_owned_ai": "true", "sent_bytes": "0",
+        "peer_pid": "100", "peer_host": "127.0.0.1", "listener_pid": "1",
+        "received_bytes": "8", "received_total_bytes": "8",
         "closed": "true", "fin": "true", "close_time": "100.0", "open_until": "100.0",
+        "peer_eof": "false", "peer_reset": "false", "eof_time": "",
     }
     listener.update(listener_overrides)
     (save / staging.PROBE_LISTENER).write_text(
         f"probe=listener\nschema={staging.LISTENER_SCHEMA}\npatch={staging.PATCH_ID}\nnonce=<NONCE>\n"
-        f"phase={session_id}\nport={PORT}\nsave={save}\n"
+        f"phase=P2_CLOSE\nport={PORT}\nfamilies=ipv4\nexclusive=true\nsave={save}\n"
         + "\n".join(f"{key}={value}" for key, value in listener.items()) + "\n",
         encoding="utf-8",
     )
@@ -1695,8 +1718,8 @@ def test_p2_reconnect_coverage_never_less_from_recovered_or_unfinished_cycles():
     recovered.update({
         "cycle1_cause": "close", "cycle1_start_time": "100.0", "cycle1_outcome": "recovered",
         "cycle1_end_time": "106.0", "cycle1_attempt_count": "2",
-        "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
-        "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "1",
+        "cycle1_attempt1_start": "102.0", "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
+        "cycle1_attempt2_start": "106.0", "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "1",
     })
     assert "reconnect" not in ic._p2_derive(recovered, dead)["covered"]
     # Case 2: a recovered cycle followed by an unfinished cycle with one failure.
@@ -1704,11 +1727,11 @@ def test_p2_reconnect_coverage_never_less_from_recovered_or_unfinished_cycles():
     overstate.update({
         "cycle1_cause": "close", "cycle1_start_time": "100.0", "cycle1_outcome": "recovered",
         "cycle1_end_time": "106.0", "cycle1_attempt_count": "2",
-        "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
-        "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "1",
+        "cycle1_attempt1_start": "102.0", "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
+        "cycle1_attempt2_start": "106.0", "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "1",
         "cycle2_cause": "close", "cycle2_start_time": "110.0", "cycle2_outcome": "unfinished",
         "cycle2_end_time": "112.0", "cycle2_attempt_count": "1",
-        "cycle2_attempt1_time": "112.0", "cycle2_attempt1_result": "none",
+        "cycle2_attempt1_start": "112.0", "cycle2_attempt1_time": "112.0", "cycle2_attempt1_result": "none",
     })
     assert "reconnect" not in ic._p2_derive(overstate, dead)["covered"]
     # A genuinely completed, bounded, exhausted cycle does cover it.
@@ -1716,11 +1739,158 @@ def test_p2_reconnect_coverage_never_less_from_recovered_or_unfinished_cycles():
     exhausted.update({
         "cycle1_cause": "close", "cycle1_start_time": "100.0", "cycle1_outcome": "exhausted",
         "cycle1_end_time": "114.0", "cycle1_attempt_count": "3",
-        "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
-        "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "none",
-        "cycle1_attempt3_time": "114.0", "cycle1_attempt3_result": "none",
+        "cycle1_attempt1_start": "102.0", "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
+        "cycle1_attempt2_start": "106.0", "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "none",
+        "cycle1_attempt3_start": "114.0", "cycle1_attempt3_time": "114.0", "cycle1_attempt3_result": "none",
     })
     assert "reconnect" in ic._p2_derive(exhausted, dead)["covered"]
+
+
+# --- F1: SILENT listener hold vs the game's own expiry EOF ---------------------
+
+def _silent_derived():
+    cycle = {
+        "cause": "keepalive", "start_time": 145.0, "outcome": "exhausted", "end_time": 159.0,
+        "attempts": [
+            {"start": 147.0, "time": 147.0, "result": "none"},
+            {"start": 151.0, "time": 151.0, "result": "none"},
+            {"start": 159.0, "time": 159.0, "result": "none"},
+        ],
+    }
+    return {
+        "schema_ok": True, "first_result": "1", "first_success_time": 100.0,
+        "cycles": [cycle], "receive_errors": [],
+        "keepalive_push_times": [120.0, 125.0, 130.0, 135.0, 140.0],
+    }
+
+
+def _silent_listener(**override):
+    listener = {
+        "accepted": 1, "peer_is_owned_ai": True, "sent_bytes": 0,
+        "closed": False, "fin": False, "open_until": 160.0,
+        "peer_eof": True, "peer_reset": False, "eof_time": 145.0,
+    }
+    listener.update(override)
+    return listener
+
+
+def test_p2_silent_requires_a_legitimate_expiry_eof_and_hold_through_cycle():
+    derived = _silent_derived()
+    positive = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+    assert "keepalive" in positive["covered"], positive
+
+    # A close well before the fifth push + retry timeout is an early EOF, not the
+    # game's expiry close, and must not cover.
+    early = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener(eof_time=120.0))
+    assert "keepalive" not in early["covered"], early
+
+    # A reset is never the legitimate expiry close, even in the right window.
+    reset = ic._p2_phase_coverage(
+        "P2_SILENT", derived, _silent_listener(peer_eof=False, peer_reset=True, eof_time=147.0)
+    )
+    assert "keepalive" not in reset["covered"], reset
+
+    # A tool that released the connection before the cycle ended never held through.
+    released = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener(open_until=150.0))
+    assert "keepalive" not in released["covered"], released
+
+    # A missing hold is still refused.
+    missing = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener(open_until=None))
+    assert "keepalive" not in missing["covered"], missing
+
+
+def _p2_initial_refusal(fixture, session_id, *, after_exit_proof, artifact=None):
+    with synthetic_tools(fixture["root"]):
+        for phase in ("P1A", "P1B", "FULL_P1"):
+            assert _record_phase(fixture, phase)["ok"], phase
+    prepared, bind = _prepare_and_probes(fixture, "P2_INITIAL", session_id)
+    if artifact is not None:
+        ai = staging.role_paths(fixture["staging_root"], "ai")
+        (ai.data / "Balatro" / staging.PROBE_P2).write_text(
+            f"probe=p2\nschema={staging.P2_OBSERVER_SCHEMA}\npatch={staging.PATCH_ID}\n"
+            f"nonce={prepared['nonce']}\nurl=127.0.0.1\nport={PORT}\nmods={ai.mods}\n"
+            f"save={ai.data / 'Balatro'}\n" + artifact,
+            encoding="utf-8",
+        )
+    session = _FakeSession(
+        session_id, fixture["staging_root"], prepared["nonce"], bind, ("ai",), **_end_kwargs("P2_INITIAL")
+    )
+    return ic.record_phase_receipt(
+        fixture["staging_root"], phase="P2_INITIAL", session_id=session_id, session=session,
+        live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+        after_exit_proof=after_exit_proof,
+    )
+
+
+def test_p2_initial_requires_the_after_exit_dead_port_proof():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        missing = _p2_initial_refusal(fixture, "p2-no-after", after_exit_proof=None)
+        assert not missing["ok"], missing
+        assert "P2_after_exit_dead_port_missing" in missing["problems"], missing
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        # F4/F11: a timed-out probe is never a refusal, so it cannot prove the port
+        # is dead after exit.
+        timed_out = {
+            "ok": True, "kind": "dead_port", "dead_port": PORT, "host": "127.0.0.1",
+            "refused": True, "timed_out": True,
+            "listener_absent": {"ipv4": True, "ipv6": True}, "attempts": 3,
+            "timings": [0.5, 0.5, 0.5], "measured_unix": int(time.time()),
+        }
+        bad = _p2_initial_refusal(fixture, "p2-timeout-after", after_exit_proof=timed_out)
+        assert not bad["ok"], bad
+        assert "P2_after_exit_dead_port_missing" in bad["problems"], bad
+
+
+def test_p2_listener_copy_is_bound_to_receipt_identity_and_ownership():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        wrong_peer = _p2_close_refusal(fixture, "p2-peer-pid", {"peer_pid": "999"})
+        assert not wrong_peer["ok"], wrong_peer
+        assert "P2_listener_peer_pid_not_owned" in wrong_peer["problems"], wrong_peer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        bad_total = _p2_close_refusal(
+            fixture, "p2-total", {"received_bytes": "8", "received_total_bytes": "4"}
+        )
+        assert not bad_total["ok"], bad_total
+        assert "P2_listener_received_total_inconsistent" in bad_total["problems"], bad_total
+
+
+def test_crash_probe_message_must_carry_the_stimulus():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            for phase in ("P1A", "P1B", "FULL_P1"):
+                assert _record_phase(fixture, phase)["ok"], phase
+        prepared, bind = _prepare_and_probes(fixture, "CRASH", "crash-msg")
+        # F9: a probe whose message omits the prepared stimulus cannot prove this
+        # crash was the tool's own env-gated one.
+        for role in ("human", "ai"):
+            paths = staging.role_paths(fixture["staging_root"], role)
+            (paths.data / "Balatro" / staging.PROBE_CRASH).write_text(
+                f"probe=crash\npatch={staging.PATCH_ID}\nnonce={prepared['nonce']}\n"
+                f"save={paths.data / 'Balatro'}\nmsg=staged crash without the marker\n",
+                encoding="utf-8",
+            )
+        session = _FakeSession(
+            "crash-msg", fixture["staging_root"], prepared["nonce"], bind, ic.PHASE_ROLES["CRASH"],
+            exit_codes=_CRASH_EXITS, **_end_kwargs("CRASH"),
+        )
+        result = ic.record_phase_receipt(
+            fixture["staging_root"], phase="CRASH", session_id="crash-msg", session=session,
+            live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+        )
+        assert not result["ok"], result
+        assert "CRASH_probe_unbound" in result["problems"], result
 
 
 # --- M2: strong probe/lovely checkers inside receipts -------------------------

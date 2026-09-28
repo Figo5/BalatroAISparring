@@ -1511,7 +1511,10 @@ def test_measurement_listener_requires_exact_owned_pid_and_complete_inventory():
     assert listener._socket.last.closed
 
 
-def test_measurement_listener_silent_eof_does_not_busy_spin_or_extend_the_hold():
+def test_measurement_listener_silent_eof_records_eof_separately_and_holds_until_release():
+    # F1: the game closes its own socket at keepalive expiry. The listener records
+    # that peer EOF but keeps holding its own side through the cycle; ``open_until``
+    # is only the tool's later release in ``finish``, never the peer EOF.
     listener = _listener(mode="P2_SILENT", owner_lookup=lambda *args: 12345)
     conn = _FakeConn([b""])
     listener._server = _FakeAcceptServer(conn)
@@ -1519,9 +1522,14 @@ def test_measurement_listener_silent_eof_does_not_busy_spin_or_extend_the_hold()
     listener._serve()
     state = listener._state
     assert state["peer_eof"] is True and state["peer_is_owned_ai"] is True
-    assert state["open_until"] == state["eof_time"], "an honest EOF caps the hold"
+    assert state["peer_reset"] is False
+    assert state["open_until"] is None, "a peer EOF never releases the tool's hold"
+    assert conn.closed is False, "the held connection stays open until the tool releases it"
     assert conn.calls == 1, "a closed SILENT peer must not busy-spin"
     assert listener._server is None
+    listener.finish()
+    assert state["open_until"] is not None and state["open_until"] >= state["eof_time"]
+    assert conn.closed is True
 
 
 def test_measurement_listener_wrong_peer_aborts_promptly_and_nothing_is_sent():
@@ -1587,8 +1595,11 @@ def test_measurement_listener_silent_receive_timeout_is_not_a_peer_eof():
     listener.arm([12345])
     listener._serve()
     assert listener._state["peer_eof"] is False, "a recv timeout is not an EOF"
-    assert listener._state["open_until"] is not None
+    assert listener._state["peer_reset"] is False
+    assert listener._state["open_until"] is None
     assert conn.calls == 1
+    listener.finish()
+    assert listener._state["open_until"] is not None
 
 
 class _Completed:
@@ -1643,6 +1654,30 @@ def test_owned_process_unreadable_handle_does_not_prove_exit():
 
     owned = launch_practice.OwnedProcess("ai", Unreadable(), 12345, 1.0, "synthetic.exe")
     assert owned.is_running() is True, "an unreadable retained handle cannot prove exit"
+
+
+def test_dead_port_probe_timeout_bound_exceeds_windows_refusal_latency():
+    import inspect
+
+    default = inspect.signature(launch_practice._default_port_probe).parameters["timeout"].default
+    assert launch_practice.PORT_PROBE_TIMEOUT_SECONDS >= 3.0
+    assert default == launch_practice.PORT_PROBE_TIMEOUT_SECONDS
+
+
+def test_dead_port_probe_timeout_is_not_accepted_as_a_refusal():
+    timed_out = {
+        "listener_absent": {"ipv4": True, "ipv6": True},
+        "refused": True,
+        "timed_out": True,
+        "error": None,
+        "timings": [3.0, 3.0, 3.0],
+        "attempts": 3,
+        "refused_attempts": 3,
+        "timed_out_attempts": 1,
+    }
+    result = launch_practice.measure_dead_port(39123, prober=lambda candidate: dict(timed_out))
+    assert result["ok"] is False
+    assert result["code"] == "dead_port_unavailable"
 
 
 def _run_all() -> int:

@@ -66,6 +66,12 @@ START_TIME_TOLERANCE = 2.0
 PROBE_NONCE_VAR = "AISP_PROBE_NONCE"
 BALATRO_NAMES = frozenset({"balatro", "balatro.exe"})
 
+# Tool-owned dead-port probe bound only. On Windows a refused loopback connect can
+# take ~1.03s to surface, so a sub-second timeout records a false ``timed_out``
+# instead of the real refusal. This bound is local to ``_default_port_probe``: it
+# never changes pinned game socket timeouts or retry scheduling.
+PORT_PROBE_TIMEOUT_SECONDS = 3.0
+
 # Strict, typed per-role session descriptor. The outer practice host supplies
 # exactly these six extra child-environment values; they cannot redirect a role's
 # paths, Lovely/Steam settings or the measured isolation proof state. The session
@@ -2270,20 +2276,28 @@ def _pick_free_loopback_port() -> Optional[int]:
         server.close()
 
 
-def _default_port_probe(port: int, attempts: int = 3, timeout: float = 0.5) -> dict:
+def _default_port_probe(port: int, attempts: int = 3, timeout: float = PORT_PROBE_TIMEOUT_SECONDS) -> dict:
     """Tool-owned native measurement: both-family listener absence + refused connect.
 
     Loopback only; it never contacts an external host. A successful bind proves no
     listener owns the port for that address family, and the connect attempts record
-    the real refusal and timing.
+    the real refusal and timing. F11: a connect *timeout* is not a refusal - only an
+    actual ``ConnectionRefusedError`` proves the port is refused - so a timeout (or
+    any other error) fails closed and can never be reported as a dead port. The
+    bounded ``timeout`` defaults to :data:`PORT_PROBE_TIMEOUT_SECONDS`, which exceeds
+    the ~1.03s Windows refusal latency so a real refusal is not misread as a timeout.
     """
     import socket as _socket
 
     result = {
         "listener_absent": {"ipv4": False, "ipv6": False},
         "refused": False,
+        "timed_out": False,
+        "error": None,
         "timings": [],
         "attempts": 0,
+        "refused_attempts": 0,
+        "timed_out_attempts": 0,
     }
     for family, address, key in (
         (_socket.AF_INET, "127.0.0.1", "ipv4"),
@@ -2304,12 +2318,22 @@ def _default_port_probe(port: int, attempts: int = 3, timeout: float = 0.5) -> d
         try:
             client.connect(("127.0.0.1", int(port)))
             result["refused"] = False
-        except OSError:
-            result["refused"] = True
+        except _socket.timeout:
+            result["timed_out"] = True
+            result["timed_out_attempts"] += 1
+        except ConnectionRefusedError:
+            result["refused_attempts"] += 1
+        except OSError as error:  # any other error is not a proven refusal
+            result["error"] = type(error).__name__
         finally:
             client.close()
         result["timings"].append(round(time.perf_counter() - start, 6))
         result["attempts"] += 1
+    result["refused"] = bool(
+        result["refused_attempts"] == result["attempts"]
+        and result["timed_out_attempts"] == 0
+        and result["error"] is None
+    )
     return result
 
 
@@ -2330,13 +2354,14 @@ def measure_dead_port(port=None, *, prober=None, chooser=None, attempts: int = 3
             continue
         evidence = prober(candidate) or {}
         absent = evidence.get("listener_absent") or {}
-        if evidence.get("refused") and absent.get("ipv4") and absent.get("ipv6"):
+        if evidence.get("refused") and not evidence.get("timed_out") and absent.get("ipv4") and absent.get("ipv6"):
             return {
                 "ok": True,
                 "kind": "dead_port",
                 "dead_port": int(candidate),
                 "host": "127.0.0.1",
                 "refused": True,
+                "timed_out": False,
                 "listener_absent": {"ipv4": True, "ipv6": True},
                 "attempts": int(evidence.get("attempts") or attempts),
                 "timings": list(evidence.get("timings") or []),
@@ -2568,6 +2593,7 @@ class MeasurementListener:
         self._done = self._threading.Event()
         self._ai_pids: set = set()
         self._received = bytearray()
+        self._received_total = 0
         self._state = {
             "accepted": 0,
             "peer_pid": None,
@@ -2575,20 +2601,25 @@ class MeasurementListener:
             "peer_host": None,
             "peer_port": None,
             "sent_bytes": 0,
+            "exclusive": None,
             "closed": False,
             "fin": False,
             "close_time": None,
             "open_until": None,
             "peer_eof": False,
+            "peer_reset": False,
             "eof_time": None,
+            "received_bytes_total": 0,
             "problems": [],
         }
 
     def start(self) -> dict:
         server = self._socket.socket(self._socket.AF_INET, self._socket.SOCK_STREAM)
+        exclusive = False
         try:
             if hasattr(self._socket, "SO_EXCLUSIVEADDRUSE"):
                 server.setsockopt(self._socket.SOL_SOCKET, self._socket.SO_EXCLUSIVEADDRUSE, 1)
+                exclusive = True
             server.bind(("127.0.0.1", self.port))
             server.listen(1)
             try:
@@ -2598,6 +2629,9 @@ class MeasurementListener:
         except Exception:  # noqa: BLE001
             self._close_server(server)
             return {"ok": False, "code": "listener_bind_failed"}
+        # F8: exclusivity is recorded only when the exclusive-address option was
+        # actually accepted, never hardcoded.
+        self._state["exclusive"] = bool(exclusive)
         try:
             raw = self._inventory(self.port)
         except Exception:  # noqa: BLE001
@@ -2644,6 +2678,10 @@ class MeasurementListener:
             pass
 
     def _retain(self, data: bytes) -> None:
+        # F8: the total received byte count is always accounted for, while only a
+        # bounded prefix is retained for the digest/action parse.
+        self._received_total += len(data)
+        self._state["received_bytes_total"] = self._received_total
         remaining = staging.LISTENER_MAX_RECEIVED_BYTES - len(self._received)
         if remaining > 0:
             self._received.extend(data[:remaining])
@@ -2700,11 +2738,11 @@ class MeasurementListener:
                     break
                 continue
             except Exception:  # noqa: BLE001
-                # A reset/error is an honest end of the hold, recorded as such.
+                # F1: a reset/abort is recorded distinctly from an honest EOF; it is
+                # never a legitimate expiry close and is never treated as one.
                 self._state["problems"].append("listener_receive_error")
-                self._state["peer_eof"] = True
+                self._state["peer_reset"] = True
                 self._state["eof_time"] = round(self._now(), 6)
-                self._state["open_until"] = self._state["eof_time"]
                 break
             if data:
                 self._retain(data)
@@ -2712,16 +2750,18 @@ class MeasurementListener:
             # An empty read is the peer's EOF.
             if self.mode == "P2_CLOSE":
                 break
-            # SILENT: an honest peer EOF ends the hold. Record the true EOF time and
-            # stop instead of busy-spinning on a dead socket; the hold is never
-            # extended past the observed EOF.
+            # F1: at keepalive expiry the pinned source closes its *own* socket, so
+            # record that peer EOF separately and keep holding the listener's side
+            # through the retry cycle. The hold ends only when the tool releases the
+            # connection in ``finish``; it is never capped at the peer EOF.
             self._state["peer_eof"] = True
             self._state["eof_time"] = round(self._now(), 6)
-            self._state["open_until"] = self._state["eof_time"]
             break
         if self.mode == "P2_CLOSE":
-            # A graceful FIN is claimed only when ``shutdown`` actually succeeds; a
-            # failed shutdown is never recorded as a successful FIN.
+            # F5: stamp the FIN time *before* the shutdown attempt so the recorded
+            # close precedes the receive error it provokes. A graceful FIN is claimed
+            # only when ``shutdown`` actually succeeds.
+            self._state["close_time"] = round(self._now(), 6)
             fin_ok = False
             try:
                 conn.shutdown(self._socket.SHUT_WR)
@@ -2730,22 +2770,26 @@ class MeasurementListener:
                 fin_ok = False
             self._state["closed"] = bool(fin_ok)
             self._state["fin"] = bool(fin_ok)
-            if fin_ok:
-                self._state["close_time"] = round(self._now(), 6)
-        elif self._state["open_until"] is None:
-            self._state["open_until"] = round(self._now(), 6)
         self._done.set()
+
+    def finished(self) -> bool:
+        """True once the serve thread has stopped (used by the supervision abort)."""
+        return self._done.is_set()
 
     def finish(self, timeout: float = 30.0) -> dict:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout)
         self._close_conn()
-        # Never fabricate a hold merely because ``finish`` was called: a premature
-        # peer EOF already capped ``open_until`` at the true EOF time.
-        if self._state["open_until"] is None and self.mode != "P2_CLOSE":
-            if self._state.get("peer_eof") is not True and self._state["accepted"] == 1:
-                self._state["open_until"] = round(self._now(), 6)
+        # F1: the tool's own release is the only thing that sets ``open_until`` for a
+        # held (owned) connection: the listener holds its side through the cycle and
+        # is released here, independent of any peer EOF.
+        if (
+            self.mode != "P2_CLOSE"
+            and self._state.get("peer_is_owned_ai") is True
+            and self._state["open_until"] is None
+        ):
+            self._state["open_until"] = round(self._now(), 6)
         self._close_server()
         return self._state
 
@@ -2761,7 +2805,8 @@ class MeasurementListener:
             "phase": phase,
             "port": self.port,
             "families": "ipv4",
-            "exclusive": "true",
+            # F8: recorded from the observed socket option, never hardcoded.
+            "exclusive": state["exclusive"],
             "listener_pid": os.getpid(),
             "accepted": state["accepted"],
             "peer_pid": state["peer_pid"],
@@ -2770,6 +2815,7 @@ class MeasurementListener:
             "peer_is_owned_ai": state["peer_is_owned_ai"],
             "sent_bytes": state["sent_bytes"],
             "received_bytes": len(received),
+            "received_total_bytes": state["received_bytes_total"],
             "received_sha256": hashlib.sha256(received).hexdigest(),
             "actions": ",".join(actions),
             "action_count": len(actions),
@@ -2778,6 +2824,7 @@ class MeasurementListener:
             "close_time": state["close_time"],
             "open_until": state["open_until"],
             "peer_eof": state["peer_eof"],
+            "peer_reset": state["peer_reset"],
             "eof_time": state["eof_time"],
         }
 
@@ -2816,14 +2863,20 @@ def _p2_has_exhausted_cycle(fields: Mapping) -> bool:
     return False
 
 
-def _make_p2_settle(staging_root, phase: str, *, now: Callable[[], float] = time.time) -> Callable[[list], bool]:
-    """The tool decides when a P2 run's required evidence has settled (section 4)."""
+def _make_p2_settle(
+    staging_root, phase: str, nonce: str = "", *, now: Callable[[], float] = time.time
+) -> Callable[[list], bool]:
+    """The tool decides when a P2 run's required evidence has settled (section 4).
+
+    F11: the staged artifact must carry the prepared session's own nonce before its
+    readiness is trusted, so a rotated/foreign artifact can never settle a run.
+    """
     quiet = 5.0 if phase == "P2_INITIAL" else 3.0
     first_settled: dict = {"at": None}
 
     def settle(_statuses=None) -> bool:
         fields = _read_staged_p2_fields(staging_root)
-        if not fields:
+        if not fields or (nonce and fields.get("nonce") != nonce):
             first_settled["at"] = None
             return False
         if phase == "P2_INITIAL":
@@ -3002,7 +3055,7 @@ def execute_measurement_phase(
             measurement_setup=measurement_setup,
         )
         if not prepared.get("ok"):
-            return {"code": "measurement_refused", "phase": phase, "problems": prepared.get("problems", [])}
+            return {"ok": False, "code": "measurement_refused", "phase": phase, "problems": prepared.get("problems", [])}
         open_session = prepared["record"]
         if phase == "P1A":
             plan = build_bootstrap_plan(
@@ -3071,6 +3124,14 @@ def execute_measurement_phase(
                 arm(ai_pids)
 
         def unexpected(statuses=None) -> dict:
+            # F7: abort promptly once the listener has finished without an owned AI
+            # peer instead of running out the settle/deadline. A finished listener
+            # whose peer was never the owned AI can never produce valid evidence.
+            if listener is not None:
+                finished = getattr(listener, "finished", None)
+                state = getattr(listener, "_state", {}) or {}
+                if callable(finished) and finished() and state.get("peer_is_owned_ai") is not True:
+                    return {"ok": False, "code": "listener_finished_without_owned_peer"}
             live = check_live_balatro_closed(enumerator, live_install_root)
             if not live.get("ok"):
                 return live
@@ -3085,7 +3146,9 @@ def execute_measurement_phase(
             end_mode = staging.MEASUREMENT_END_MODE
             end_code = staging.MEASUREMENT_END_CODES[phase]
             if phase in ("P2_INITIAL", "P2_CLOSE", "P2_SILENT"):
-                settle = _make_p2_settle(staging_root, phase, now=settle_now or time.time)
+                settle = _make_p2_settle(
+                    staging_root, phase, open_session.get("nonce") or "", now=settle_now or time.time
+                )
             else:
                 settle = _make_probe_settle(
                     staging_root, phase, open_session.get("nonce") or "", now=settle_now or time.time
@@ -3115,6 +3178,12 @@ def execute_measurement_phase(
                     staging_root, session_id=session_id, reason="listener_peer_not_owned_ai"
                 )
                 return {"ok": False, "code": "listener_peer_not_owned_ai", "phase": phase, "listener": state}
+        # F4: after the session has exited, re-measure the same loopback port and
+        # bind that fresh after-exit proof (refused + absent on both families) into
+        # the receipt; P2_INITIAL is never certified on the pre-spawn claim alone.
+        after_exit_proof = None
+        if phase == "P2_INITIAL":
+            after_exit_proof = measure_dead_port(port=launch_port, prober=dead_port_probe)
         receipt = isolation_certificate.record_phase_receipt(
             staging_root,
             phase=phase,
@@ -3123,6 +3192,7 @@ def execute_measurement_phase(
             live=live_map,
             port=launch_port if phase != "P1A" else None,
             live_closed=closed_check,
+            after_exit_proof=after_exit_proof,
         )
         return {"phase": phase, "supervision": supervision, "receipt": receipt}
     except BaseException as error:  # noqa: BLE001
