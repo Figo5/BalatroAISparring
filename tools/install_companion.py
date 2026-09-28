@@ -35,7 +35,11 @@ Hard guarantees:
 * only the created staging temp under the known staging parent is ever cleaned,
   never an arbitrary directory;
 * the success receipt is committed only *after* the rename: a failed rename
-  never leaves a successful-looking receipt;
+  never leaves a successful-looking receipt, and a receipt-finalization failure
+  after the rename keeps the pending receipt and reports the mod as installed;
+* the certificate is bound to the exact staged role bytes and to the accepted
+  package digest: a certificate measured for older modules cannot authorize a
+  newer package, and the target root must be the validated live ``appdata/Mods``;
 * unreadable process enumeration, volume mismatch and root mismatches fail closed.
 
 Nothing here is a live-operation claim. Actual installation remains a reviewed,
@@ -46,6 +50,12 @@ The isolation certificate gate calls the real reusable checker
 (``staging.check_isolation_proof`` -> ``isolation_certificate.check_certificate``).
 In unit fixtures that checker is injected; the production default always calls
 the real one and therefore refuses when no complete certificate exists.
+
+Cross-owner dependency (not implemented here): placing the package's
+``staged/<role>/AISparring`` copies into the real staging area before the
+certificate is measured is owned by the staging root/isolation owner. This
+installer only *verifies* that binding through :func:`package_staging_binding`
+and refuses when it does not hold; it never writes into the staging area.
 """
 from __future__ import annotations
 
@@ -111,6 +121,9 @@ PACKAGE_EXCLUDE_SUFFIXES = tuple(
 )
 
 PACKAGE_HASH_POLICY = staging.HashPolicy(exclude_names=(PACKAGE_MANIFEST_NAME,))
+# Role bodies (live/staged) may differ only by their generated ``config.lua``; the
+# shared module bytes must be identical, so the body comparison ignores the config.
+PACKAGE_BODY_POLICY = staging.HashPolicy(exclude_names=(PACKAGE_MANIFEST_NAME, CONFIG_NAME))
 
 
 class InstallError(staging.StagingError):
@@ -278,26 +291,76 @@ def _same_filesystem(first, second) -> bool:
         return False
 
 
-def _expected_live_files(package_root):
-    """Live-mod file map from the previously verified immutable package manifest.
+def _live_files_from_verified_manifest(package_root, accepted_digest):
+    """Re-read the package manifest at execute time and revalidate the accepted digest.
 
-    Returns ``None`` when the manifest is missing/unreadable or carries no live
-    subtree, so the caller refuses rather than verifying against an empty map.
+    Returns ``(files, code)``. ``files`` is the ``live/AISparring`` subtree of the
+    manifest, or ``None`` on refusal. A manifest that was swapped together with the
+    live files between verification and staging recomputes a different
+    ``package_digest`` and is refused (``package_changed_after_acceptance``), so the
+    reviewer-approved bytes can never be silently replaced by a self-consistent
+    newer manifest.
     """
     root = Path(package_root)
-    manifest_path = root / PACKAGE_MANIFEST_NAME
     try:
-        manifest = staging.read_json(manifest_path)
+        manifest = staging.read_json(root / PACKAGE_MANIFEST_NAME)
     except (OSError, ValueError):
-        return None
+        return None, "package_manifest_unreadable"
     if not isinstance(manifest, Mapping) or manifest.get("schema") != PACKAGE_SCHEMA:
-        return None
+        return None, "package_manifest_invalid"
+    files = manifest.get("files")
+    if not isinstance(files, Mapping):
+        return None, "package_manifest_invalid"
+    recomputed = package_digest(
+        manifest.get("package_version"), manifest.get("discovery_path"), files
+    )
+    if recomputed != manifest.get("digest"):
+        return None, "package_manifest_invalid"
+    if accepted_digest is not None and recomputed != accepted_digest:
+        return None, "package_changed_after_acceptance"
     prefix = f"live/{TARGET_NAME}/"
-    files = manifest.get("files") or {}
     subset = {
         rel[len(prefix):]: meta for rel, meta in files.items() if rel.startswith(prefix)
     }
-    return subset or None
+    if not subset:
+        return None, "package_live_manifest_missing"
+    return subset, "ok"
+
+
+def package_staging_binding(staging_root, package_root, roles=STAGED_ROLES) -> dict:
+    """Bind the certificate's measured staging area to the exact package staged roles.
+
+    The isolation certificate measures ``staging/roles/<role>/.../Mods`` (including
+    ``AISparring``) as its layer M. Requiring the staged ``AISparring`` digest to equal
+    the package's ``staged/<role>/AISparring`` digest under the same hash policy means
+    a certificate measured for older module bytes can never authorize a newer package.
+    """
+    problems: list = []
+    for role in roles:
+        package_dir = Path(package_root) / "staged" / role / TARGET_NAME
+        try:
+            staged_mods = staging.role_paths(staging_root, role).mods
+        except staging.StagingError:
+            problems.append(f"staged_role_unavailable:{role}")
+            continue
+        try:
+            package_digest_value = staging._tree_digest(package_dir, PACKAGE_HASH_POLICY)
+            staged_digest_value = staging._tree_digest(
+                staged_mods / TARGET_NAME, PACKAGE_HASH_POLICY
+            )
+        except staging.StagingError:
+            problems.append(f"staged_role_unreadable:{role}")
+            continue
+        if package_digest_value is None or staged_digest_value is None:
+            problems.append(f"staged_role_missing:{role}")
+        elif package_digest_value != staged_digest_value:
+            problems.append(f"staged_role_mismatch:{role}")
+    problems = sorted(set(problems))
+    return {
+        "ok": not problems,
+        "code": "ok" if not problems else "staged_package_mismatch",
+        "problems": problems,
+    }
 
 
 def _copy_stage_tree(source, destination) -> None:
@@ -416,12 +479,16 @@ def verify_package(package_root=None, version: str = EXPECTED_VERSION) -> dict:
         manifest = staging.read_json(manifest_path)
     except (OSError, ValueError) as error:
         return _refuse("package_manifest_unreadable", [str(error)])
+    if not isinstance(manifest, dict):
+        return _refuse("package_manifest_invalid", ["package_manifest_not_an_object"])
     problems: list = []
     if manifest.get("schema") != PACKAGE_SCHEMA:
         problems.append("package_schema_mismatch")
     if manifest.get("package_version") != version:
         problems.append("package_version_mismatch")
     recorded = manifest.get("files") or {}
+    if not isinstance(recorded, Mapping):
+        return _refuse("package_manifest_invalid", ["package_files_not_an_object"])
     try:
         current = staging.hash_tree(root, PACKAGE_HASH_POLICY)
     except staging.StagingError as error:
@@ -446,7 +513,8 @@ def verify_package(package_root=None, version: str = EXPECTED_VERSION) -> dict:
         problems.append("live_config_mismatch")
     staged_text = render_staged_config()
     staged_digests: list = []
-    for role in manifest.get("staged_roles") or ():
+    staged_roles = list(manifest.get("staged_roles") or ())
+    for role in staged_roles:
         staged_config = root / "staged" / role / TARGET_NAME / CONFIG_NAME
         if not staged_config.is_file() or staged_config.read_text(encoding="utf-8") != staged_text:
             problems.append(f"staged_config_mismatch:{role}")
@@ -455,6 +523,16 @@ def verify_package(package_root=None, version: str = EXPECTED_VERSION) -> dict:
         )
     if len(set(staged_digests)) != 1:
         problems.append("staged_copies_differ")
+    try:
+        live_body = staging._tree_digest(root / "live" / TARGET_NAME, PACKAGE_BODY_POLICY)
+        staged_bodies = [
+            staging._tree_digest(root / "staged" / role / TARGET_NAME, PACKAGE_BODY_POLICY)
+            for role in staged_roles
+        ]
+    except staging.StagingError as error:
+        return _refuse(error.code, [error.message])
+    if live_body is None or any(body is None or body != live_body for body in staged_bodies):
+        problems.append("live_staged_body_mismatch")
 
     problems = sorted(set(problems))
     return {
@@ -501,12 +579,16 @@ def load_acceptance(acceptance_path, package_sha256) -> dict:
         problems.append("acceptance_version_mismatch")
     if not isinstance(package_sha256, str) or record.get("package_sha256") != package_sha256:
         problems.append("acceptance_package_mismatch")
+    accepted_certificate_id = record.get("certificate_id")
+    if not isinstance(accepted_certificate_id, str) or not accepted_certificate_id.strip():
+        problems.append("acceptance_certificate_missing")
     if problems:
         return _refuse("acceptance_unverified", problems)
     reference = {
         "path": str(path),
         "sha256": staging.sha256_file(path),
         "package_sha256": package_sha256,
+        "certificate_id": accepted_certificate_id,
         "reviewer": reviewer,
         "reviewed_unix": reviewed_unix,
     }
@@ -605,15 +687,31 @@ def _assert_clean_root(path: Path, what: str) -> None:
     staging.assert_no_reparse_between(Path(raw.anchor), raw, what=what, allow_root=True)
 
 
-def resolve_install_target(live_mods_root, target_dir=None):
-    """Resolve the exact owned target ``<live Mods>/AISparring`` or refuse."""
+def resolve_install_target(live_mods_root, target_dir=None, live=None, overlap_roots=None):
+    """Resolve exactly ``<validated live appdata>/Mods/AISparring`` or refuse.
+
+    The given root must be, character for character, the resolved live Mods root
+    derived from the validated live roots. ``live=None`` is refused rather than
+    falling back to an unchecked path, and a root that overlaps the staging,
+    package or backup roots is refused before anything is written.
+    """
     if not live_mods_root:
         raise InstallError("mods_root_required")
+    if not isinstance(live, Mapping) or not live.get("appdata"):
+        raise InstallError("live_roots_unavailable", "live_appdata_missing")
+    expected_mods = Path(os.path.abspath(str(Path(live["appdata"]) / "Mods")))
     mods_raw = Path(os.path.abspath(str(live_mods_root)))
     try:
         _assert_clean_root(mods_raw, "live Mods root")
     except staging.StagingError as error:
         raise InstallError(error.code, error.message)
+    if os.path.normcase(str(mods_raw)) != os.path.normcase(str(expected_mods)):
+        raise InstallError("mods_root_not_live", str(mods_raw))
+    for name, root in (overlap_roots or {}).items():
+        if _paths_collide(mods_raw, root):
+            raise InstallError(
+                "mods_root_overlaps_owned_root", f"{mods_raw} overlaps {name} {root}"
+            )
     mods = mods_raw.resolve()
     if not mods.is_dir():
         raise InstallError("mods_root_missing", str(mods))
@@ -624,6 +722,22 @@ def resolve_install_target(live_mods_root, target_dir=None):
     if target_raw.name != TARGET_NAME:
         raise InstallError("target_not_owned", str(target_raw))
     return mods, target_raw
+
+
+def _target_present(target) -> bool:
+    """True for a real target, a symlink *or* a dangling junction/reparse point.
+
+    ``Path.exists()``/``is_symlink()`` both return false for a dangling junction, so
+    the target check must use ``lexists`` plus the staging reparse probe. Nothing is
+    ever deleted here; a present target is merely refused.
+    """
+    path = Path(target)
+    try:
+        if os.path.lexists(str(path)):
+            return True
+        return staging._is_reparse_point(path)
+    except OSError:
+        return True
 
 
 def _safe_closed(closed_check) -> dict:
@@ -638,6 +752,26 @@ def _safe_closed(closed_check) -> dict:
     verdict.setdefault("ok", False)
     verdict.setdefault("code", "ok" if verdict["ok"] else "live_balatro_running")
     return verdict
+
+
+def _combined_process_gate(closed_check, enumerator, staging_root, live_install_root) -> dict:
+    """Refuse a live game *and* any non-owned Balatro process at any image path.
+
+    The default closed-game check only recognises a Balatro process under the given
+    install root, so a game started from another Steam library would pass. This adds
+    the launch-practice unowned-process gate (`check_no_staged_session`, an API owned
+    by the launcher/isolation owner): a staged session or a foreign Balatro.exe is
+    refused regardless of its image path. The installer never launches or owns a
+    staged process, so the only acceptable state is no Balatro process at all.
+    """
+    verdict = _safe_closed(closed_check)
+    if not verdict.get("ok"):
+        return verdict
+    return _safe_closed(
+        lambda: launch_practice.check_no_staged_session(
+            enumerator, staging_root, live_install_root=live_install_root
+        )
+    )
 
 
 def _assert_no_reparse_under(anchor, path, what: str) -> None:
@@ -713,7 +847,8 @@ def _receipt_paths(receipt_root, target, mods_root=None, now=None):
     return final, final.with_name(final.name + ".pending")
 
 
-def _receipt_payload(target, package_root, package_verdict, backup_verdict, acceptance_verdict, now=None) -> dict:
+def _receipt_payload(target, package_root, package_verdict, backup_verdict, acceptance_verdict,
+                     certificate_verdict=None, now=None) -> dict:
     reference = backup_verdict.get("reference") or {}
     acceptance = acceptance_verdict.get("reference") or {}
     return {
@@ -724,6 +859,7 @@ def _receipt_payload(target, package_root, package_verdict, backup_verdict, acce
         "package_root": str(package_root),
         "package_manifest": str(Path(package_root) / PACKAGE_MANIFEST_NAME),
         "package_sha256": package_verdict.get("digest"),
+        "certificate_id": (certificate_verdict or {}).get("certificate_id"),
         "backup_manifest": reference.get("manifest"),
         "backup_label": reference.get("label"),
         "backup_entry": reference.get("entry"),
@@ -735,10 +871,12 @@ def _receipt_payload(target, package_root, package_verdict, backup_verdict, acce
 
 
 def write_receipt(receipt_root, target, package_root, package_verdict, backup_verdict,
-                  acceptance_verdict, now=None, path=None, mods_root=None) -> Path:
+                  acceptance_verdict, certificate_verdict=None, now=None, path=None,
+                  mods_root=None) -> Path:
     final, _ = _receipt_paths(receipt_root, target, mods_root=mods_root, now=now)
     write_path = Path(path) if path is not None else final
-    payload = _receipt_payload(target, package_root, package_verdict, backup_verdict, acceptance_verdict, now=now)
+    payload = _receipt_payload(target, package_root, package_verdict, backup_verdict,
+                               acceptance_verdict, certificate_verdict=certificate_verdict, now=now)
     staging.write_json(write_path, payload)
     return write_path
 
@@ -798,20 +936,24 @@ def install_companion(
     if closed_check is None:
         def closed_check():
             return launch_practice.check_live_balatro_closed(enumerator, live_install_root)
+
+    base = {"schema": REPORT_SCHEMA, "execute": bool(execute), "problems": []}
+
     if live is None:
         try:
             live = staging.live_roots(install_root=live_install_root)
-        except Exception:  # noqa: BLE001
-            live = None
-
-    base = {"schema": REPORT_SCHEMA, "execute": bool(execute), "problems": []}
+        except Exception as error:  # noqa: BLE001
+            return {**base, "ok": False, "code": "live_roots_unavailable", "problems": [str(error)]}
+    if not isinstance(live, Mapping) or not live.get("appdata"):
+        return {**base, "ok": False, "code": "live_roots_unavailable", "problems": ["live_appdata_missing"]}
 
     try:
         package_verdict = package_check(package_root)
     except staging.StagingError as error:
         return {**base, "ok": False, "code": error.code, "problems": [error.code]}
     if not package_verdict.get("ok"):
-        return {**base, "ok": False, "code": "package_unverified", "problems": package_verdict.get("problems", [])}
+        return {**base, "ok": False, "code": package_verdict.get("code", "package_unverified"),
+                "problems": package_verdict.get("problems", [])}
 
     acceptance_verdict = acceptance_check(acceptance_path, package_verdict.get("digest"))
     if not acceptance_verdict.get("ok"):
@@ -826,11 +968,28 @@ def install_companion(
     if not certificate_verdict.get("ok"):
         return {**base, "ok": False, "code": "certificate_unverified", "problems": certificate_verdict.get("problems", [])}
 
+    accepted_certificate_id = (acceptance_verdict.get("reference") or {}).get("certificate_id")
+    actual_certificate_id = certificate_verdict.get("certificate_id")
+    if not actual_certificate_id or accepted_certificate_id != actual_certificate_id:
+        return {**base, "ok": False, "code": "certificate_mismatch",
+                "problems": ["acceptance_certificate_mismatch"]}
+
     try:
-        mods_root, target = resolve_install_target(live_mods_root, target_dir)
+        binding_verdict = package_staging_binding(staging_root, package_root)
+    except staging.StagingError as error:
+        return {**base, "ok": False, "code": error.code, "problems": [error.code]}
+    if not binding_verdict.get("ok"):
+        return {**base, "ok": False, "code": binding_verdict["code"],
+                "problems": binding_verdict.get("problems", [])}
+
+    overlap_roots = {"staging": staging_root, "package": package_root, "backup": backup_root}
+    try:
+        mods_root, target = resolve_install_target(
+            live_mods_root, target_dir, live=live, overlap_roots=overlap_roots
+        )
     except InstallError as error:
         return {**base, "ok": False, "code": error.code, "problems": [error.message]}
-    if target.exists() or target.is_symlink():
+    if _target_present(target):
         return {**base, "ok": False, "code": "target_exists", "target": str(target), "problems": ["replace_upgrade_out_of_scope"]}
 
     try:
@@ -840,7 +999,7 @@ def install_companion(
     if not backup_verdict.get("ok"):
         return {**base, "ok": False, "code": "mods_backup_unverified", "problems": backup_verdict.get("problems", [])}
 
-    closed_verdict = _safe_closed(closed_check)
+    closed_verdict = _combined_process_gate(closed_check, enumerator, staging_root, live_install_root)
     if not closed_verdict.get("ok"):
         return {**base, "ok": False, "code": closed_verdict.get("code", "live_balatro_running"),
                 "problems": closed_verdict.get("problems", []), "target": str(target)}
@@ -864,10 +1023,6 @@ def install_companion(
     if not (live_source / CONFIG_NAME).is_file():
         return {**base, "ok": False, "code": "package_live_missing", "problems": [str(live_source)]}
 
-    expected_live = _expected_live_files(package_root)
-    if not expected_live:
-        return {**base, "ok": False, "code": "package_live_manifest_missing", "problems": [str(package_root)]}
-
     mods_raw = Path(os.path.abspath(str(live_mods_root))) if live_mods_root else target.parent
     temp_dir = None
     pending_receipt = None
@@ -876,28 +1031,46 @@ def install_companion(
         stage_parent = _ensure_stage_parent(stage_parent, mods_root)
         temp_dir = Path(tempfile.mkdtemp(prefix=STAGING_TEMP_PREFIX, dir=str(stage_parent)))
         staging.assert_no_reparse_between(stage_parent, temp_dir, what="install staging dir")
+
+        expected_live, live_code = _live_files_from_verified_manifest(
+            package_root, package_verdict.get("digest")
+        )
+        if expected_live is None:
+            raise InstallError(live_code)
+
         _copy_stage_tree(live_source, temp_dir)
         _verify_stage_tree(temp_dir, expected_live)
 
         final_receipt, pending_receipt = _receipt_paths(receipt_root, target, mods_root=mods_root, now=now)
         try:
             write_receipt(receipt_root, target, package_root, package_verdict, backup_verdict,
-                          acceptance_verdict, now=now, path=pending_receipt, mods_root=mods_root)
+                          acceptance_verdict, certificate_verdict, now=now, path=pending_receipt,
+                          mods_root=mods_root)
         except OSError as error:
             raise InstallError("receipt_write_failed", str(error))
 
-        closed_recheck = _safe_closed(closed_check)
-        if not closed_recheck.get("ok"):
-            raise InstallError(closed_recheck.get("code", "live_balatro_running"))
-
-        _recheck_target(mods_raw, target)
-        if target.exists() or target.is_symlink():
-            raise InstallError("target_exists")
-
+        # Final integrity re-hash first, then a fresh backup recheck, then the
+        # immediate process and target checks, then the atomic rename. Nothing is
+        # written inside Mods before that rename.
         if not staging.is_within(stage_parent, temp_dir):
             raise InstallError("install_stage_escape", str(temp_dir))
         staging.assert_no_reparse_between(stage_parent, temp_dir, what="install staging dir")
         _verify_stage_tree(temp_dir, expected_live)
+
+        try:
+            backup_recheck = mods_backup_verdict(backup_root, mods_root)
+        except staging.StagingError as error:
+            raise InstallError(error.code, error.message)
+        if not backup_recheck.get("ok"):
+            raise InstallError("mods_backup_unverified", ",".join(backup_recheck.get("problems", [])))
+
+        closed_recheck = _combined_process_gate(closed_check, enumerator, staging_root, live_install_root)
+        if not closed_recheck.get("ok"):
+            raise InstallError(closed_recheck.get("code", "live_balatro_running"))
+
+        _recheck_target(mods_raw, target)
+        if _target_present(target):
+            raise InstallError("target_exists")
 
         os.rename(str(temp_dir), str(target))
         temp_dir = None
@@ -905,7 +1078,17 @@ def install_companion(
             os.replace(str(pending_receipt), str(final_receipt))
             pending_receipt = None
         except OSError as error:
-            raise InstallError("receipt_write_failed", str(error))
+            # The mod is live: never delete the pending receipt, never claim the
+            # install failed, and never roll back the installed directory.
+            return {
+                **plan,
+                "ok": False,
+                "code": "installed_receipt_uncommitted",
+                "installed": True,
+                "problems": [f"receipt_finalize_failed:{error}"],
+                "target": str(target),
+                "pending_receipt": str(pending_receipt),
+            }
     except InstallError as error:
         _cleanup_stage(temp_dir, stage_parent)
         _cleanup_receipt(pending_receipt)
