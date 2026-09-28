@@ -1,6 +1,6 @@
 # Developer guide
 
-Milestone 1 companion scaffold. Owner of architecture: `docs/INTEGRATION_PLAN.md` and `docs/PROTOTYPE_GATES.md`. This document describes what exists today, how to run it, and what is deliberately absent.
+Historical Milestone 1 companion-scaffold guide. The scope and absence claims below describe that accepted checkpoint, not the current playable-build implementation. For current behavior and installation gates, use `README.md`, `docs/PLAYABLE_ACCEPTANCE.md`, `docs/COMPANION_BOOTSTRAP.md` and `docs/INSTALL_COMPANION.md`. Architecture remains governed by `docs/INTEGRATION_PLAN.md` and `docs/PROTOTYPE_GATES.md`.
 
 ## Scope and status
 

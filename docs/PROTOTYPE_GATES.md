@@ -20,8 +20,8 @@ Crosswalk: integration-plan gate 1 = P1 static investigation; gate 2 = P0 + P1a;
 6. Crash/cleanup fixtures: abort before startup, bot crash, human staged-runtime crash, local-server crash and launcher crash. Cleanup may affect only launcher-owned PID/start-time/path matches and declared staging files. Recheck live files/Steam state, release IPC/ports, preserve diagnostics and never kill another process by executable name alone.
 
 ## P2 — dead-port behaviour
-- Single 10 s connect attempt (`socket.lua:50-63`); observe no retry storm, crash or writes (`socket.lua:102-105`).
-- Pass: process stable, no reconnect loop, no writes outside approved staged runtime data/log paths, no live writes.
+- Source correction for pinned Multiplayer 0.5.5: `networking/socket.lua` uses a 10 s connection timeout and also defines up to three reconnect attempts with 2/4/8-second delays. Initial failure, connection closure and keepalive failure follow different paths; measure each applicable path rather than assuming there is no retry code.
+- Pass: process stable, retries bounded to the actual source contract, no official endpoint fallback, no writes outside approved staged runtime data/log paths, no live writes. Record the observed attempts and timing; a fixture alone does not pass P2.
 
 ## P3 — parity (coverage matrix + fixtures)
 - Coverage matrix: every `Client.send` action in `networking/action_handlers.lua` ↔ `main.ts` case ↔ client `HANDLERS`; record the commit-date gap.

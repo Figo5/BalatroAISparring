@@ -1,35 +1,40 @@
 # Balatro AI Sparring
 
-Local, offline competitive practice against a legal AI opponent using Balatro Multiplayer rules. This repository is where the companion is built.
+Local AI practice using Balatro Multiplayer's Major League rules, with separate human and AI game runtimes and a restricted policy worker.
 
-Status: **Milestone 2 accepted: observation/action infrastructure, fixture validation only.** The Steamodded scaffold remains inert. New modules normalize observations, enumerate certified legal actions and reject invalid submissions behind a disabled real executor. A trusted state reader and separate development policy worker are exercised with synthetic fixtures; the UI-view producer and live capture are unwired. There is no opponent, launcher, transport, evaluator, search or gameplay policy. Real game loading remains unproven; no live install has been touched.
+**0.1.0-dev is implemented in the repository but is not yet accepted, installed or playable.** Milestones 1 and 2 remain accepted. The current work adds a baseline policy, validated production executor, local server/host, staged runtime coordination and AI Sparring menus. Repository tests and real local-server checks pass; Claude re-review, actual Balatro isolation gates, compatibility checks and controlled installation remain pending. Live game files and saves have not been changed.
 
-- Integration direction and topology: [docs/INTEGRATION_PLAN.md](docs/INTEGRATION_PLAN.md)
-- Required prototype gates: [docs/PROTOTYPE_GATES.md](docs/PROTOTYPE_GATES.md)
-- Milestone 1 scope: [docs/MILESTONE_1_PLAN.md](docs/MILESTONE_1_PLAN.md)
-- Developer guide (layout, interfaces, tests, limitations): [docs/DEVELOPER.md](docs/DEVELOPER.md)
-- Milestone 1 acceptance and full file/test/review report: [docs/MILESTONE_1.md](docs/MILESTONE_1.md)
-- Milestone 2 interfaces and acceptance criteria: [docs/MILESTONE_2_PLAN.md](docs/MILESTONE_2_PLAN.md)
-- Milestone 2 completion and review report: [docs/MILESTONE_2.md](docs/MILESTONE_2.md)
-- Fairness and trust boundaries: [docs/FAIRNESS.md](docs/FAIRNESS.md)
-- Schemas: [AIObservation](docs/AI_OBSERVATION.md), [legal actions](docs/LEGAL_ACTIONS.md)
-- Integration contracts: [state reader](docs/STATE_READER.md), [broker and worker](docs/M2_EXECUTION_BOUNDARY.md)
+The repository configuration remains inert. Do not copy it directly into Mods or bypass the launcher/certificate gates. The eventual installed companion supplies a menu; actual practice runs in isolated staged copies. It remains visible in Multiplayer's mod list and hash. No checks are hidden or bypassed, and no AI activity goes to official or ranked services.
 
-The planned solution keeps two isolated staged Balatro runtimes (human practice and AI practice) with a pinned local match server. That direction is not implemented by this scaffold.
+## Current implementation and evidence
 
-## Quick start (development only)
+- [Acceptance evidence and remaining engine gates](docs/PLAYABLE_ACCEPTANCE.md)
+- [Playtest guide (not an installation claim)](docs/PLAYTEST.md)
+- [Reviewed integration architecture](docs/INTEGRATION_PLAN.md) and [prototype gates](docs/PROTOTYPE_GATES.md)
+- [Runtime wiring contract](docs/PLAYABLE_WIRING_CONTRACT.md), [companion bootstrap](docs/COMPANION_BOOTSTRAP.md), [practice host](docs/PRACTICE_HOST.md)
+- [Baseline policy](docs/BASELINE_POLICY.md), [production adapter](docs/ENGINE_ADAPTER.md), [decision loop](docs/DECISION_LOOP.md)
+- [Isolated launcher](docs/RUNTIME_LAUNCHER.md), [runtime isolation](docs/RUNTIME_ISOLATION.md), [installer](docs/INSTALL_COMPANION.md)
+- [Fairness boundary](docs/FAIRNESS.md), [AIObservation](docs/AI_OBSERVATION.md), [legal actions](docs/LEGAL_ACTIONS.md)
+- Accepted historical reports: [Milestone 1](docs/MILESTONE_1.md), [Milestone 2](docs/MILESTONE_2.md)
+
+## Repository tests
+
+Use Python with the pinned dependencies in `tests/requirements.txt`. This workstation also has a repository-local interpreter at `work/runtime-venv/Scripts/python.exe`; it needs no transient PYTHONPATH.
 
 ```powershell
 python -m pip install -r tests/requirements.txt
-python tests/run.py
+python tests/run.py --require-all
 python tests/run_m2.py --require-all
 python tests/run_reader.py --require-all
 python tests/run_boundary.py --require-all
-python tests/astra_attacks.py
-python tests/astra_mutation_checks.py
-python tests/benchmark_m2.py --require-all
+python tests/run_policy.py
+python tests/run_decision.py
+python tests/run_engine.py
+python tests/run_menu.py
+python tests/run_runtime.py
+python tests/run_companion.py
 ```
 
-Tests run the real entrypoint and modules in synthetic Lua hosts under lupa Lua 5.1 and LuaJIT 2.1. No game, Mods directory, save or network is used. Use `python tests/run.py --require-all` for strict acceptance.
+These suites exercise Lua 5.1 and LuaJIT with synthetic engine fixtures. Some integration checks separately use a real restricted policy subprocess or local sockets; their scope is documented in the acceptance evidence. They do not launch Balatro or prove a playable match. Proprietary sources, dependencies, credentials, logs, backups and staged runtimes stay outside Git.
 
-The companion is **staging-only**: it is never placed in the user's normal Balatro installation. Multiplayer hashes its reported mod list with no exemption for passive mods, so enabling `AISparring` anywhere visibly changes that install's mod list and hash; it must not be hidden and Multiplayer's checks must not be patched. A future installed AI Sparring menu is allowed by the accepted integration plan but is **not** part of this implementation and would require its own compatibility and UX review. See the developer guide for the no-live-install policy.
+Development stops after a safe, legal, functional installed playtest build has passed the requested checks. Stronger AI and visual polish are outside the current objective.

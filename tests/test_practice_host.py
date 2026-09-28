@@ -1,0 +1,2018 @@
+#!/usr/bin/env python3
+"""Practice host tests: daemon auth, lifecycle, certificate, gates, supervision.
+
+Everything runs against synthetic temp trees and injected fakes: no live install,
+live %AppData%, Steam tree, game, server, external network or OS process is
+touched. The only real socket is a loopback ``127.0.0.1`` daemon round trip and a
+real loopback ``PracticeService`` start.
+
+The fixtures assert authorization and lifetime semantics, not success-only
+mocks: a wrong secret is rejected, a duplicate live daemon is refused, a live
+process is never terminated, the immutable certificate is reused (never rebased),
+Steam quiescence and a fresh verified backup are required, both roles must attest
+with the session nonce, a new live game voids the session and locks out, owned
+handles are terminated and unowned ones are not, a prior open/unmeasured record
+blocks a new ticket and acknowledgement, a retained human window is never killed,
+and no credential enters the report.
+"""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import sys
+import tempfile
+import threading
+import types
+from contextlib import contextmanager
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+TOOLS = REPO / "tools"
+for path in (str(TOOLS), str(REPO)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+import isolation_certificate  # noqa: E402
+import launch_practice  # noqa: E402
+import practice_host  # noqa: E402
+import practice_service  # noqa: E402
+import ruleset_contract  # noqa: E402
+import staging  # noqa: E402
+
+_MISSING = object()
+
+
+@contextmanager
+def patched(module, **attrs):
+    saved = {}
+    for name, value in attrs.items():
+        saved[name] = getattr(module, name, _MISSING)
+        setattr(module, name, value)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is _MISSING:
+                delattr(module, name)
+            else:
+                setattr(module, name, value)
+
+
+class FakeLiveHandle:
+    """Query-only stand-in. ``terminate`` must never be called by the host."""
+
+    def __init__(self, create_time, image_path):
+        self._create_time = create_time
+        self._image_path = image_path
+        self.closed = 0
+        self.terminate_calls = 0
+
+    def create_time(self):
+        return self._create_time
+
+    def image_path(self):
+        return self._image_path
+
+    def close(self):
+        self.closed += 1
+
+    def terminate(self, timeout=10.0):
+        self.terminate_calls += 1
+        return True
+
+
+class SequenceOpener:
+    def __init__(self, handles):
+        self.handles = list(handles)
+        self.calls = 0
+
+    def __call__(self, pid):
+        self.calls += 1
+        if self.handles:
+            return self.handles.pop(0)
+        return None
+
+
+class FakeEnumerator(launch_practice.ProcessEnumerator):
+    def __init__(self, processes=None, error=None):
+        self._processes = list(processes or [])
+        self._error = error
+
+    def list(self):
+        if self._error is not None:
+            raise self._error
+        return list(self._processes)
+
+
+class SwitchEnumerator(launch_practice.ProcessEnumerator):
+    """Closed for the first ``closed_calls`` listings, then reports ``then``."""
+
+    def __init__(self, closed_calls, then):
+        self.closed_calls = int(closed_calls)
+        self.then = list(then)
+        self.calls = 0
+
+    def list(self):
+        self.calls += 1
+        return [] if self.calls <= self.closed_calls else list(self.then)
+
+
+class FakeClock:
+    def __init__(self, step=0.5):
+        self.t = 0.0
+        self.step = step
+
+    def __call__(self):
+        self.t += self.step
+        return self.t
+
+
+class FakeListenerProbe:
+    def __init__(self, ports):
+        self.ports = {int(port): value for port, value in ports.items()}
+
+    def probe(self, port):
+        return dict(self.ports.get(int(port), {"listening": False, "addresses": [], "pids": [], "source": "fake"}))
+
+
+class FakeRole:
+    def __init__(self, role, pid=1):
+        self.role = role
+        self.pid = pid
+        self.running = True
+        self.terminated = 0
+
+    def is_running(self):
+        return self.running
+
+    def terminate(self, timeout=10.0):
+        self.terminated += 1
+        self.running = False
+        return {"role": self.role, "pid": self.pid, "terminated": True}
+
+
+class FakeSession:
+    def __init__(self, roles=("human", "ai"), ok=True, code="launched", spawn_time=1000.0):
+        self.ok = ok
+        self.code = code
+        self.spawn_time = spawn_time
+        self.owned = [FakeRole(role, pid=100 + index) for index, role in enumerate(roles)]
+        self.records = [
+            types.SimpleNamespace(role=role, pid=100 + index, create_time=1000.0, image_path=f"staged/{role}")
+            for index, role in enumerate(roles)
+        ]
+        self.closed = 0
+
+    def is_running(self):
+        return [{"role": item.role, "pid": item.pid, "running": item.running} for item in self.owned]
+
+    def close(self):
+        self.closed += 1
+
+
+class FakeServer:
+    def __init__(self, running=True, pid=4242):
+        self.running = running
+        self.pid = pid
+        self.terminated = 0
+
+    def is_running(self):
+        return self.running
+
+    def terminate(self, timeout=10.0):
+        self.terminated += 1
+        self.running = False
+        return {"role": "server", "terminated": True}
+
+
+class FakeService:
+    def __init__(self, config, *, ended=False, aborted=False, port=51234, terminal_phase="none", events=None):
+        self.config = config
+        self.expected_config_digest = getattr(config, "expected_config_digest", None)
+        self.human_credential = "h1" * 32
+        self.ai_credential = "a2" * 32
+        self.port = port
+        self.started = False
+        self.ended = ended
+        self.aborted = aborted
+        self.closed = 0
+        self.abort_calls = 0
+        self.terminal_phase = terminal_phase
+        self.ai_receipt_grace = 0.0
+        self.attested = False
+        self.attest_calls = []
+        self.attest_digest = None
+        self._events = events
+
+    def _record(self, name):
+        if self._events is not None:
+            self._events.append(name)
+
+    def start(self):
+        self.started = True
+        return self.port
+
+    def mark_attested(self, expected_config_digest):
+        self._record("mark_attested")
+        self.attest_calls.append(expected_config_digest)
+        self.attest_digest = expected_config_digest
+        self.attested = True
+        return True
+
+    def abort(self, code="practice_aborted"):
+        self.abort_calls += 1
+        self.aborted = True
+
+    def close(self):
+        self.closed += 1
+
+
+class FakeSupervisor:
+    def __init__(self, *, block=None, result=None, human_retained=False, session=None, session_id="sess-1"):
+        self.phase = "accepted"
+        self.error = None
+        self.cleaned = 0
+        self.session_id = session_id
+        self.human_retained = human_retained
+        self.session = session
+        self._block = block
+        self._result = result or {"ok": True, "code": practice_host.CODE_OK}
+
+    def run(self):
+        if self._block is not None:
+            self._block.wait(5)
+        self.phase = "completed"
+        return dict(self._result)
+
+    def human_active(self):
+        if not self.human_retained or self.session is None:
+            return False
+        return any(item.get("role") == "human" and item.get("running") for item in self.session.is_running())
+
+    def cleanup(self):
+        self.cleaned += 1
+
+
+class FakeCertificateApi:
+    """In-memory stand-in for the measurement-interface certificate API."""
+
+    def __init__(
+        self,
+        *,
+        check=None,
+        lock=None,
+        prepare=None,
+        verdict=None,
+        open_records=None,
+        content_hash=None,
+        bind=None,
+        write=None,
+        failure=None,
+        events=None,
+    ):
+        self._check = check if check is not None else {"ok": True, "code": "ok", "certificate_id": "cert1"}
+        self._lock = lock if lock is not None else {"locked": False}
+        self._prepare = prepare
+        self._verdict = verdict if verdict is not None else {"ok": True, "code": "session_passed"}
+        self._open = list(open_records or [])
+        self._content_hash = content_hash
+        self._bind = bind
+        self._write = write
+        self._failure = failure
+        self._events = events
+        self.check_calls = 0
+        self.prepare_calls = 0
+        self.verdict_calls = 0
+        self.failure_calls = []
+        self.bind_calls = []
+        self.ack_calls = 0
+
+    def _record(self, name):
+        if self._events is not None:
+            self._events.append(name)
+
+    def check_certificate(self, staging_root, live=None, port=None):
+        self.check_calls += 1
+        return dict(self._check)
+
+    def lockout(self, staging_root):
+        return dict(self._lock)
+
+    def acknowledge_lockout(self, staging_root, *, operator, reason):
+        self.ack_calls += 1
+        return {"ok": True, "code": "lockout_acknowledged"}
+
+    def list_open_records(self, staging_root):
+        return list(self._open)
+
+    def collect_layer_m(self, staging_root, live=None, server_bind=None):
+        digest = self._content_hash or "c" * 64
+        return {"roles": {role: {"role_parity_digest": digest} for role in ("human", "ai")}}
+
+    def prepare_session(self, staging_root, *, live, session_id, port=None, nonce=None, closed_check=None, phase="P1A", backup_id=None, backup_verify=None, **extra):
+        self.prepare_calls += 1
+        self._record("prepare_session")
+        closed = bool(closed_check()) if callable(closed_check) else None
+        if self._prepare is not None:
+            return dict(self._prepare)
+        session_nonce = nonce or "n" * 32
+        return {
+            "ok": True,
+            "code": "session_prepared",
+            "session_id": session_id,
+            "nonce": session_nonce,
+            "port": port,
+            "certificate_id": "cert1",
+            "backup_id": backup_id,
+            "open_record": f"/stage/open/{session_id}.json",
+            "record": {
+                "schema": "aisparring.open_session.v1",
+                "session_id": session_id,
+                "phase": phase,
+                "nonce": session_nonce,
+                "port": port,
+                "status": "open",
+            },
+            "closed_check": closed,
+        }
+
+    def bind_open_session(self, staging_root, session_id, *, pids, spawn_time=None):
+        self._record("bind_open_session")
+        self.bind_calls.append({"session_id": session_id, "pids": dict(pids or {}), "spawn_time": spawn_time})
+        if self._bind is not None:
+            return dict(self._bind)
+        return {"ok": True, "code": "open_session_bound", "pids": dict(pids or {})}
+
+    def record_session_verdict(self, staging_root, *, session_id, live, session=None, live_closed=None, backup_id=None, certificate_id=None):
+        self.verdict_calls += 1
+        self._record("record_session_verdict")
+        # Mirror the real certificate: a closure can never be certified without the
+        # retained session and a real live-closed check.
+        assert session is not None, "retained_session_required"
+        assert callable(live_closed), "live_closed_check_unavailable"
+        self.live_closed_seen = bool(live_closed())
+        self.session_seen = session
+        if self._failure is not None:
+            return dict(self._failure)
+        return dict(self._verdict)
+
+    def record_session_failure(self, staging_root, *, session_id, reason):
+        self.failure_calls.append({"session_id": session_id, "reason": reason})
+        return {"ok": True, "code": "session_failed_recorded", "session_id": session_id}
+
+    def write_launcher_attestation(self, staging_root, *, session_id, nonce, control_port, port, spawn_time=None, live=None):
+        self._record("write_launcher_attestation")
+        return {"ok": True, "code": "attestation_written", "attestations": {"human": "x", "ai": "y"}}
+
+
+def make_config(root, **overrides):
+    repo = Path(root) / "repo"
+    server_root = repo / "work" / "local-server"
+    values = dict(
+        work_dir=repo / "work" / "aisparring-host",
+        session_root=repo / "work" / "aisparring-host" / "sessions",
+        staging_root=repo / "staging",
+        backup_root=repo / "backups",
+        live_install_root=Path(root) / "live" / "Balatro",
+        live_appdata_root=Path(root) / "appdata" / "Balatro",
+        steam_root=Path(root) / "Steam",
+        server_root=server_root,
+        server_manifest=server_root / "AISparring-adaptation.json",
+        match_port=8788,
+    )
+    values.update(overrides)
+    return practice_host.default_config(repo_root=repo, **values)
+
+
+def make_request(**overrides):
+    values = dict(
+        session_id="correlation-1",
+        difficulty="competitive",
+        pacing="instant",
+        mode="normal",
+        gauntlet=None,
+        live_pid=4321,
+        live_create_time=1000.0,
+    )
+    values.update(overrides)
+    return values
+
+
+def _live_image(config):
+    return str(Path(config.live_install_root) / "Balatro.exe")
+
+
+def _live_opener(config, create_time=1000.0):
+    return lambda pid: FakeLiveHandle(create_time, _live_image(config))
+
+
+def envelope(daemon, op, request=None, auth=None, schema=practice_host.REQUEST_SCHEMA, **extra):
+    payload = {
+        "schema": schema,
+        "op": op,
+        "auth": daemon._secret if auth is None else auth,
+        "request": {} if request is None else request,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _write_server_fixture(config, pin=None, which=None):
+    which = which or (lambda name: sys.executable)
+    server = Path(config.server_root)
+    (server / "src").mkdir(parents=True, exist_ok=True)
+    (server / "dist").mkdir(parents=True, exist_ok=True)
+    main = server / "src" / "main.ts"
+    main.write_text(
+        "const server = createServer()\n"
+        + practice_host.SERVER_BIND_OK
+        + "\n"
+        + practice_host.SERVER_ADMIN_OK
+        + "\n",
+        encoding="utf-8",
+    )
+    entry = server / "dist" / "main.js"
+    entry.write_text(
+        "const server = createServer()\n"
+        + practice_host.SERVER_BIND_OK
+        + "\n// admin listener disabled in the built bundle\n",
+        encoding="utf-8",
+    )
+    lock = server / "package-lock.json"
+    lock.write_text('{"lockfileVersion":3}\n', encoding="utf-8")
+    for name in config.server_runtime_deps:
+        dep = server / "node_modules" / name
+        dep.mkdir(parents=True, exist_ok=True)
+        (dep / "package.json").write_text(
+            json.dumps({"name": name, "version": "1.0.0"}) + "\n", encoding="utf-8"
+        )
+        (dep / "binding.node").write_bytes(b"native-binary-" + name.encode("utf-8"))
+    node_path = Path(which(config.node_executable))
+    runtime_files = {
+        path.relative_to(server).as_posix(): staging.sha256_file(path)
+        for path in sorted((server / "node_modules").rglob("*"))
+        if path.is_file()
+    }
+    dependency_hashes = {
+        name: staging._digest_of(staging.hash_tree(server / "node_modules" / name))
+        for name in config.server_runtime_deps
+    }
+    native_files = sorted(
+        path.relative_to(server).as_posix()
+        for path in (server / "node_modules").rglob("*.node")
+        if path.is_file()
+    )
+    manifest = {
+        "schema": "aisparring.local_server.v1",
+        "upstream_commit": pin or config.server_pin,
+        "changes": list(practice_host.SERVER_CHANGES),
+        "node_executable": str(node_path),
+        "node_sha256": staging.sha256_file(node_path),
+        "source_files": {"src/main.ts": staging.sha256_file(main)},
+        "built_files": {"dist/main.js": staging.sha256_file(entry)},
+        "runtime_files": runtime_files,
+        "dependency_hashes": dependency_hashes,
+        "native_files": native_files,
+        "package_lock_sha256": staging.sha256_file(lock),
+    }
+    (server / "AISparring-adaptation.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return server, main, entry, lock, manifest
+
+
+def _refresh_manifest(server, manifest):
+    for key, rel in (("source_files", "src/main.ts"), ("built_files", "dist/main.js")):
+        manifest[key][rel] = staging.sha256_file(Path(server) / rel)
+    (Path(server) / "AISparring-adaptation.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
+
+
+def _which_python(name):
+    return sys.executable
+
+
+def _ok_runtime_checker(config):
+    return {"ok": True, "code": practice_host.CODE_OK, "problems": [], "runtimes": ["luajit21"]}
+
+
+# ---------------------------------------------------------------------------
+# Daemon: auth, shape, enums, identity, tickets, discovery, lockout
+# ---------------------------------------------------------------------------
+
+def test_daemon_rejects_bad_auth_shape_and_op():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        try:
+            assert daemon.handle_request(envelope(daemon, "available", auth="0" * 64))["code"] == practice_host.CODE_BAD_AUTH
+            assert daemon.handle_request(envelope(daemon, "available", schema="wrong"))["code"] == practice_host.CODE_BAD_REQUEST
+            assert daemon.handle_request(envelope(daemon, "nope"))["code"] == practice_host.CODE_BAD_OP
+            assert daemon.handle_request({"schema": practice_host.REQUEST_SCHEMA})["code"] == practice_host.CODE_BAD_REQUEST
+        finally:
+            daemon.stop()
+
+
+def test_daemon_available_returns_enums_without_secret():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        try:
+            response = daemon.handle_request(envelope(daemon, "available"))
+            assert response["ok"] is True
+            assert response["enums"]["difficulty"] == list(practice_service.DIFFICULTIES)
+            assert response["enums"]["gauntlet"] == sorted(practice_service.GAUNTLET_SEEDS)
+            assert response["lockout"]["locked"] is False
+            assert response["human_active"] is False
+            assert response["open_records"] == []
+            assert daemon._secret not in json.dumps(response)
+        finally:
+            daemon.stop()
+
+
+def test_daemon_start_validates_enums_and_live_pid():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        created = []
+
+        def factory(cfg, request):
+            created.append(request)
+            return FakeSupervisor(block=threading.Event())
+
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            supervisor_factory=factory,
+        )
+        daemon.start()
+        try:
+            for override in (
+                {"difficulty": "impossible"},
+                {"pacing": "fast"},
+                {"mode": "ranked"},
+                {"mode": "gauntlet", "gauntlet": None},
+                {"mode": "gauntlet", "gauntlet": "Test9"},
+                {"mode": "normal", "gauntlet": "Test1"},
+                {"live_pid": True},
+                {"live_create_time": 0},
+                {"live_create_time": "now"},
+            ):
+                response = daemon.handle_request(envelope(daemon, "start", make_request(**override)))
+                assert not response["ok"], (override, response)
+            assert created == []
+            bad = make_request()
+            bad["extra"] = 1
+            assert daemon.handle_request(envelope(daemon, "start", bad))["code"] == practice_host.CODE_BAD_REQUEST
+        finally:
+            daemon.stop()
+
+
+def test_daemon_start_verifies_live_identity():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        for opener, code in (
+            (_live_opener(config, create_time=9999.0), practice_host.CODE_LIVE_IDENTITY_MISMATCH),
+            (lambda pid: FakeLiveHandle(1000.0, str(Path(tmp) / "other" / "Balatro.exe")), practice_host.CODE_LIVE_NOT_INSTALL),
+            (lambda pid: None, "practice_live_handle_unavailable"),
+        ):
+            daemon = practice_host.HostDaemon(
+                config, opener=opener, enumerator=FakeEnumerator([]), runtime_checker=_ok_runtime_checker
+            )
+            daemon.start()
+            try:
+                response = daemon.handle_request(envelope(daemon, "start", make_request()))
+                assert response["code"] == code, response
+            finally:
+                daemon.stop()
+
+
+def test_daemon_start_acks_only_when_recorded_and_refuses_duplicate():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        gate = threading.Event()
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            supervisor_factory=lambda cfg, request: FakeSupervisor(block=gate),
+        )
+        daemon.start()
+        try:
+            first = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert first["ok"] is True and first["code"] == practice_host.CODE_ACCEPTED
+            assert first["ticket"]
+            duplicate = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert duplicate["code"] == practice_host.CODE_TICKET_ACTIVE
+            unknown = daemon.handle_request(envelope(daemon, "poll", {"ticket": "nope"}))
+            assert unknown["code"] == practice_host.CODE_TICKET_UNKNOWN
+            polled = daemon.handle_request(envelope(daemon, "poll", {"ticket": first["ticket"]}))
+            assert polled["ok"] is True and polled["phase"] in practice_host.PHASES
+        finally:
+            gate.set()
+            daemon.stop()
+
+
+def test_daemon_refuses_live_duplicate_and_replaces_stale():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        marker = {
+            "schema": practice_host.DISCOVERY_SCHEMA,
+            "module_sha256": practice_host.module_sha256(),
+            "daemon_id": "other",
+            "pid": os.getpid(),
+            "create_time": 1000.0,
+        }
+        path = config.resolved_discovery_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(marker), encoding="utf-8")
+
+        live = practice_host.HostDaemon(config, opener=_live_opener(config, create_time=1000.0), enumerator=FakeEnumerator([]))
+        try:
+            live.start()
+        except practice_host.HostError as error:
+            assert error.code == practice_host.CODE_ALREADY_RUNNING
+        else:
+            raise AssertionError("expected host_already_running")
+
+        marker["create_time"] = 555.0
+        path.write_text(json.dumps(marker), encoding="utf-8")
+        stale = practice_host.HostDaemon(config, opener=_live_opener(config, create_time=1000.0), enumerator=FakeEnumerator([]))
+        started = stale.start()
+        try:
+            assert started["stale_replaced"] is True
+            assert started["code"] == practice_host.CODE_STALE_DISCOVERY
+        finally:
+            stale.stop()
+
+        marker["module_sha256"] = "0" * 64
+        path.write_text(json.dumps(marker), encoding="utf-8")
+        foreign = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        try:
+            foreign.start()
+        except practice_host.HostError as error:
+            assert error.code == practice_host.CODE_FOREIGN_DISCOVERY
+        else:
+            raise AssertionError("expected host_foreign_discovery")
+
+
+def test_daemon_loopback_socket_round_trip():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        try:
+            assert daemon.port is not None
+            with socket.create_connection((practice_host.HOST, daemon.port), timeout=5) as connection:
+                connection.sendall((json.dumps(envelope(daemon, "available")) + "\n").encode("utf-8"))
+                raw = connection.makefile("rb").readline()
+            response = json.loads(raw.decode("utf-8"))
+            assert response["ok"] is True and response["version"] == practice_host.VERSION
+        finally:
+            daemon.stop()
+
+
+def test_host_lockout_requires_explicit_acknowledgement():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        assert practice_host.read_host_lockout(config)["locked"] is False
+        practice_host.set_host_lockout(config, reason="test")
+        assert practice_host.read_host_lockout(config)["locked"] is True
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            supervisor_factory=lambda cfg, request: FakeSupervisor(block=threading.Event()),
+        )
+        daemon.start()
+        try:
+            assert daemon.handle_request(envelope(daemon, "available"))["lockout"]["locked"] is True
+            refused = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert refused["code"] == practice_host.CODE_ACK_REQUIRED
+            bad = daemon.handle_request(envelope(daemon, "acknowledge", {"confirm": False}))
+            assert bad["code"] == practice_host.CODE_BAD_REQUEST
+            ack = daemon.handle_request(envelope(daemon, "acknowledge", {"confirm": True}))
+            assert ack["ok"] is True and ack["cleared"] is True
+            assert practice_host.read_host_lockout(config)["locked"] is False
+        finally:
+            daemon.stop()
+
+
+def test_open_record_blocks_new_ticket_and_acknowledgement():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        api = FakeCertificateApi(open_records=[{"status": "open", "session_id": "s-open"}])
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            certificate_api=api,
+            runtime_checker=_ok_runtime_checker,
+            supervisor_factory=lambda cfg, request: FakeSupervisor(block=threading.Event()),
+        )
+        daemon.start()
+        try:
+            available = daemon.handle_request(envelope(daemon, "available"))
+            assert available["open_records"] and available["open_records"][0]["session_id"] == "s-open"
+            refused = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert refused["code"] == practice_host.CODE_OPEN_RECORD_BLOCKED
+            practice_host.set_host_lockout(config, reason="test")
+            ack = daemon.handle_request(envelope(daemon, "acknowledge", {"confirm": True}))
+            assert ack["code"] == practice_host.CODE_OPEN_RECORD_BLOCKED
+        finally:
+            daemon.stop()
+
+
+def test_new_ticket_never_kills_retained_human_and_daemon_stop_defers():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        retained = FakeSupervisor(human_retained=True, session=FakeSession(roles=("human",)))
+        daemon = practice_host.HostDaemon(
+            config, opener=_live_opener(config), enumerator=FakeEnumerator([]), runtime_checker=_ok_runtime_checker
+        )
+        daemon.start()
+        try:
+            with daemon._lock:
+                daemon._ticket = practice_host.MatchTicket(ticket="ticket-live", request=make_request())
+                daemon._ticket.supervisor = retained
+            assert daemon.human_active() is True
+            refused = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert refused["code"] == practice_host.CODE_HUMAN_ACTIVE
+            assert retained.cleaned == 0
+            stop = daemon.stop()
+            assert stop["stopped"] is False and stop["code"] == practice_host.CODE_HUMAN_ACTIVE
+            assert daemon._server is not None
+        finally:
+            with daemon._lock:
+                daemon._ticket = None
+            daemon.stop(force=True)
+
+
+# ---------------------------------------------------------------------------
+# Live-exit wait (never terminates)
+# ---------------------------------------------------------------------------
+
+def test_wait_for_live_exit_timeout_never_terminates():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        handle = FakeLiveHandle(1000.0, _live_image(config))
+        opener = SequenceOpener([handle, handle, handle, handle, handle, handle])
+        verdict = practice_host.wait_for_live_exit(
+            config,
+            4321,
+            1000.0,
+            timeout=1.0,
+            poll_interval=0.0,
+            enumerator=FakeEnumerator([]),
+            opener=opener,
+            clock=FakeClock(step=1.0),
+            sleeper=lambda _seconds: None,
+        )
+        assert verdict["code"] == practice_host.CODE_LIVE_TIMEOUT
+        assert verdict["terminated"] is False
+        assert handle.terminate_calls == 0
+
+
+def test_wait_for_live_exit_observes_absence_and_pid_reuse():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        exited = practice_host.wait_for_live_exit(
+            config,
+            4321,
+            1000.0,
+            timeout=5.0,
+            poll_interval=0.0,
+            enumerator=FakeEnumerator([]),
+            opener=SequenceOpener([]),
+            clock=FakeClock(step=0.1),
+            sleeper=lambda _seconds: None,
+        )
+        assert exited["ok"] is True and exited["pid_reused"] is False
+
+        reused = practice_host.wait_for_live_exit(
+            config,
+            4321,
+            1000.0,
+            timeout=5.0,
+            poll_interval=0.0,
+            enumerator=FakeEnumerator(
+                [launch_practice.ProcessInfo(4321, 2000.0, _live_image(config), name="Balatro")]
+            ),
+            opener=SequenceOpener([]),
+            clock=FakeClock(step=0.1),
+            sleeper=lambda _seconds: None,
+        )
+        assert reused["ok"] is True and reused["pid_reused"] is True
+
+        unverified = practice_host.wait_for_live_exit(
+            config,
+            4321,
+            1000.0,
+            timeout=5.0,
+            poll_interval=0.0,
+            enumerator=FakeEnumerator(error=staging.StagingError("process_enumeration_unavailable")),
+            opener=SequenceOpener([]),
+            clock=FakeClock(step=0.1),
+            sleeper=lambda _seconds: None,
+        )
+        assert unverified["code"] == practice_host.CODE_LIVE_UNVERIFIED
+
+
+# ---------------------------------------------------------------------------
+# Certificate / quiescence / backup / attestation
+# ---------------------------------------------------------------------------
+
+def test_certificate_gate_reuses_immutable_certificate():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = {"install": str(config.live_install_root)}
+        api = FakeCertificateApi(check={"ok": True, "code": "ok", "certificate_id": "c1"}, lock={"locked": False})
+        verdict = practice_host.certificate_gate(config, live_map=live, port=8788, api=api)
+        assert verdict["ok"] is True and api.check_calls == 1
+
+        locked = FakeCertificateApi(lock={"locked": True, "reason": "live_byte_diff"})
+        assert practice_host.certificate_gate(config, live_map=live, port=8788, api=locked)["code"] == practice_host.CODE_CERTIFICATE_LOCKED
+
+        stale = FakeCertificateApi(check={"ok": False, "code": "certificate_invalid", "problems": ["mods_layer_changed"]})
+        verdict = practice_host.certificate_gate(config, live_map=live, port=8788, api=stale)
+        assert verdict["code"] == practice_host.CODE_CERTIFICATE_REQUIRED
+
+        assert practice_host.certificate_gate(config, live_map=live, port=8788, api=None)["code"] == practice_host.CODE_CERTIFICATE_API_MISSING
+
+
+def test_host_has_no_unchecked_attestation_writer_and_delegates():
+    source = Path(practice_host.__file__).read_text(encoding="utf-8")
+    assert "rebase_isolation_proof" not in source
+    assert "record_isolation_proof" not in source
+    assert not hasattr(practice_host, "isolation_proof_gate")
+    # H1: the host's unchecked duplicate writer is deleted.
+    assert not hasattr(practice_host, "write_role_attestation")
+    assert hasattr(practice_host, "write_role_attestations")
+
+    captured = {}
+
+    def fake_write(staging_root, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "code": "attestation_written"}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        with patched(isolation_certificate, write_launcher_attestation=fake_write):
+            verdict = practice_host.write_role_attestations(
+                config, session_id="s-1", nonce="n" * 32, control_port=51234, port=8788
+            )
+    assert verdict["ok"] is True
+    assert captured["control_port"] == 51234 and captured["port"] == 8788
+    assert captured["session_id"] == "s-1"
+
+    with patched(practice_host, isolation_certificate=None):
+        assert practice_host.write_role_attestations(
+            config, session_id="s-1", nonce="n" * 32, control_port=1, port=1
+        )["code"] == practice_host.CODE_MEASUREMENT_API_MISSING
+
+
+def test_measurement_api_problems_fail_closed():
+    assert practice_host.measurement_api_problems(None) == ["certificate_api_missing"]
+    assert practice_host.measurement_api_problems(object())
+    assert practice_host.measurement_api_problems(isolation_certificate) == []
+
+
+def test_quiescence_requires_two_equal_hashes():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = {"steam_userdata/390025789": str(Path(tmp) / "Steam" / "userdata" / "390025789" / "2379780")}
+        stable = FakeCertificateApi()
+        stable.snapshot_live = lambda live_roots, label=None: {"digest": "a" * 64}
+        assert practice_host.check_quiescence(config, live, api=stable, sleeper=lambda _s: None)["ok"] is True
+
+        class Unstable:
+            def snapshot_live(self, live_roots, label=None):
+                self.n = getattr(self, "n", 0) + 1
+                return {"digest": "a" * 64 if self.n == 1 else "b" * 64}
+
+        verdict = practice_host.check_quiescence(config, live, api=Unstable(), sleeper=lambda _s: None)
+        assert verdict["code"] == practice_host.CODE_QUIESCENCE
+
+        assert practice_host.check_quiescence(config, {"install": "x"}, api=stable, sleeper=lambda _s: None)["ok"] is True
+
+
+def test_prepare_live_baseline_requires_a_real_backup_id():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = {"install": str(config.live_install_root)}
+        api = FakeCertificateApi()
+
+        refused = practice_host.prepare_live_baseline(
+            config, live, api=api, backup_runner=lambda c, l, label: {"ok": False, "code": "live_process_running"}, sleeper=lambda _s: None
+        )
+        assert refused["code"] == practice_host.CODE_FRESH_BACKUP_REQUIRED
+
+        no_id = practice_host.prepare_live_baseline(
+            config, live, api=api, backup_runner=lambda c, l, label: {"ok": True}, sleeper=lambda _s: None
+        )
+        assert no_id["code"] == practice_host.CODE_FRESH_BACKUP_REQUIRED
+        assert "backup_id_missing" in no_id["problems"]
+
+        with patched(practice_host, _verify_fresh_backup=lambda c, l: {"ok": True}):
+            prepared = practice_host.prepare_live_baseline(
+                config, live, api=api, backup_runner=lambda c, l, label: {"ok": True, "label": "bk1"}, sleeper=lambda _s: None
+            )
+        assert prepared["ok"] is True and prepared["backup_id"] == "bk1"
+
+
+def test_wait_for_attestation_requires_both_roles():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        calls = {"n": 0}
+
+        def collector(cfg, nonce, spawn_time, port):
+            calls["n"] += 1
+            return {"ok": calls["n"] >= 2, "code": practice_host.CODE_OK if calls["n"] >= 2 else "pending"}
+
+        verdict = practice_host.wait_for_attestation(
+            config, nonce="n" * 32, spawn_time=1.0, port=8788, collector=collector,
+            timeout=10, poll_interval=0.0, clock=FakeClock(step=0.1), sleeper=lambda _s: None,
+        )
+        assert verdict["ok"] is True and calls["n"] == 2
+
+        always_bad = lambda *args: {"ok": False, "problems": ["guard_nonce_mismatch"]}
+        verdict = practice_host.wait_for_attestation(
+            config, nonce="n" * 32, spawn_time=1.0, port=8788, collector=always_bad,
+            timeout=1, poll_interval=0.0, clock=FakeClock(step=1.0), sleeper=lambda _s: None,
+        )
+        assert verdict["code"] == practice_host.CODE_ATTESTATION
+
+
+# ---------------------------------------------------------------------------
+# Server adaptation + listener + ports
+# ---------------------------------------------------------------------------
+
+def test_verify_server_adaptation_fixture_and_tampers():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        server, main, entry, lock, manifest = _write_server_fixture(config)
+        assert practice_host.verify_server_adaptation(config, which=_which_python)["ok"] is True
+
+        main.write_text(
+            "const server = createServer()\n" + practice_host.SERVER_BIND_BAD + "\n" + practice_host.SERVER_ADMIN_OK + "\n",
+            encoding="utf-8",
+        )
+        _refresh_manifest(server, manifest)
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "match_bind_not_loopback" in verdict["problems"], verdict
+
+        main.write_text(
+            "const server = createServer()\n" + practice_host.SERVER_BIND_OK + "\n" + practice_host.SERVER_ADMIN_BAD + "\n",
+            encoding="utf-8",
+        )
+        _refresh_manifest(server, manifest)
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "admin_listener_not_disabled" in verdict["problems"], verdict
+
+        entry.write_text("// tampered build\n", encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert any(problem.startswith("built_files_hash_mismatch") for problem in verdict["problems"]), verdict
+
+        _write_server_fixture(config, pin="deadbeef")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "upstream_pin_mismatch" in verdict["problems"], verdict
+
+
+def test_verify_server_adaptation_binds_node_build_and_native_binaries():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        server, _main, entry, _lock, manifest = _write_server_fixture(config)
+        assert practice_host.verify_server_adaptation(config, which=_which_python)["ok"] is True
+
+        # dist/main.js must be in the built manifest.
+        manifest["built_files"] = {}
+        (Path(server) / "AISparring-adaptation.json").write_text(json.dumps(manifest), encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "built_entry_not_in_manifest" in verdict["problems"]
+        assert "built_files_missing" in verdict["problems"]
+
+        # The built JS itself must carry the loopback bind.
+        _write_server_fixture(config)
+        entry.write_text("const server = createServer()\n// no bind here\n", encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "built_match_bind_not_loopback" in verdict["problems"]
+
+        # The resolved Node executable hash must match the manifest pin.
+        _write_server_fixture(config)
+        manifest = json.loads((Path(server) / "AISparring-adaptation.json").read_text(encoding="utf-8"))
+        manifest["node_sha256"] = "0" * 64
+        (Path(server) / "AISparring-adaptation.json").write_text(json.dumps(manifest), encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "node_hash_mismatch" in verdict["problems"]
+
+        # A missing native binary cannot pass as a bound runtime.
+        _write_server_fixture(config)
+        import shutil
+
+        shutil.rmtree(Path(server) / "node_modules" / "better-sqlite3")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "runtime_dependency_missing:better-sqlite3" in verdict["problems"]
+
+
+def test_verify_server_adaptation_binds_lock_and_runtime_dependencies():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        server, _main, _entry, lock, _manifest = _write_server_fixture(config)
+        assert practice_host.verify_server_adaptation(config, which=_which_python)["ok"] is True
+
+        lock.write_text('{"lockfileVersion":3,"tampered":true}\n', encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "package_lock_hash_mismatch" in verdict["problems"], verdict
+
+        _write_server_fixture(config)
+        import shutil
+
+        shutil.rmtree(Path(server) / "node_modules" / "uuid")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "runtime_dependency_missing:uuid" in verdict["problems"], verdict
+
+
+def test_verify_server_adaptation_binds_runtime_manifest_and_native_files():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        server, _main, _entry, _lock, manifest = _write_server_fixture(config)
+        assert practice_host.verify_server_adaptation(config, which=_which_python)["ok"] is True
+        assert manifest["runtime_files"] and manifest["native_files"]
+        assert manifest["dependency_hashes"]
+
+        # The full dependency manifest is required (producer/checker contract).
+        manifest.pop("runtime_files")
+        (Path(server) / "AISparring-adaptation.json").write_text(json.dumps(manifest), encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "runtime_files_missing" in verdict["problems"], verdict
+
+        # A tampered dependency file is refused.
+        server, _main, _entry, _lock, manifest = _write_server_fixture(config)
+        target = sorted(
+            rel
+            for rel, _digest in manifest["runtime_files"].items()
+            if rel.endswith("binding.node")
+        )[0]
+        (Path(server) / target).write_bytes(b"tampered-native-binary")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert any(problem.startswith("runtime_files_hash_mismatch") for problem in verdict["problems"]), verdict
+
+        # A declared dependency hash that does not match the tree is refused.
+        server, _main, _entry, _lock, manifest = _write_server_fixture(config)
+        manifest["dependency_hashes"]["uuid"] = "0" * 64
+        (Path(server) / "AISparring-adaptation.json").write_text(json.dumps(manifest), encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "dependency_hash_mismatch:uuid" in verdict["problems"], verdict
+
+        # Native binaries must be declared in the manifest.
+        server, _main, _entry, _lock, manifest = _write_server_fixture(config)
+        manifest["native_files"] = []
+        (Path(server) / "AISparring-adaptation.json").write_text(json.dumps(manifest), encoding="utf-8")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert "native_files_missing" in verdict["problems"], verdict
+
+
+def test_runtime_preflight_is_bounded_and_fail_closed():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        ok = practice_host.runtime_preflight(
+            config, checker=lambda cfg: {"ok": True, "code": practice_host.CODE_OK}
+        )
+        assert ok["ok"] is True
+
+        refused = practice_host.runtime_preflight(
+            config, checker=lambda cfg: {"ok": False, "problems": ["runtime_unavailable:luajit21"]}
+        )
+        assert refused["code"] == practice_host.CODE_RUNTIME_PREFLIGHT
+        assert refused["problems"] == ["runtime_unavailable:luajit21"]
+
+        def boom(cfg):
+            raise RuntimeError("no lupa")
+
+        failed = practice_host.runtime_preflight(config, checker=boom)
+        assert failed["code"] == practice_host.CODE_RUNTIME_PREFLIGHT
+        assert failed["problems"] == ["runtime_preflight_failed"]
+
+        # A checker that returns a non-dict is a refusal, never an implicit pass.
+        assert practice_host.runtime_preflight(config, checker=lambda cfg: None)["ok"] is False
+
+
+def test_daemon_refuses_start_when_runtime_preflight_fails():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        created = []
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=lambda cfg: {"ok": False, "problems": ["runtime_unavailable:luajit21"]},
+            supervisor_factory=lambda cfg, request: created.append(request) or FakeSupervisor(block=threading.Event()),
+        )
+        daemon.start()
+        try:
+            refused = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert refused["code"] == practice_host.CODE_RUNTIME_PREFLIGHT, refused
+            assert refused["problems"] == ["runtime_unavailable:luajit21"]
+            assert created == []
+        finally:
+            daemon.stop()
+
+
+def test_verify_server_adaptation_rejects_manifest_outside_root():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, server_manifest=Path(tmp) / "elsewhere.json")
+        verdict = practice_host.verify_server_adaptation(config, which=_which_python)
+        assert verdict["code"] == "practice_server_manifest_path_mismatch"
+
+        outside = make_config(tmp, server_root=Path(tmp) / "outside-server")
+        verdict = practice_host.verify_server_adaptation(outside, which=_which_python)
+        assert verdict["code"] == "practice_server_root_unsafe"
+
+
+def test_verify_local_listener_requires_loopback_owner_and_closed_admin():
+    ok = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe({8788: {"listening": True, "addresses": ["127.0.0.1"], "pids": [7]}}),
+        expected_pid=7,
+    )
+    assert ok["ok"] is True and ok["owner_proven"] is True
+
+    bound_all = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe({8788: {"listening": True, "addresses": ["0.0.0.0"], "pids": [7]}}),
+        expected_pid=7,
+    )
+    assert "match_listener_not_loopback" in bound_all["problems"]
+
+    v6_wild = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe({8788: {"listening": True, "addresses": ["::"], "pids": [7]}}),
+        expected_pid=7,
+    )
+    assert "match_listener_not_loopback" in v6_wild["problems"]
+    assert practice_host.is_loopback_address("::1") is True
+    assert practice_host.is_loopback_address("::ffff:127.0.0.1") is True
+    assert practice_host.is_loopback_address("::") is False
+
+    wrong_owner = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe({8788: {"listening": True, "addresses": ["127.0.0.1"], "pids": [999]}}),
+        expected_pid=7,
+    )
+    assert "match_listener_not_owned" in wrong_owner["problems"]
+
+    no_owner = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe({8788: {"listening": True, "addresses": ["127.0.0.1"], "pids": []}}),
+        expected_pid=7,
+    )
+    assert "match_listener_owner_unproven" in no_owner["problems"]
+
+    admin_open = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe(
+            {8788: {"listening": True, "addresses": ["127.0.0.1"], "pids": [7]}, 8789: {"listening": True, "addresses": ["127.0.0.1"]}}
+        ),
+        expected_pid=7,
+    )
+    assert "admin_listener_active" in admin_open["problems"]
+
+    absent = practice_host.verify_local_listener(8788, 8789, probe=FakeListenerProbe({}))
+    assert "match_listener_absent" in absent["problems"]
+    assert "lan_bind_unproven" in absent["problems"]
+
+
+def test_windows_tcp_table_probe_reports_per_family_inventory_status():
+    ipv4_only = {"addresses": ["127.0.0.1"], "pids": {7}}
+
+    def v4_only(port, family):
+        return ipv4_only if int(family) == practice_host._AF_INET else None
+
+    with patched(practice_host, os=types.SimpleNamespace(name="nt"), _probe_tcp_table=v4_only):
+        measured = practice_host.WindowsTcpTableProbe().probe(8788)
+    assert measured["families"] == {"ipv4": "ok", "ipv6": "unavailable"}
+    assert measured["listening"] is True
+    assert measured["addresses"] == ["127.0.0.1"]
+    assert measured["pids"] == [7]
+    assert measured["source"] == "tcp_table"
+
+    with patched(practice_host, os=types.SimpleNamespace(name="nt"), _probe_tcp_table=lambda port, family: None):
+        unavailable = practice_host.WindowsTcpTableProbe().probe(8788)
+    assert unavailable["source"] == "unavailable"
+    assert unavailable["listening"] is False
+    assert unavailable["families"] == {"ipv4": "unavailable", "ipv6": "unavailable"}
+
+
+def test_verify_local_listener_refuses_partial_family_inventory():
+    complete = {"ipv4": "ok", "ipv6": "ok"}
+    match_partial = {
+        "listening": True,
+        "addresses": ["127.0.0.1"],
+        "pids": [7],
+        "source": "tcp_table",
+        "families": {"ipv4": "ok", "ipv6": "unavailable"},
+    }
+    match_unavailable = {
+        "listening": False,
+        "addresses": [],
+        "pids": [],
+        "source": "unavailable",
+        "families": {"ipv4": "unavailable", "ipv6": "unavailable"},
+    }
+    admin_absent_partial = {
+        "listening": False,
+        "addresses": [],
+        "pids": [],
+        "source": "tcp_table",
+        "families": {"ipv4": "ok", "ipv6": "unavailable"},
+    }
+
+    match_gap = practice_host.verify_local_listener(
+        8788, 8789, probe=FakeListenerProbe({8788: match_partial}), expected_pid=7
+    )
+    assert match_gap["ok"] is False
+    assert "match_listener_inventory_incomplete" in match_gap["problems"]
+    assert match_gap["code"] == practice_host.CODE_LISTENER_UNPROVEN
+
+    # A complete match family inventory cannot vouch for an admin family whose
+    # native query failed: the unread family could hold an active admin listener.
+    admin_gap = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe(
+            {
+                8788: {
+                    "listening": True,
+                    "addresses": ["127.0.0.1"],
+                    "pids": [7],
+                    "source": "tcp_table",
+                    "families": dict(complete),
+                },
+                8789: admin_absent_partial,
+            }
+        ),
+        expected_pid=7,
+    )
+    assert admin_gap["ok"] is False
+    assert "admin_listener_inventory_incomplete" in admin_gap["problems"]
+
+    both_unavailable = practice_host.verify_local_listener(
+        8788, 8789, probe=FakeListenerProbe({8788: match_unavailable}), expected_pid=7
+    )
+    assert both_unavailable["ok"] is False
+    assert "match_listener_absent" in both_unavailable["problems"]
+    assert "match_listener_inventory_incomplete" in both_unavailable["problems"]
+
+    # Non-strict callers keep the historical behaviour and only see the partial
+    # inventory (no hard refusal), while strict callers refuse it.
+    lenient = practice_host.verify_local_listener(
+        8788, 8789, probe=FakeListenerProbe({8788: match_partial}), expected_pid=7, strict=False
+    )
+    assert "match_listener_inventory_incomplete" not in lenient["problems"]
+    assert lenient["ok"] is True
+
+
+def test_exclusive_port_probe_never_reuses_an_occupied_port():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as holder:
+            holder.bind((practice_host.HOST, 0))
+            holder.listen(1)
+            port = holder.getsockname()[1]
+            assert practice_host.port_is_free(practice_host.HOST, port) is False
+        assert practice_host.choose_match_port(config, port_free=lambda host, port: True)["ok"] is True
+
+
+def test_choose_match_port_prefers_fixed_and_never_silently_rechooses():
+    with tempfile.TemporaryDirectory() as tmp:
+        fixed = make_config(tmp)
+        assert practice_host.choose_match_port(fixed, port_free=lambda host, port: True) == {
+            "ok": True,
+            "code": practice_host.CODE_OK,
+            "port": 8788,
+            "fixed": True,
+        }
+        busy = practice_host.choose_match_port(fixed, port_free=lambda host, port: False)
+        assert busy["code"] == practice_host.CODE_MATCH_PORT
+
+        unset = make_config(tmp, match_port=None)
+        refused = practice_host.choose_match_port(unset, port_free=lambda host, port: True)
+        assert refused["code"] == practice_host.CODE_MATCH_PORT_UNCONFIGURED
+
+        flexible = make_config(tmp, match_port=None, require_fixed_match_port=False)
+        chosen = practice_host.choose_match_port(flexible, port_free=lambda host, port: True)
+        assert chosen["ok"] is True and chosen["fixed"] is False and 1 <= chosen["port"] <= 65535
+
+
+def test_static_isolation_gates_block_on_overlap():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        overlapping = make_config(tmp, staging_root=Path(config.live_install_root) / "staging")
+        with patched(
+            staging,
+            verify_staged_role=lambda staging_root, role: {"ok": True},
+            check_steam_guard=lambda staging_root, role, live=None: {"ok": True},
+        ):
+            verdict = practice_host.static_isolation_gates(overlapping, enumerator=FakeEnumerator([]))
+        assert verdict["ok"] is False
+        assert verdict["gates"]["overlap"]["code"] == "staging_overlaps_live"
+
+
+# ---------------------------------------------------------------------------
+# Supervisor: descriptors, lifecycle ordering, failure, void, retention, diff
+# ---------------------------------------------------------------------------
+
+def _gate_ok(config, **extra):
+    verdict = {
+        "ok": True,
+        "code": practice_host.CODE_OK,
+        "content_hash": "c" * 64,
+        "match_port": 8788,
+        "nonce": "n" * 32,
+        "backup_id": "bk1",
+        "certificate_id": "cert1",
+        "config_digest": "deadbeef",
+        "ruleset": {},
+        "live_map": {"install": str(config.live_install_root)},
+        "open_record": None,
+    }
+    verdict.update(extra)
+    return verdict
+
+
+def _supervisor(config, request, **overrides):
+    defaults = dict(
+        service_factory=lambda cfg: FakeService(cfg),
+        launch_runner=lambda plan, **kwargs: FakeSession(),
+        server_runner=lambda command, cwd, env, log_dir: FakeServer(),
+        listener_probe=FakeListenerProbe({8788: {"listening": True, "addresses": ["127.0.0.1"], "pids": [4242]}}),
+        enumerator=FakeEnumerator([]),
+        opener=SequenceOpener([]),
+        gate_evaluator=lambda: _gate_ok(config),
+        certificate_api=FakeCertificateApi(),
+        attestation_collector=lambda cfg, nonce, spawn_time, port: {"ok": True, "code": practice_host.CODE_OK},
+        attestation_writer=lambda cfg, **kwargs: {"ok": True, "code": practice_host.CODE_OK},
+        verdict_recorder=lambda cfg, session_id, before, after, backup_id, certificate_id: {"ok": True, "code": "session_passed"},
+        human_exit_waiter=lambda session, grace: True,
+        port_free=lambda host, port: True,
+        runtime_checker=_ok_runtime_checker,
+        which=_which_python,
+        clock=FakeClock(step=0.1),
+        sleeper=lambda _seconds: None,
+    )
+    defaults.update(overrides)
+    return practice_host.MatchSupervisor(config, request, **defaults)
+
+
+def test_supervisor_builds_typed_descriptors_and_service_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        captured = {}
+
+        def factory(cfg):
+            captured["config"] = cfg
+            return FakeService(cfg, port=51234, ended=True, terminal_phase="closed")
+
+        ruleset = {
+            "ruleset_id": "ruleset_mp_majorleague",
+            "gamemode": "gamemode_mp_attrition",
+            "forced_options": {"timer_base_seconds": 180, "timer_forgiveness": 0},
+        }
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=factory,
+            gate_evaluator=lambda: _gate_ok(config, config_digest="cafebabe", ruleset=ruleset),
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        service_config = captured["config"]
+        assert service_config.session_id == supervisor.session_id
+        assert service_config.expected_config_digest == "cafebabe"
+        assert service_config.ruleset_id == "ruleset_mp_majorleague"
+        assert service_config.gamemode == "gamemode_mp_attrition"
+        assert dict(service_config.forced_options) == {"timer_base_seconds": 180, "timer_forgiveness": 0}
+        # The host mints the session id; the menu value is correlation only (M6).
+        assert supervisor.session_id != "correlation-1"
+        assert practice_host.SESSION_ID_RE.match(supervisor.session_id)
+
+        supervisor.service = FakeService(None, port=51234)
+        descriptors = supervisor._build_descriptors("n" * 32, "c" * 64)
+        assert set(descriptors) == {"human", "ai"}
+        for role, descriptor in descriptors.items():
+            assert isinstance(descriptor, launch_practice.SessionDescriptor)
+            env = launch_practice.session_env_overrides(descriptor)
+            assert set(env) == set(launch_practice.SESSION_ENV_KEYS.values())
+            assert env["AISP_CONTROL_PORT"] == "51234"
+            assert env["AISP_PROBE_NONCE"] == "n" * 32
+            paths = staging.role_paths(config.staging_root, role)
+            assert env["AISP_EXPECTED_ROLE_MODS_ROOT"] == str(paths.mods)
+            assert launch_practice.session_descriptor_problems(descriptor, paths, "n" * 32) == []
+
+
+def test_supervisor_starts_verified_server_before_roles():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        events = []
+
+        def server_runner(command, cwd, env, log_dir):
+            events.append("server")
+            return FakeServer(pid=4242)
+
+        def launch_runner(plan, **kwargs):
+            events.append("roles")
+            return FakeSession()
+
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            server_runner=server_runner,
+            launch_runner=launch_runner,
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="closed"),
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert events == ["server", "roles"]
+
+
+def test_supervisor_mark_attested_after_probes_before_writing_files():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        events = []
+        service = FakeService(None, events=events, ended=True, terminal_phase="closed")
+        writer = lambda cfg, **kwargs: events.append("attestation_write") or {"ok": True, "code": practice_host.CODE_OK}
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            attestation_writer=writer,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert service.attest_digest == "deadbeef"
+        assert events.index("mark_attested") < events.index("attestation_write")
+
+
+def test_supervisor_writes_attestation_with_control_and_match_ports_separately():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        captured = {}
+        service = FakeService(None, port=51234, ended=True, terminal_phase="closed")
+
+        def writer(cfg, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "code": practice_host.CODE_OK}
+
+        supervisor = _supervisor(config, make_request(), service_factory=lambda cfg: service, attestation_writer=writer)
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert captured["control_port"] == 51234
+        assert captured["port"] == 8788
+
+
+def test_supervisor_success_retains_human_and_keeps_server_until_exit():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+        server = FakeServer()
+        service = FakeService(None, ended=True, terminal_phase="closed")
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            server_runner=lambda command, cwd, env, log_dir: server,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert supervisor.phase == "completed"
+        # Server/service stay up until the human window exits, then are retired.
+        assert service.closed == 1 and server.terminated == 1
+        by_role = {item.role: item for item in session.owned}
+        assert by_role["ai"].terminated == 1
+        assert by_role["human"].terminated == 0
+        assert supervisor.certificate_id == "cert1" and supervisor.backup_id == "bk1"
+        assert supervisor.live_verdict["ok"] is True
+
+        report = json.loads(supervisor.workspace.report_path.read_text(encoding="utf-8"))
+        text = json.dumps(report)
+        assert service.human_credential not in text and service.ai_credential not in text
+        assert report["session_id"] == supervisor.session_id
+        assert report["config_digest"] == "deadbeef"
+        assert report["role_records"]
+        assert report["descriptor_env_unbound"] == []
+
+        supervisor.cleanup()
+        assert by_role["human"].terminated == 1
+        assert session.closed == 1
+
+
+def test_supervisor_refuses_descriptor_env_gap():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        service = FakeService(None)
+        launched = []
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: launched.append(plan) or FakeSession(),
+        )
+        with patched(practice_host, _descriptor_env_gap=lambda: ["AISP_NEW_NAME"]):
+            result = supervisor.run()
+        assert result["code"] == practice_host.CODE_DESCRIPTOR_ENV_GAP
+        assert launched == []
+        assert service.closed == 1
+
+
+def test_supervisor_fails_closed_before_any_launch_on_bad_gates():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        launched = []
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            gate_evaluator=lambda: {"ok": False, "code": practice_host.CODE_CERTIFICATE_REQUIRED},
+            launch_runner=lambda plan, **kwargs: launched.append(plan) or FakeSession(),
+        )
+        result = supervisor.run()
+        assert result["ok"] is False and result["code"] == practice_host.CODE_CERTIFICATE_REQUIRED
+        assert launched == []
+        assert supervisor.phase == "failed"
+
+
+def test_supervisor_terminates_owned_handles_when_listener_unproven():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, server_start_timeout=1.0)
+        session = FakeSession()
+        server = FakeServer()
+        service = FakeService(None)
+        launched = []
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: launched.append(plan) or session,
+            server_runner=lambda command, cwd, env, log_dir: server,
+            listener_probe=FakeListenerProbe({}),
+        )
+        result = supervisor.run()
+        assert result["ok"] is False
+        assert result["code"] == practice_host.CODE_SERVER_FAILED
+        assert server.terminated == 1 and service.closed == 1
+        # H3: the roles are never spawned when the server listener is unproven.
+        assert launched == []
+
+
+def test_supervisor_attestation_failure_terminates_owned_roles():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            launch_runner=lambda plan, **kwargs: session,
+            attestation_collector=lambda cfg, nonce, spawn_time, port: {"ok": False, "code": practice_host.CODE_ATTESTATION, "problems": ["ai:guard_nonce_mismatch"]},
+        )
+        result = supervisor.run()
+        assert result["code"] == practice_host.CODE_ATTESTATION
+        assert all(item.terminated == 1 for item in session.owned)
+        assert supervisor.attestation["code"] == practice_host.CODE_ATTESTATION
+
+
+def test_supervisor_voids_and_locks_out_when_live_game_appears():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+        service = FakeService(None)
+        live_info = launch_practice.ProcessInfo(99, 1.0, _live_image(config), name="Balatro")
+        # The live-exit wait enumerates twice, then live is closed for gates; the
+        # supervise loop then sees the appeared live game.
+        enumerator = SwitchEnumerator(closed_calls=3, then=[live_info])
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            enumerator=enumerator,
+        )
+        result = supervisor.run()
+        assert result["code"] == practice_host.CODE_LIVE_APPEARED
+        assert supervisor.phase == "void"
+        assert supervisor.voided is True
+        assert practice_host.read_host_lockout(config)["locked"] is True
+        assert service.abort_calls == 1
+        assert all(item.terminated == 1 for item in session.owned)
+        assert session.closed == 1
+
+
+def test_supervisor_never_claims_zero_diff_while_human_window_open():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="closed"),
+            launch_runner=lambda plan, **kwargs: session,
+            human_exit_waiter=lambda live_session, grace: False,
+        )
+        result = supervisor.run()
+        assert result["code"] == practice_host.CODE_HUMAN_EXIT_UNVERIFIED
+        assert supervisor.session is not None
+        assert supervisor.live_verdict is None
+        by_role = {item.role: item for item in session.owned}
+        assert by_role["human"].terminated == 0
+        report = json.loads(supervisor.workspace.report_path.read_text(encoding="utf-8"))
+        assert report["human_retained"] is True
+        assert report["live_verdict"] is None
+        supervisor.cleanup()
+        assert by_role["human"].terminated == 1
+
+
+def test_supervisor_records_revocation_lockout_on_live_diff():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="closed"),
+            launch_runner=lambda plan, **kwargs: session,
+            verdict_recorder=lambda cfg, session_id, before, after, backup_id, certificate_id: {
+                "ok": False,
+                "code": "live_byte_diff_revoked",
+                "changed_roots": ["install"],
+            },
+        )
+        result = supervisor.run()
+        assert result["code"] == practice_host.CODE_LIVE_CHANGED
+        assert practice_host.read_host_lockout(config)["locked"] is True
+        assert supervisor.live_verdict["changed_roots"] == ["install"]
+
+
+def test_supervisor_never_rebaselines_after_an_unmeasured_failure():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+        service = FakeService(None)
+        api = FakeCertificateApi(events=[])
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            certificate_api=api,
+            gate_evaluator=lambda: _gate_ok(config, open_record="/stage/open/s.json"),
+            attestation_collector=lambda *args: {"ok": False, "code": practice_host.CODE_ATTESTATION},
+            verdict_recorder=lambda *args: {"ok": None, "code": "live_verdict_failed"},
+        )
+        result = supervisor.run()
+        assert result["ok"] is False
+        # The pre-spawn unmeasured lockout is retained when the after-diff cannot be
+        # measured, so the next session can never silently re-baseline (C1).
+        assert practice_host.read_host_lockout(config)["locked"] is True
+        assert supervisor._record_started is True
+        assert supervisor.open_record == "/stage/open/s.json"
+        report = json.loads(supervisor.workspace.report_path.read_text(encoding="utf-8"))
+        assert report["open_record"] == "/stage/open/s.json"
+
+
+def test_supervisor_clears_unmeasured_lockout_only_on_a_measured_pass():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+        api = FakeCertificateApi(events=[])
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="closed"),
+            launch_runner=lambda plan, **kwargs: session,
+            certificate_api=api,
+            gate_evaluator=lambda: _gate_ok(config, open_record="/stage/open/s.json"),
+            verdict_recorder=None,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert api.verdict_calls == 1
+        assert practice_host.read_host_lockout(config)["locked"] is False
+        assert api.bind_calls and api.bind_calls[0]["pids"]
+        # The retained session and the real live-closed check reach the certificate.
+        assert api.session_seen is session
+        assert api.live_closed_seen is True
+
+
+def test_supervisor_forwards_prepared_open_session_to_launcher():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        captured = {}
+
+        def runner(plan, **kwargs):
+            captured.update(kwargs)
+            return FakeSession()
+
+        record = {"status": "open", "session_id": "s-1", "nonce": "n" * 32, "phase": isolation_certificate.MATCH}
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            launch_runner=runner,
+            service_factory=lambda cfg: FakeService(cfg, ended=True, terminal_phase="closed"),
+            gate_evaluator=lambda: _gate_ok(config, open_session=record),
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert captured["open_session"] == record
+        assert "nonce_factory" not in captured
+
+
+def test_default_launch_runner_uses_open_session_not_nonce_factory():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        plan = {
+            "schema": "aisparring.launch_plan.v1",
+            "session_id": "s-1",
+            "staging_root": str(config.staging_root),
+            "backup_root": str(config.backup_root),
+            "live_install_root": str(config.live_install_root),
+            "port": 8788,
+            "may_launch": True,
+        }
+        open_session = {
+            "status": "open",
+            "session_id": "s-1",
+            "nonce": "n" * 32,
+            "phase": isolation_certificate.MATCH,
+        }
+        # Real launcher path: the prepared record (not a nonce factory) is the
+        # contract; a blocked re-derived plan must return cleanly, never TypeError.
+        session = practice_host._default_launch_runner(
+            plan,
+            session_descriptors={"human": object(), "ai": object()},
+            nonce="n" * 32,
+            enumerator=FakeEnumerator([]),
+            open_session=open_session,
+        )
+        assert isinstance(session, launch_practice.LaunchSession)
+        assert session.code == "launch_blocked"
+
+        # Without a prepared open record the launcher refuses instead of spawning.
+        refused = practice_host._default_launch_runner(
+            plan, session_descriptors=None, nonce="n" * 32, enumerator=FakeEnumerator([]), open_session=None
+        )
+        assert isinstance(refused, launch_practice.LaunchSession)
+        assert refused.code == "open_session_required"
+
+
+def test_record_live_verdict_uses_real_certificate_closure_api():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        staging_root = Path(config.staging_root)
+        staging_root.mkdir(parents=True, exist_ok=True)
+        install = Path(tmp) / "live" / "install"
+        appdata = Path(tmp) / "live" / "appdata"
+        install.mkdir(parents=True, exist_ok=True)
+        appdata.mkdir(parents=True, exist_ok=True)
+        live = {"install": str(install), "appdata": str(appdata)}
+        before = isolation_certificate.snapshot_live(live)
+        session_id, nonce = "s-real", "n" * 32
+        record = {
+            "schema": isolation_certificate.OPEN_SESSION_SCHEMA,
+            "session_id": session_id,
+            "phase": isolation_certificate.MATCH,
+            "nonce": nonce,
+            "port": 8788,
+            "certificate_id": "cert1",
+            "backup_id": "bk1",
+            "live_roots": {key: str(value) for key, value in live.items()},
+            "before": {"digest": before["digest"], "roots": isolation_certificate._digest_roots(before)},
+            "before_files": before["roots"],
+            "spawn_time": 1000.0,
+            "pids": {"human": [11], "ai": [22]},
+            "status": "open",
+            "created_unix": int(__import__("time").time()) - 1,
+        }
+        isolation_certificate._write_open_record(staging_root, record)
+
+        session = FakeSession(roles=("human", "ai"))
+        session.session_id = session_id
+        session.nonce = nonce
+        for role in session.owned:
+            role.running = False
+
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            certificate_api=isolation_certificate,
+            verdict_recorder=None,
+            launch_runner=lambda plan, **kw: session,
+        )
+        supervisor.session = session
+        supervisor.session_id = session_id
+        supervisor._gates = {"live_map": live}
+        supervisor.open_record = str(isolation_certificate._open_record_path(staging_root, session_id))
+        supervisor.backup_id = "bk1"
+        supervisor.certificate_id = "cert1"
+
+        verdict = supervisor._record_live_verdict()
+        assert verdict is not None and verdict.get("ok") is True, verdict
+        assert isolation_certificate.load_open_record(staging_root, session_id)["status"] == "closed"
+
+        # A still-running owned handle must be an explicit closure refusal.
+        other_id = "s-real-2"
+        isolation_certificate._write_open_record(
+            staging_root, {**record, "session_id": other_id, "status": "open"}
+        )
+        running = FakeSession(roles=("human", "ai"))
+        running.session_id = other_id
+        running.nonce = nonce
+        supervisor.session = running
+        supervisor.session_id = other_id
+        supervisor.open_record = str(isolation_certificate._open_record_path(staging_root, other_id))
+        refused = supervisor._record_live_verdict()
+        assert refused["ok"] is False and "owned_processes_running" in refused["problems"], refused
+
+
+def test_supervisor_launch_failure_never_touches_live():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        service = FakeService(None)
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: FakeSession(ok=False, code="launch_blocked"),
+        )
+        result = supervisor.run()
+        assert result["ok"] is False and result["code"] == "launch_blocked"
+        assert service.closed == 1
+        assert supervisor.session is None
+
+
+def test_create_session_workspace_refuses_existing_and_bad_ids():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        space = practice_host.create_session_workspace(config, "s-good")
+        assert space.root.is_dir()
+        try:
+            practice_host.create_session_workspace(config, "s-good")
+        except practice_host.HostError as error:
+            assert error.code == practice_host.CODE_SESSION_WORKSPACE_EXISTS
+        else:
+            raise AssertionError("expected workspace refusal")
+        for bad in ("bad:id", "..", "", "a" * 65):
+            try:
+                practice_host.create_session_workspace(config, bad)
+            except practice_host.HostError as error:
+                assert error.code in (practice_host.CODE_BAD_REQUEST, practice_host.CODE_SESSION_WORKSPACE_EXISTS)
+            else:
+                raise AssertionError(f"expected refusal for {bad!r}")
+
+
+def test_mint_session_id_matches_shared_grammar():
+    for _ in range(50):
+        value = practice_host.mint_session_id()
+        assert practice_host.SESSION_ID_RE.match(value)
+
+
+# ---------------------------------------------------------------------------
+# Real service + server environment + developer launcher
+# ---------------------------------------------------------------------------
+
+class _FakeSourceProvider:
+    def source(self, difficulty):
+        return "return function() return nil end"
+
+
+class _FakeWorkerRunner:
+    def __call__(self, request, timeout, register):
+        return {"ok": False, "code": "policy_unsupported"}
+
+
+def _real_service_config(tmp, session_id="sess-1"):
+    return practice_service.ServiceConfig(
+        session_id=session_id,
+        difficulty="competitive",
+        pacing="instant",
+        mode="normal",
+        match_port=8788,
+        log_root=Path(tmp) / "logs",
+        content_hash="c" * 64,
+        expected_config_digest="deadbeef",
+        gauntlet=None,
+    )
+
+
+def test_real_service_starts_on_loopback_and_authorizes():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = practice_host.practice_service.PracticeService(
+            _real_service_config(tmp), source_provider=_FakeSourceProvider(), worker_runner=_FakeWorkerRunner()
+        )
+        try:
+            port = service.start()
+            assert 1 <= port <= 65535
+            assert len(service.human_credential) == 64
+            assert service.human_credential != service.ai_credential
+            assert service.mark_attested("deadbeef") is True
+            try:
+                service.mark_attested("0" * 8)
+            except practice_service.PracticeError:
+                pass
+            else:
+                raise AssertionError("expected digest mismatch refusal")
+            authorized = service.handle_request(
+                {
+                    "session": "sess-1",
+                    "credential": service.human_credential,
+                    "role": "human",
+                    "op": "status",
+                    "sequence": 0,
+                    "observation": None,
+                }
+            )
+            assert authorized["ok"] is True
+            rejected = service.handle_request(
+                {
+                    "session": "sess-1",
+                    "credential": "0" * 64,
+                    "role": "human",
+                    "op": "status",
+                    "sequence": 0,
+                    "observation": None,
+                }
+            )
+            assert rejected["code"] == "practice_bad_credential"
+        finally:
+            service.close()
+
+
+def test_server_environment_is_allowlisted_and_keeps_sqlite_in_repo():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        base = {
+            "PATH": "C:/Windows",
+            "SystemRoot": "C:/Windows",
+            "APPDATA": "C:/live/appdata",
+            "LOVELY_MOD_DIR": "C:/live/mods",
+            "AISP_SESSION_ID": "leak",
+            "STEAM_APP_ID": "1",
+            "PYTHONPATH": "x",
+        }
+        env = practice_host.server_environment(config, 8788, 8789, base_env=base)
+        assert env["PORT"] == "8788" and env["ADMIN_PORT"] == "8789"
+        assert env["PATH"] == "C:/Windows"
+        for forbidden in ("APPDATA", "LOVELY_MOD_DIR", "AISP_SESSION_ID", "STEAM_APP_ID", "PYTHONPATH"):
+            assert forbidden not in env
+        assert env["LOG_HASH_DB_PATH"].startswith(str(config.server_root))
+
+
+def test_developer_launcher_writes_only_inside_repo():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        inside = practice_host.generate_developer_launcher(config)
+        assert inside["ok"] is True
+        assert all(Path(item).is_file() for item in inside["scripts"])
+        assert all(staging.is_within(config.repo_root, item, allow_root=True) for item in inside["scripts"])
+        # Generated scripts run under the interpreter that generated them (the
+        # provisioned venv), never a transient PYTHONPATH/global python.
+        for item in inside["scripts"]:
+            assert sys.executable in Path(item).read_text(encoding="utf-8")
+
+        outside = practice_host.generate_developer_launcher(config, directory=Path(tmp) / "elsewhere")
+        assert outside["ok"] is False
+        assert outside["code"] == "practice_host_output_outside_repo"
+
+
+def _run_all() -> int:
+    tests = sorted(
+        (name, value)
+        for name, value in globals().items()
+        if name.startswith("test_") and callable(value)
+    )
+    failures = 0
+    for name, function in tests:
+        try:
+            function()
+        except Exception as error:  # noqa: BLE001
+            failures += 1
+            print(f"FAIL {name}: {type(error).__name__}: {error}")
+        else:
+            print(f"ok   {name}")
+    print(f"\n{len(tests) - failures}/{len(tests)} cases passed")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(_run_all())
