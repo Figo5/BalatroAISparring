@@ -173,7 +173,7 @@ class Session:
     def start(self, role="human"):
         return self.send(role, "start", {})
 
-    def handshake(self, config_digest=CONFIG_DIGEST):
+    def handshake(self, config_digest=CONFIG_DIGEST, seed=None):
         # The trusted host attests the session through the Python port before the
         # runtime handshake; the fixture marks the actual certificate verified,
         # not a real probe proof.
@@ -183,6 +183,11 @@ class Session:
         assert self.ready("human", config_digest)["ok"]
         assert self.ready("ai", config_digest)["ok"]
         assert self.start("human")["ok"]
+        # The real human runtime reports the *resolved* run seed only after
+        # ``start`` (once the run is initialized), so the fixture follows the real
+        # producer order rather than fabricating pre-start seed knowledge (M-6).
+        if seed is not None:
+            assert self.send("human", "status", {"seed": seed})["ok"]
 
 
 def _valid_export():
@@ -500,8 +505,7 @@ def test_hidden_request_capture():
         runner = FakeRunner()
         service = make_service(tmp, worker_runner=runner)
         session = Session(service)
-        session.handshake()
-        session.send("human", "status", {"seed": "AISP0003"})
+        session.handshake(seed="AISP0003")
         sequence = session.send("ai", "decide_begin", _valid_export())["sequence"]
         response = wait_for_decision(session, sequence)
         assert response["code"] == ps.CODE_DECISION_READY
@@ -796,6 +800,10 @@ def test_prestart_deadline_after_attestation():
                     break
             assert status is not None and status.get("aborted") is True, status
             assert status.get("error") == ps.CODE_PRESTART_TIMEOUT
+            # H-C: the real service exposes the abnormal end to the host under its lock.
+            assert service.aborted is True
+            assert service.terminal_reason == ps.CODE_PRESTART_TIMEOUT
+            assert service.terminal_phase == ps.TERMINAL_CLOSED
         finally:
             service.stop()
 
@@ -890,6 +898,128 @@ def test_abort_and_close_write_exactly_one_terminal_summary():
         assert terminal_rows[0]["result"] == "aborted"
 
 
+def test_aborted_and_terminal_reason_are_real_service_state():
+    """H-C: the host reads real, locked lifecycle state, not a caller-invented attr."""
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp)
+        assert service.aborted is False and service.terminal_reason is None
+        session = Session(service)
+        session.handshake()
+        service.abort(ps.CODE_ABORTED)
+        assert service.aborted is True
+        assert service.terminal_reason == ps.CODE_ABORTED
+        assert service.terminal_phase == ps.TERMINAL_CLOSED
+
+
+def test_status_seed_is_human_only_and_accepted_once():
+    """M-6: only the human role, exactly once, only in an initialized run.
+
+    The real human runtime reports the *resolved* run seed once the run is
+    initialized (after ``start``), so acceptance is gated to a started active
+    session and never restricted to a fabricated pre-start window; the AI role
+    still can never set or rewrite it.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp)
+        session = Session(service)
+        # A pre-start report is not from an initialized run and is refused.
+        assert service.mark_attested(CONFIG_DIGEST) is True
+        session.hello("human")
+        session.hello("ai")
+        session.ready("human")
+        session.ready("ai")
+        prestart = session.send("human", "status", {"seed": "PRESTART1"})
+        assert prestart["code"] == ps.CODE_NOT_STARTED
+        assert service._logger.seed is None
+        assert session.start("human")["ok"]
+        # The AI role can never set the seed, even post-start.
+        assert session.send("ai", "status", {"seed": "AISP0001"})["code"] == ps.CODE_BAD_ROLE
+        assert service._logger.seed is None
+        # The human reports the resolved seed exactly once (post-start).
+        assert session.send("human", "status", {"seed": "NORMALRUN7"})["ok"]
+        assert service._logger.seed == "NORMALRUN7"
+        # The AI cannot author a seed report even by guessing the same value.
+        assert session.send("ai", "status", {"seed": "NORMALRUN7"})["code"] == ps.CODE_BAD_ROLE
+        # A different second value is refused; the first value stands.
+        assert session.send("human", "status", {"seed": "REWRITE9"})["code"] == ps.CODE_CONFIG_MISMATCH
+        assert service._logger.seed == "NORMALRUN7"
+        # A repeated identical value is a stable no-op.
+        assert session.send("human", "status", {"seed": "NORMALRUN7"})["ok"]
+        # A malformed seed is still a bounded bad payload.
+        assert session.send("human", "status", {"seed": "bad seed!"})["code"] == ps.CODE_BAD_PAYLOAD
+
+
+def test_terminal_session_rejects_a_late_first_seed():
+    """M-6: a closed session never accepts its first seed after the summary."""
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp)
+        session = Session(service)
+        session.handshake()
+        assert session.send("human", "end", {"result": "draw"})["ok"]
+        assert session.send("ai", "end", {"result": "draw"})["ok"]
+        late = session.send("human", "status", {"seed": "LATESEED"})
+        assert late["ok"] is False and late["code"] == ps.CODE_ENDED
+        assert service._logger.seed is None
+
+
+def test_gauntlet_seed_must_match_catalog_seed():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp, config_overrides={"mode": "gauntlet", "gauntlet": "Test1"})
+        session = Session(service)
+        session.handshake()
+        assert session.send("human", "status", {"seed": "WRONGSEED"})["code"] == ps.CODE_CONFIG_MISMATCH
+        assert service._logger.seed is None
+        assert session.send("human", "status", {"seed": "AISP0001"})["ok"]
+        assert service._logger.seed == "AISP0001"
+
+
+def test_terminal_summary_written_at_close_with_orientation_conflict():
+    """M-7: one summary after the AI receipt, recording AI fields and a conflict."""
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp)
+        session = Session(service)
+        session.handshake()
+        human = session.send(
+            "human", "end", {"result": "human_win", "human_lives": 3, "ai_lives": 0}
+        )
+        assert human["terminal_phase"] == ps.TERMINAL_AWAITING_AI
+        # No terminal summary is written before the receipt or the grace expiry.
+        early = read_jsonl(Path(tmp) / "logs" / "summary.jsonl")
+        assert [row for row in early if row.get("terminal")] == []
+        receipt = session.send(
+            "ai", "end", {"result": "ai_win", "human_lives": 0, "ai_lives": 3, "decisions": 4}
+        )
+        assert receipt["terminal_phase"] == ps.TERMINAL_CLOSED
+        rows = read_jsonl(Path(tmp) / "logs" / "summary.jsonl", lambda row: row.get("terminal"))
+        terminal_rows = [row for row in rows if row.get("terminal")]
+        assert len(terminal_rows) == 1, terminal_rows
+        row = terminal_rows[0]
+        assert row["reason"] == "human_end"
+        assert row["ai_end_received"] is True
+        assert row["ai_result"] == "ai_win"
+        assert row["ai_decisions"] == 4
+        assert row["result_conflict"] is True
+
+
+def test_terminal_summary_written_on_ai_receipt_grace_expiry():
+    """M-7: the grace expiry still writes the single summary, flagging no conflict."""
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp, ai_receipt_grace=0.15, watchdog_interval=0.02)
+        service.start()
+        try:
+            session = Session(service)
+            session.handshake()
+            assert session.send("human", "end", {"result": "draw"})["terminal_phase"] == ps.TERMINAL_AWAITING_AI
+            rows = read_jsonl(Path(tmp) / "logs" / "summary.jsonl", lambda row: row.get("terminal"))
+            terminal_rows = [row for row in rows if row.get("terminal")]
+            assert terminal_rows and terminal_rows[-1]["reason"] == "human_end"
+            assert terminal_rows[-1]["ai_end_received"] is False
+            assert terminal_rows[-1]["result_conflict"] is False
+            assert service.terminal_phase == ps.TERMINAL_CLOSED
+        finally:
+            service.stop()
+
+
 # -- logging -----------------------------------------------------------------
 
 
@@ -899,8 +1029,7 @@ def test_end_logging_summary_and_decision_rows():
     with tempfile.TemporaryDirectory() as tmp:
         service = make_service(tmp)
         session = Session(service)
-        session.handshake()
-        session.send("human", "status", {"seed": "AISP0001"})
+        session.handshake(seed="AISP0001")
         sequence = session.send("ai", "decide_begin", _valid_export())["sequence"]
         assert wait_for_decision(session, sequence)["code"] == ps.CODE_DECISION_READY
         end = session.send(
@@ -919,6 +1048,10 @@ def test_end_logging_summary_and_decision_rows():
             },
         )
         assert end["ok"] and end["ended"] is True
+        # The single terminal summary is written only after the AI receipt (or the
+        # bounded grace); the AI's own result agrees here, so no conflict.
+        receipt = session.send("ai", "end", {"result": "human_win", "decisions": 11})
+        assert receipt["ok"] and receipt["terminal_phase"] == ps.TERMINAL_CLOSED
         decisions_path = Path(tmp) / "logs" / "decisions.jsonl"
         summary_path = Path(tmp) / "logs" / "summary.jsonl"
         assert decisions_path.is_file() and summary_path.is_file()
@@ -942,8 +1075,7 @@ def test_canonicalization_blocks_poisoned_observation():
         runner = FakeRunner()
         service = make_service(tmp, worker_runner=runner)
         session = Session(service)
-        session.handshake()
-        session.send("human", "status", {"seed": "AISP0003"})
+        session.handshake(seed="AISP0003")
         poisoned = _valid_export()
         poisoned["seed"] = "AISP0005"
         poisoned["session_secret"] = HUMAN_CRED
@@ -1144,6 +1276,7 @@ def test_summary_merges_service_counters_without_client_overwrite():
         assert session.send(
             "human", "end", {"result": "human_win", "decisions": 0, "rejected": 0, "errors": 0}
         )["ok"]
+        assert session.send("ai", "end", {"result": "human_win"})["terminal_phase"] == ps.TERMINAL_CLOSED
         rows = read_jsonl(Path(tmp) / "logs" / "summary.jsonl", lambda row: row.get("terminal"))
         terminal_rows = [row for row in rows if row.get("terminal")]
         assert terminal_rows and terminal_rows[-1]["decisions"] >= 1

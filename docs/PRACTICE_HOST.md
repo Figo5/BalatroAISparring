@@ -100,16 +100,22 @@ major_league}`, `pacing ∈ {instant, normal}`, `mode ∈ {normal, gauntlet}`,
 `gauntlet ∈ {Test1..Test5}` (required iff `mode == "gauntlet"`, forbidden
 otherwise) and a bounded integer `live_pid` / positive `live_create_time`. It then
 opens a **query-only** native handle to `live_pid` and requires the create time to
-match and the image path to resolve inside the configured live install.
+match and the image path to resolve inside the configured live install. The ticket
+slot is reserved **atomically in one locked block before any preflight** (M-4), so
+two concurrent `start` requests can never both be admitted and overwrite each
+other; a refused request releases the reservation.
 
-Only when the request is admissible, the live target is verified **and the bounded
-runtime/policy preflight passes** (§4.5) does it return
-`practice_host_start_accepted` with a `ticket`; a second `start` while a ticket is
-active returns `practice_host_ticket_active`. **No process is launched here.** The
-menu may then quit the game through its own normal quit path. If the preflight
-fails (missing Lua runtime, policy source or canonicalizer) the host refuses with
-`practice_runtime_preflight_failed` **before** the menu is told it may quit, so an
-unavailable interpreter is never discovered after the game has closed.
+Only when the request is admissible, the live target is verified, the bounded
+runtime/policy preflight passes (§4.5) **and the pre-acknowledgement gates pass**
+(§6) does it return `practice_host_start_accepted` with a `ticket`; a second
+`start` while a ticket is active returns `practice_host_ticket_active`. **No
+process is launched here.** The menu may then quit the game through its own normal
+quit path. If the preflight fails (missing Lua runtime, policy source or
+canonicalizer) the host refuses with `practice_runtime_preflight_failed`, and if a
+pre-acknowledgement gate fails (unconfigured match port, invalid certificate,
+server adaptation, staged endpoints, ruleset digest) it refuses with that gate's
+code — in both cases **before** the menu is told it may quit, so an unavailable
+dependency is never discovered after the game has closed (M-3).
 
 The host assumes the menu has already confirmed the *idle main menu* predicate:
 the ordinary main menu may have the official socket connected, but there must be
@@ -201,6 +207,17 @@ checker is injectable (`runtime_checker=`) so fixtures never depend on `lupa`.
 | fixed validated match port | `choose_match_port` | `practice_match_port_unavailable` / `..._unconfigured` |
 | staged endpoints on that port | `staging.verify_staged_endpoints` | `practice_staged_endpoints_unproven` |
 | descriptor env fully bound | `_descriptor_env_gap` | `practice_descriptor_env_unbound` |
+| pre-acknowledgement gates (no game closed needed) | `default_start_gate` | `practice_match_port_unconfigured` / `practice_requires_isolation_certificate` / `practice_server_adaptation_unproven` / `practice_staged_endpoints_unproven` / `practice_major_league_config_unproven` |
+
+Every check that does not need the user's game closed runs **before** the `start`
+acknowledgement (M-3): the fixed match port must be configured, the measurement API
+and certificate must be valid, the server adaptation must be proven, the staged
+endpoints must exist and the Major League ruleset digest must be derivable. A
+failure here refuses the acknowledgement (`HostDaemon._op_start` → `default_start_gate`)
+so the user never quits Balatro only to watch the session fail after launch. The
+`serve` subcommand also refuses to start without `--match-port`. The exclusive open
+record is written only after these checks, so a refusal can never strand an open
+record (H-A).
 
 ### 6.1 The certificate is immutable and never rebased
 
@@ -284,17 +301,25 @@ digest, not a locally hashed tree.
   exactly this manifest: it copies **tracked source only**, and copies the reviewed
   (gitignored) dependency install tree wholesale, so the compiler and native
   binaries survive; it never writes the upstream tree.
-- **Server process.** `default_server_runner()` spawns the exact Node command with
-  a Windows kill-on-close Job Object and a retained `OwnedProcess` handle. `cwd`
-  is the private per-session data directory; `LOG_HASH_DB_PATH` is forced to a
-  repository path so the SQLite store stays in the repo. The environment is an
-  allowlist that strips `AISP_*`, `STEAM*`, `SDL*`, `LOVELY*` and `PYTHON*`.
+- **Server process.** `default_server_runner()` launches the **verified absolute
+  Node path** that `verify_server_adaptation` hashed (never a bare `node` resolved
+  by PATH) with the roles' exact retained-ownership sequence (M-1): on Windows the
+  server is created `CREATE_SUSPENDED`, assigned to a **mandatory** kill-on-close
+  Job Object, resumed, and its create time is read from the retained handle. Its
+  image path is re-read through a separate query handle and must equal the launched
+  executable. A missing job, create time or mismatched image terminates the exact
+  child and fails closed. `cwd` is the private per-session data directory;
+  `LOG_HASH_DB_PATH` is forced to the **per-session** `workspace.server_dir` (M-5)
+  so the persistent SQLite ban/rate store can never ban `127.0.0.1` across
+  sessions. The environment is an allowlist that strips `AISP_*`, `STEAM*`, `SDL*`,
+  `LOVELY*` and `PYTHON*`.
 - **Listener proof.** `verify_local_listener()` uses the Windows TCP table for
   **both** IPv4 and IPv6 (`WindowsTcpTableProbe`), else a loopback-connect probe.
   Every bound address must be an exact loopback address (`127.0.0.0/8` or `::1`);
   a wildcard/LAN address is refused. When the owned server PID is known the
-  owning-PID set must include it (`practice_listener_owner_unproven`), so a foreign
-  process squatting the port cannot pass. The admin port must be closed on both
+  owning-PID set must be **exactly** `{server PID}` across both families (M-2), so
+  a foreign loopback listener squatting beside Node cannot pass. The admin port must
+  be closed on both
   families. `WindowsTcpTableProbe` reports a per-family inventory status and strict
   proof **refuses a partial inventory** (`match_listener_inventory_incomplete` /
   `admin_listener_inventory_incomplete`): if either family's native table query is
@@ -306,10 +331,14 @@ digest, not a locally hashed tree.
   offset), never by taking a `byref` of a scalar field.
 - **Control service.** A `practice_service.PracticeService` is constructed from
   trusted config + the request enums and started on an ephemeral loopback port.
-  Its heartbeat/abort state is read in-process (`started`/`ended`/`aborted`),
-  never over the wire: a network heartbeat would have to share a role's
-  strictly-increasing sequence counter with the real role runtime. The host calls
-  the trusted `service.abort(code)` on any failure or void so both roles see
+  Its lifecycle state is read in-process through the real, locked
+  `started`/`ended`/`aborted`/`terminal_phase`/`terminal_reason` properties, never
+  over the wire and never through a caller-invented attribute: a network heartbeat
+  would have to share a role's strictly-increasing sequence counter with the real
+  role runtime. The supervisor treats a terminal phase as a normal completion
+  **only** when `terminal_reason == "human_end"`; a role loss, pre-start timeout or
+  abort is a failure even though its phase reads `closed` (H-C). The host calls the
+  trusted `service.abort(code)` on any failure or void so both roles see
   `practice_aborted` and can stop through their normal MP flow. The secret
   gauntlet seed is served by the authenticated `setup` op to the human role only.
 - **Roles.** `_build_descriptors()` builds one typed
@@ -331,11 +360,15 @@ its normal MP flow), then terminates only the exact owned handles
 `LaunchSession.close`), preserving logs.
 
 If a **new live Balatro process appears during practice**, the supervisor calls
-`service.abort`, terminates owned handles, marks the session **void** and writes a
-persistent host acknowledgement lockout
-(`work/aisparring-host/host_lockout.json`). The next `start` is refused with
-`practice_host_ack_required` until the user sends the `acknowledge` op; the live
-game itself is never touched.
+`service.abort`, terminates owned handles, marks the session **void**, closes the
+open record as a measured **failure** through
+`isolation_certificate.record_session_failure(session_id, reason=<code>)` (which
+raises the certificate's persistent lockout), and writes its own persistent host
+acknowledgement lockout (`work/aisparring-host/host_lockout.json`) (H-B). The next
+`start` is refused with `practice_host_ack_required` until the user sends the
+`acknowledge` op, which clears both lockouts (`acknowledge_lockout` leaves an
+append-only acknowledgement); the live game itself is never touched. A void can
+therefore always be recovered from, and nothing is silently re-baselined.
 
 On normal completion the supervisor retires the **AI** role after the service's
 bounded AI-receipt grace, but keeps the owned loopback server and the service
@@ -358,11 +391,16 @@ kill it); the CLI keeps the daemon alive until the human exits.
 
 Any exit after the open record exists closes the owned processes (except a
 retained human), rechecks that live is actually closed, and asks the certificate
-for the measured after-verdict. If the after-diff cannot be measured (a live game
-is open, or the verdict errors), the open record **and** the `session_unmeasured`
-host lockout are retained; a new ticket (`practice_session_open_unmeasured`) and an
-`acknowledge` are both refused until a measured closure exists. A failed session
-can therefore never silently re-baseline the next one (C1).
+for the measured after-verdict. If the record has **no bound owned PIDs** (a
+failure before any role spawned), the certificate's measured
+`record_session_no_spawn` closure is used instead, so a pre-spawn failure cannot
+strand an open record that nothing in the product can close (H-A). If the
+after-diff cannot be measured (a live game is open, or the verdict errors), the
+open record **and** the `session_unmeasured` host lockout are retained; a new
+ticket (`practice_session_open_unmeasured`) and an `acknowledge` are both refused
+until a measured closure exists. Only a real `live_byte_diff_revoked` verdict
+raises the byte-diff lockout; any other refusal keeps `session_unmeasured`. A
+failed session can therefore never silently re-baseline the next one (C1).
 
 ## 9. Session report and per-session live diff
 
@@ -376,9 +414,11 @@ policy source is written.**
 After the human window has exited (and only then, with live actually closed), the
 supervisor calls `isolation_certificate.record_session_verdict(staging_root,
 session_id=..., live=..., session=<retained LaunchSession>, live_closed=<enumerator
-check>, backup_id=..., certificate_id=...)`. The certificate takes and binds the
-`after`-snapshot itself, requires every owned handle stopped and the user's game
-closed (`session_closure_unproven` otherwise) — the host never passes caller
+check>, backup_id=..., certificate_id=...)`. When no role ever spawned, it calls
+`record_session_no_spawn(staging_root, session_id=..., live=..., backup_id=...)`
+instead (H-A). The certificate takes and binds the `after`-snapshot itself,
+requires every owned handle stopped and the user's game closed
+(`session_closure_unproven` otherwise) — the host never passes caller
 snapshots or a `closed_check` boolean. Any live byte difference revokes the
 certificate generation, writes the append-only receipt and the persistent lockout
 plus the diff, and the host adds its own acknowledgement lockout. Only a measured
@@ -397,7 +437,10 @@ python tools/practice_host.py dev-launcher
 ```
 
 `serve` runs the daemon until interrupted and keeps it alive for repeated
-sessions/cleanup. `dev-launcher` writes `start_practice_host.cmd` / `.ps1` under
+sessions/cleanup. It refuses to start when no fixed `--match-port` is configured
+(`practice_match_port_unconfigured`), so a daemon whose every acknowledgement would
+fail after the user quit is never started (M-3). `dev-launcher` writes
+`start_practice_host.cmd` / `.ps1` under
 the repository `work/` tree only — **no registry entries, services or scheduled
 tasks**. The user starts the host before opening ordinary Balatro.
 

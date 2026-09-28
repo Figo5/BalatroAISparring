@@ -204,7 +204,7 @@ and bounded fields ever leave the service.
 | `join_code` | ai | `{}` / null | Returns the recorded human lobby code, or `practice_no_lobby`. |
 | `ready` | any | `{"config_digest": str}` | Records the role's ready confirmation. `config_digest` must be the runtime-computed actual digest and must equal the trusted `expected_config_digest` (and the other role) or `practice_config_mismatch`; a malformed digest → `practice_bad_payload`. |
 | `start` | human | `{}` / null | One-time. Requires both hellos and both ready digests equal to the trusted expected digest; otherwise `practice_not_ready` / `practice_config_mismatch`. Second call → `practice_already_started`. |
-| `status` | any | `{}` or `{"seed": str}` | Returns bounded session state (including `ruleset`, `pacing`, `mode`, `attested`, `aborted`, counters and the terminal receipt flags — §4.1). When `seed` is present it is validated and handed only to the trusted logger (§6). |
+| `status` | any | `{}` or `{"seed": str}` | Returns bounded session state (including `ruleset`, `pacing`, `mode`, `attested`, `aborted`, counters and the terminal receipt flags — §4.1). A `seed` is trusted human-only audit metadata: it is accepted from the **human role only** (role is validated first; an AI value → `practice_bad_role`), **exactly once** (a second, different value → `practice_config_mismatch`, an identical human repeat is an idempotent no-op), and **only** once the run is initialized in a started, non-terminal, non-aborted session (a pre-start report → `practice_not_started`; a terminal/aborted late report → `practice_ended`). In Gauntlet mode the first seed must equal the trusted catalog seed. It is handed only to the trusted logger (§6). The real human runtime reports the *resolved* run seed through `STATUS` after `start` and `host_start_game`, never a menu or prior-run value (M-6). |
 | `heartbeat` | any | `{}` or `{"tick": int}` | Liveness ping; any authenticated request refreshes the role watchdog (§5.3). |
 | `setup` | any | `{}` / null | Returns the frozen trusted setup: `ruleset` (`majorleague`), `ruleset_id`, `gamemode`, the forced-config **keyset** `forced_options` (key names only, never values), `expected_config_digest`, difficulty, pacing, mode, gauntlet label, `match_port`, `content_hash`, and — for the human coordinator only — the gauntlet seed. Never sent to the worker. |
 | `error` | any | `{"error": "<bounded code>"}` | Records a trusted failure visible to both roles through `status`. |
@@ -223,8 +223,8 @@ human terminal `end`, only `status`, `end` and `decision_result` are accepted
 - **Human coordinator END.** Requires `started` and a valid terminal `result`
   (`human_win`, `ai_win`, `draw`, `aborted`, `unknown`); an `end` before start →
   `practice_not_started`, and a human `end` without a result → `practice_bad_payload`.
-  On acceptance it sets the terminal state, cancels any outstanding decision and
-  writes exactly one summary. It is idempotent: a duplicate human `end` returns a
+  On acceptance it sets the terminal state and cancels any outstanding decision.
+  It is idempotent: a duplicate human `end` returns a
   stable `practice_ok` with `"duplicate": true` and writes no second summary.
 - **AI END receipt.** Recorded as `ai_end` and **never authorizes teardown on its
   own**. It may arrive before or after the human END. Response:
@@ -236,16 +236,23 @@ human terminal `end`, only `status`, `end` and `decision_result` are accepted
   loopback server and service until the human exits — this grace only bounds the
   receipt wait, and the human's results state is retained, not required to stay
   pending forever.
-- **Exactly one terminal summary.** Error, `error` op, role-lost watchdog,
-  pre-start timeout, explicit `abort()` and `close()` all funnel through one
-  idempotent writer, so a session produces at most one terminal summary with the
-  service's own counters, seed, difficulty, known lives, duration, result and
-  reason — never full state.
+- **Exactly one terminal summary, written at closure (M-7).** The single summary is
+  written only once the terminal phase reaches `closed` — the AI receipt, the grace
+  expiry, an abort, or `close()`. It records the service's own counters, seed,
+  difficulty, known lives, duration, result and reason, **plus the AI END's own
+  reported result/lives/counters** (`ai_result`, `ai_human_lives`, `ai_ai_lives`,
+  `ai_ante`, `ai_round`, `ai_duration_seconds`, `ai_decisions`, `ai_rejected`,
+  `ai_errors`) and flags a human/AI winner disagreement as `result_conflict`. Error,
+  `error` op, role-lost watchdog, pre-start timeout, explicit `abort()` and
+  `close()` all funnel through the same idempotent writer, so a session produces at
+  most one terminal summary — never full state.
 - **Post-end decision receipts.** `decision_result` is still accepted after the
   human END for sequences this service issued (bounded by the recent-commit ring),
   so the AI's final receipt is recorded rather than lost.
 
-Host-facing APIs: `service.attested`, `service.terminal_phase`,
+Host-facing APIs: `service.attested`, `service.aborted`, `service.terminal_phase`,
+`service.terminal_reason` (only `"human_end"` is a normal completion; every other
+value is an abnormal end the host must report as a failure — H-C),
 `service.terminal_summary()` (a read-only snapshot of the terminal flags and the
 written summary) and the terminal fields in `status` (§3.3). These preserve the
 human's retained results state; the host does not need to consume it for the AI
@@ -433,22 +440,31 @@ The service rebuilds the worker request from scratch:
   decision loop, which has its own trusted logger. `seed` is the **trusted**
   seed only, never a seed taken from a request or observation.
 - `summary.jsonl` — exactly one terminal row per session, written by the
-  idempotent terminal writer (human `end`, `error`/abort, role-lost, pre-start
-  timeout or `close()`). Fields: `result, reason, human_lives, ai_lives, ante,
-  round, duration_seconds, decisions, rejected, errors, terminal,
-  terminal_phase, human_end_received, ai_end_received, seed`. The
+  idempotent terminal writer once the terminal phase closes (human `end` + AI
+  receipt/grace, `error`/abort, role-lost, pre-start timeout or `close()`). Fields:
+  `result, reason, human_lives, ai_lives, ante, round, duration_seconds, decisions,
+  rejected, errors, terminal, terminal_phase, human_end_received, ai_end_received,
+  ai_result, ai_human_lives, ai_ai_lives, ai_ante, ai_round, ai_duration_seconds,
+  ai_decisions, ai_rejected, ai_errors, result_conflict, seed`. The
   `decisions`/`rejected`/`errors` values **merge** the service's own counters with
   the bounded client counts using `max(...)` — a client can never overwrite the
   service counters downward — and only known lives/duration/result/reason are
-  included, never full engine state.
+  included, never full engine state. The `ai_*` fields record the AI END's own
+  report and `result_conflict` is true when the human and AI winners disagree (M-7).
 - `results.jsonl` — the broker/engine receipt rows from §5.2: `timestamp,
   session, ruleset, difficulty, sequence, accepted, code, version_id, tick,
   reason, seed, version`. One row per sequence.
 
 The seed is set **only** through the trusted `status` setter (validated
-`[0-9A-Za-z_-]{1,32}`), never through a policy request, and it is never
-forwarded to the worker. The service does not read environment variables;
-credential/env wiring is reserved for the launcher.
+`[0-9A-Za-z_-]{1,32}`), **only** by the human role (validated before any
+existing-seed/idempotence handling, so a same-value human repeat can never bypass
+it), **only once** (a different second value is refused; an identical human repeat
+is an idempotent no-op), **only** in a started, non-terminal, non-aborted session
+(pre-start → `practice_not_started`, terminal/aborted late → `practice_ended`), and
+in Gauntlet mode **only** when it equals the trusted catalog seed (M-6). It is
+never taken through a policy request and is never forwarded to the worker. The
+service does not read environment variables; credential/env wiring is reserved for
+the launcher.
 
 ## 7. Bounded codes
 

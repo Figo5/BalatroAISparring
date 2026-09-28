@@ -414,6 +414,16 @@ class LocalLogger:
         "terminal_phase",
         "human_end_received",
         "ai_end_received",
+        "ai_result",
+        "ai_human_lives",
+        "ai_ai_lives",
+        "ai_ante",
+        "ai_round",
+        "ai_duration_seconds",
+        "ai_decisions",
+        "ai_rejected",
+        "ai_errors",
+        "result_conflict",
         "seed",
         "version",
     )
@@ -1038,6 +1048,27 @@ class PracticeService:
         with self._lock:
             return self._state.terminal_phase
 
+    @property
+    def terminal_reason(self) -> Optional[str]:
+        """Trusted host view of the terminal reason; read under the service lock.
+
+        ``human_end`` is the only reason that authorizes a normal completion; every
+        other value (role lost, pre-start timeout, abort, close) is an abnormal end
+        the host must report as a failure (H-C).
+        """
+        with self._lock:
+            return self._state.terminal_reason
+
+    @property
+    def aborted(self) -> bool:
+        """True once a role-loss/timeout/abort closed the session (read under lock).
+
+        The host must not rely on a caller-invented attribute: the real service
+        exposes its own lifecycle state (H-C).
+        """
+        with self._lock:
+            return self._state.aborted
+
     def terminal_summary(self) -> dict:
         """Trusted host view of the terminal flags; never mutates the session.
 
@@ -1122,10 +1153,15 @@ class PracticeService:
             self._closed = True
             job = self._pending
             self._pending = None
+            state = self._state
+            # A human-authorized match whose AI receipt grace is still open is
+            # closed here as a normal human end, writing its one terminal summary.
+            if state.terminal and state.terminal_summary is None and state.terminal_phase == TERMINAL_AWAITING_AI:
+                state.terminal_phase = TERMINAL_CLOSED
+                summary = self._finalize_terminal_locked(state.terminal_result, state.terminal_reason, {})
             # A started, not-yet-summarized session gets exactly one terminal
             # summary on close so an abandoned match is recorded, not silent.
-            if self._state.started and self._state.terminal_summary is None:
-                state = self._state
+            elif state.started and state.terminal_summary is None:
                 state.terminal = True
                 state.terminal_phase = TERMINAL_CLOSED
                 state.terminal_reason = CODE_SERVICE_CLOSED
@@ -1183,13 +1219,18 @@ class PracticeService:
             now = self._clock()
             lost = None
             prestart_expired = False
+            summary = None
             with self._lock:
                 state = self._state
                 if state.terminal and state.terminal_phase == TERMINAL_AWAITING_AI:
                     if state.ai_receipt_deadline is not None and now >= state.ai_receipt_deadline:
                         # The AI receipt grace elapsed. The host owns the service
-                        # lifetime; this only closes the receipt phase.
+                        # lifetime; this only closes the receipt phase and writes
+                        # the one terminal summary for the ended match (M-7).
                         state.terminal_phase = TERMINAL_CLOSED
+                        summary = self._finalize_terminal_locked(
+                            state.terminal_result, state.terminal_reason, {}
+                        )
                 if state.started and not state.ended and not state.aborted:
                     for role in ROLES:
                         seen = state.last_seen.get(role)
@@ -1206,6 +1247,8 @@ class PracticeService:
                     and now - state.attested_at > self.prestart_timeout
                 ):
                     prestart_expired = True
+            if summary is not None:
+                self._logger.log_summary(**summary)
             if lost is not None:
                 self._abort(CODE_ROLE_LOST)
             elif prestart_expired:
@@ -1485,7 +1528,34 @@ class PracticeService:
         if seed is not None:
             if not isinstance(seed, str) or not SEED_PATTERN.match(seed):
                 return {"ok": False, "code": CODE_BAD_PAYLOAD}
-            self._logger.set_seed(seed)
+            # M-6: the seed is trusted human-only audit metadata, accepted exactly
+            # once for an initialized active session. The AI role can never set or
+            # rewrite it (even by guessing the same value); the role check is
+            # deliberately first so an idempotent same-value human duplicate can
+            # never become a way to bypass it. A terminal/aborted session never
+            # accepts a late first seed after its summary, and the first seed is
+            # only accepted once the human's `start` has initialized the run - the
+            # real human runtime reports the *resolved* run seed through STATUS
+            # after `start` and `host_start_game`, never a menu or prior-run value.
+            # In Gauntlet mode the first seed must equal the trusted catalog seed.
+            with self._lock:
+                state = self._state
+                if role != "human":
+                    return {"ok": False, "code": CODE_BAD_ROLE}
+                if state.terminal or state.aborted:
+                    return {"ok": False, "code": CODE_ENDED}
+                if not state.started:
+                    return {"ok": False, "code": CODE_NOT_STARTED}
+                existing = self._logger.seed
+                if existing is not None:
+                    if existing == seed:
+                        pass
+                    else:
+                        return {"ok": False, "code": CODE_CONFIG_MISMATCH}
+                elif self.config.mode == "gauntlet" and seed != self.config.gauntlet_seed:
+                    return {"ok": False, "code": CODE_CONFIG_MISMATCH}
+                else:
+                    self._logger.set_seed(seed)
         with self._lock:
             state = self._state
             return {
@@ -1607,7 +1677,9 @@ class PracticeService:
 
         Requires ``started`` and a valid terminal ``result``. Idempotent: a
         duplicate human END returns the same stable ``practice_ok`` code without
-        writing another summary. The AI receipt may arrive before or after.
+        writing another summary. The single terminal summary is written only once
+        the terminal phase reaches ``closed`` - either because the AI receipt is
+        already present or after the bounded grace expires (M-7).
         """
         with self._lock:
             state = self._state
@@ -1640,12 +1712,13 @@ class PracticeService:
                 state.duration_seconds = summary["duration_seconds"]
             job = self._pending
             self._pending = None
+            row = None
             if state.ai_end is not None:
                 state.terminal_phase = TERMINAL_CLOSED
+                row = self._finalize_terminal_locked(state.terminal_result, state.terminal_reason, summary)
             else:
                 state.terminal_phase = TERMINAL_AWAITING_AI
                 state.ai_receipt_deadline = self._clock() + self.ai_receipt_grace
-            row = self._finalize_terminal_locked(state.terminal_result, state.terminal_reason, summary)
             phase = state.terminal_phase
         if job is not None:
             job.cancel()
@@ -1665,9 +1738,12 @@ class PracticeService:
 
         The service exposes the receipt through ``status``/``terminal_summary``
         so the host can bound the wait while it retains the loopback server and
-        the service until the human exits.
+        the service until the human exits. If the human coordinator has already
+        ended, the receipt closes the terminal phase and writes the single
+        summary now (M-7).
         """
         receipt = dict(summary)
+        row = None
         with self._lock:
             state = self._state
             first = state.ai_end is None
@@ -1675,7 +1751,8 @@ class PracticeService:
                 state.ai_end = receipt
             if state.terminal and state.terminal_phase == TERMINAL_AWAITING_AI:
                 state.terminal_phase = TERMINAL_CLOSED
-            return {
+                row = self._finalize_terminal_locked(state.terminal_result, state.terminal_reason, {})
+            response = {
                 "ok": True,
                 "code": CODE_OK,
                 "role": "ai",
@@ -1684,18 +1761,24 @@ class PracticeService:
                 "ended": state.ended,
                 "terminal_phase": state.terminal_phase,
             }
+        if row is not None:
+            self._logger.log_summary(**row)
+        return response
 
     def _finalize_terminal_locked(self, result: Optional[str], reason: Optional[str], client: Mapping) -> Optional[dict]:
         """Build exactly one terminal summary row; never writes duplicate rows.
 
         Merges the service's own counters with bounded client counts without
         trusting the client to overwrite them, and includes only known lives,
-        duration and result/reason - never full engine state.
+        duration and result/reason - never full engine state. The AI END's own
+        reported result/lives/counters are recorded beside the human's, and a
+        human/AI result disagreement is flagged as ``result_conflict`` (M-7).
         """
         state = self._state
         if state.terminal_summary is not None:
             return None
         client = client if isinstance(client, Mapping) else {}
+        ai = state.ai_end if isinstance(state.ai_end, Mapping) else {}
 
         def merged(key: str, service_value: int) -> int:
             value = client.get(key)
@@ -1704,8 +1787,10 @@ class PracticeService:
             return service_value
 
         state.terminal = True
+        human_result = result if result is not None else client.get("result")
+        ai_result = ai.get("result")
         row = {
-            "result": result if result is not None else client.get("result"),
+            "result": human_result,
             "reason": reason,
             "human_lives": state.human_lives if state.human_lives is not None else client.get("human_lives"),
             "ai_lives": state.ai_lives if state.ai_lives is not None else client.get("ai_lives"),
@@ -1721,6 +1806,18 @@ class PracticeService:
             "terminal_phase": state.terminal_phase,
             "human_end_received": state.human_end is not None,
             "ai_end_received": state.ai_end is not None,
+            "ai_result": ai_result,
+            "ai_human_lives": ai.get("human_lives"),
+            "ai_ai_lives": ai.get("ai_lives"),
+            "ai_ante": ai.get("ante"),
+            "ai_round": ai.get("round"),
+            "ai_duration_seconds": ai.get("duration_seconds"),
+            "ai_decisions": ai.get("decisions"),
+            "ai_rejected": ai.get("rejected"),
+            "ai_errors": ai.get("errors"),
+            "result_conflict": bool(
+                human_result is not None and ai_result is not None and human_result != ai_result
+            ),
         }
         state.terminal_summary = row
         return row

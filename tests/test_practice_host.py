@@ -23,6 +23,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import types
 from contextlib import contextmanager
 from pathlib import Path
@@ -199,6 +200,9 @@ class FakeService:
         self.closed = 0
         self.abort_calls = 0
         self.terminal_phase = terminal_phase
+        # Mirror the real PracticeService lifecycle surface (H-C): the terminal
+        # reason is only ``human_end`` for a normal completion.
+        self.terminal_reason = "human_end" if ended else None
         self.ai_receipt_grace = 0.0
         self.attested = False
         self.attest_calls = []
@@ -223,6 +227,7 @@ class FakeService:
     def abort(self, code="practice_aborted"):
         self.abort_calls += 1
         self.aborted = True
+        self.terminal_reason = code
 
     def close(self):
         self.closed += 1
@@ -285,6 +290,7 @@ class FakeCertificateApi:
         self.prepare_calls = 0
         self.verdict_calls = 0
         self.failure_calls = []
+        self.no_spawn_calls = []
         self.bind_calls = []
         self.ack_calls = 0
 
@@ -360,6 +366,11 @@ class FakeCertificateApi:
     def record_session_failure(self, staging_root, *, session_id, reason):
         self.failure_calls.append({"session_id": session_id, "reason": reason})
         return {"ok": True, "code": "session_failed_recorded", "session_id": session_id}
+
+    def record_session_no_spawn(self, staging_root, *, session_id, live, backup_id=None):
+        self.no_spawn_calls.append({"session_id": session_id, "live": live, "backup_id": backup_id})
+        self._record("record_session_no_spawn")
+        return {"ok": True, "code": "session_no_spawn_closed", "session_id": session_id}
 
     def write_launcher_attestation(self, staging_root, *, session_id, nonce, control_port, port, spawn_time=None, live=None):
         self._record("write_launcher_attestation")
@@ -601,6 +612,7 @@ def test_daemon_start_acks_only_when_recorded_and_refuses_duplicate():
             opener=_live_opener(config),
             enumerator=FakeEnumerator([]),
             runtime_checker=_ok_runtime_checker,
+            start_gate=lambda: {"ok": True, "code": practice_host.CODE_OK},
             supervisor_factory=lambda cfg, request: FakeSupervisor(block=gate),
         )
         daemon.start()
@@ -2197,7 +2209,7 @@ def test_real_service_starts_on_loopback_and_authorizes():
             service.close()
 
 
-def test_server_environment_is_allowlisted_and_keeps_sqlite_in_repo():
+def test_server_environment_is_allowlisted_and_keeps_sqlite_session_local():
     with tempfile.TemporaryDirectory() as tmp:
         config = make_config(tmp)
         base = {
@@ -2209,12 +2221,15 @@ def test_server_environment_is_allowlisted_and_keeps_sqlite_in_repo():
             "STEAM_APP_ID": "1",
             "PYTHONPATH": "x",
         }
-        env = practice_host.server_environment(config, 8788, 8789, base_env=base)
+        session_dir = Path(config.session_root) / "s-session" / "server"
+        env = practice_host.server_environment(config, 8788, 8789, base_env=base, session_dir=session_dir)
         assert env["PORT"] == "8788" and env["ADMIN_PORT"] == "8789"
         assert env["PATH"] == "C:/Windows"
         for forbidden in ("APPDATA", "LOVELY_MOD_DIR", "AISP_SESSION_ID", "STEAM_APP_ID", "PYTHONPATH"):
             assert forbidden not in env
-        assert env["LOG_HASH_DB_PATH"].startswith(str(config.server_root))
+        # M-5: the ban/rate database is per-session, never shared in server_root.
+        assert Path(env["LOG_HASH_DB_PATH"]).is_relative_to(session_dir)
+        assert not Path(env["LOG_HASH_DB_PATH"]).is_relative_to(Path(config.server_root))
 
 
 def test_developer_launcher_writes_only_inside_repo():
@@ -2232,6 +2247,357 @@ def test_developer_launcher_writes_only_inside_repo():
         outside = practice_host.generate_developer_launcher(config, directory=Path(tmp) / "elsewhere")
         assert outside["ok"] is False
         assert outside["code"] == "practice_host_output_outside_repo"
+
+
+# ---------------------------------------------------------------------------
+# Resumed-review repairs: H-A/H-B/H-C and M-1..M-7
+# ---------------------------------------------------------------------------
+
+
+class _FakePopen:
+    def __init__(self, pid=5555):
+        self.pid = pid
+        self.killed = 0
+
+    def kill(self):
+        self.killed += 1
+
+    def poll(self):
+        return None
+
+
+class _FakeJob:
+    def __init__(self, assign_ok=True):
+        self.assign_ok = assign_ok
+        self.assigned = 0
+        self.closed = 0
+        self.terminated = 0
+
+    def assign(self, proc):
+        if not self.assign_ok:
+            return False
+        self.assigned += 1
+        return True
+
+    def close(self):
+        self.closed += 1
+
+    def terminate(self):
+        self.terminated += 1
+
+
+def test_default_server_runner_suspended_job_identity_and_queried_image():
+    """M-1: the verified absolute Node path is launched with retained ownership."""
+    with tempfile.TemporaryDirectory() as tmp:
+        calls = {}
+        proc = _FakePopen(pid=5555)
+        job = _FakeJob()
+        resumed = []
+
+        def popen(command, **kwargs):
+            calls["command"] = list(command)
+            calls["creationflags"] = kwargs.get("creationflags")
+            return proc
+
+        node = str(Path(sys.executable))
+        owned = practice_host.default_server_runner(
+            [node, "dist/main.js"],
+            tmp,
+            {"PORT": "8788"},
+            Path(tmp) / "logs",
+            popen=popen,
+            job_factory=lambda: job,
+            resume=lambda p: resumed.append(p.pid) or True,
+            create_time_reader=lambda owned_process: 1000.0,
+            image_reader=lambda pid: node,
+            on_windows=True,
+        )
+        assert calls["command"][0] == node
+        assert calls["creationflags"] == launch_practice.CREATE_SUSPENDED
+        assert job.assigned == 1 and resumed == [5555]
+        assert owned.create_time == 1000.0 and owned.job is job
+        # The recorded image is the queried handle path, never the bare command.
+        assert owned.image_path == node
+
+
+def test_default_server_runner_fails_closed_without_job_time_or_identity():
+    """M-1: a missing job, create time or mismatched image terminates the child."""
+    with tempfile.TemporaryDirectory() as tmp:
+        node = str(Path(sys.executable))
+        base = dict(
+            command=[node, "dist/main.js"],
+            cwd=tmp,
+            env={"PORT": "8788"},
+            log_dir=Path(tmp) / "logs",
+            on_windows=True,
+        )
+
+        def expect_failure(*, spawns=True, **overrides):
+            proc = _FakePopen(pid=6666)
+            spawned = []
+            kwargs = dict(base)
+            kwargs["popen"] = lambda command, **kw: spawned.append(True) or proc
+            kwargs["job_factory"] = overrides.pop("job_factory", lambda: _FakeJob())
+            kwargs["resume"] = lambda p: True
+            kwargs["create_time_reader"] = overrides.pop("create_time_reader", lambda owned: 1000.0)
+            kwargs["image_reader"] = overrides.pop("image_reader", lambda pid: node)
+            kwargs.update(overrides)
+            try:
+                practice_host.default_server_runner(**kwargs)
+            except practice_host.HostError as error:
+                assert error.code == practice_host.CODE_SERVER_FAILED
+            else:
+                raise AssertionError("expected a fail-closed server spawn")
+            assert bool(spawned) is spawns
+            if spawns:
+                assert proc.killed == 1
+
+        # A missing Job Object on Windows is mandatory-before-start: no spawn at all.
+        expect_failure(spawns=False, job_factory=lambda: None)
+        # A missing create time is never accepted.
+        expect_failure(create_time_reader=lambda owned: None)
+        # An image path that is not the launched executable is refused.
+        expect_failure(image_reader=lambda pid: str(Path(tmp) / "other" / "node.exe"))
+
+
+def test_verify_local_listener_requires_exact_owner_set():
+    """M-2: a foreign loopback listener beside Node's fails the owner proof."""
+    foreign = practice_host.verify_local_listener(
+        8788,
+        8789,
+        probe=FakeListenerProbe(
+            {8788: {"listening": True, "addresses": ["127.0.0.1", "::1"], "pids": [7, 999]}}
+        ),
+        expected_pid=7,
+    )
+    assert foreign["ok"] is False
+    assert "match_listener_not_owned" in foreign["problems"]
+    assert foreign["owner_proven"] is None
+
+
+def test_default_start_gate_refuses_before_acknowledgement():
+    """M-3: the non-game gates run before the quit acknowledgement."""
+    with tempfile.TemporaryDirectory() as tmp:
+        unconfigured = make_config(tmp, match_port=None)
+        verdict = practice_host.default_start_gate(
+            unconfigured, certificate_api=FakeCertificateApi(), which=_which_python
+        )
+        assert verdict["code"] == practice_host.CODE_MATCH_PORT_UNCONFIGURED
+
+        configured = make_config(tmp)
+        missing_server = practice_host.default_start_gate(
+            configured, certificate_api=FakeCertificateApi(), which=_which_python
+        )
+        assert missing_server["code"] == practice_host.CODE_SERVER_ADAPTATION
+
+        bad_cert = FakeCertificateApi(check={"ok": False, "code": "certificate_invalid", "problems": ["mods_layer_changed"]})
+        refused = practice_host.default_start_gate(configured, certificate_api=bad_cert, which=_which_python)
+        assert refused["code"] == practice_host.CODE_CERTIFICATE_REQUIRED
+
+
+def test_daemon_refuses_acknowledgement_when_start_gate_fails():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, match_port=None)
+        created = []
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            supervisor_factory=lambda cfg, request: created.append(request) or FakeSupervisor(block=threading.Event()),
+        )
+        daemon.start()
+        try:
+            refused = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert refused["code"] == practice_host.CODE_MATCH_PORT_UNCONFIGURED, refused
+            assert created == []
+            # The reservation is released, so the daemon is not stuck busy.
+            assert daemon._ticket is None
+        finally:
+            daemon.stop()
+
+
+def test_daemon_start_reserves_ticket_atomically_before_preflight():
+    """M-4: two concurrent starts cannot both be admitted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        entered = threading.Event()
+        release = threading.Event()
+        created = []
+
+        def gate():
+            entered.set()
+            release.wait(5)
+            return {"ok": True, "code": practice_host.CODE_OK}
+
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            start_gate=gate,
+            supervisor_factory=lambda cfg, request: created.append(request) or FakeSupervisor(block=threading.Event()),
+        )
+        daemon.start()
+        try:
+            first = {}
+
+            def run_first():
+                first["response"] = daemon.handle_request(envelope(daemon, "start", make_request()))
+
+            thread = threading.Thread(target=run_first)
+            thread.start()
+            assert entered.wait(5)
+            second = daemon.handle_request(envelope(daemon, "start", make_request()))
+            assert second["code"] == practice_host.CODE_TICKET_ACTIVE, second
+            release.set()
+            thread.join(5)
+            assert first["response"]["ok"] is True, first
+            assert len(created) == 1
+        finally:
+            release.set()
+            daemon.stop()
+
+
+def _real_open_record(config, session_id, live, *, pids=None, backup_id="b" * 64):
+    staging_root = Path(config.staging_root)
+    staging_root.mkdir(parents=True, exist_ok=True)
+    before = isolation_certificate.snapshot_live(live)
+    record = {
+        "schema": isolation_certificate.OPEN_SESSION_SCHEMA,
+        "session_id": session_id,
+        "phase": isolation_certificate.MATCH,
+        "nonce": "n" * 32,
+        "port": 8788,
+        "certificate_id": "cert1",
+        "backup_id": backup_id,
+        "backup_label": "display-label",
+        "live_roots": {key: str(value) for key, value in live.items()},
+        "before": {"digest": before["digest"], "roots": isolation_certificate._digest_roots(before)},
+        "before_files": before["roots"],
+        "spawn_time": 1000.0,
+        "pids": dict(pids or {}),
+        "status": "open",
+        "created_unix": int(time.time()) - 1,
+    }
+    isolation_certificate._write_open_record(staging_root, record)
+    return record
+
+
+def _receipts(config):
+    staging_root = Path(config.staging_root)
+    return isolation_certificate._read_jsonl(
+        staging_root / isolation_certificate.EVIDENCE_DIR / isolation_certificate.RECEIPTS_REL
+    )
+
+
+def test_supervisor_no_spawn_failure_closes_record_and_clears_unmeasured_lockout():
+    """H-A: a pre-spawn failure closes the never-spawned record, not wedges it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        install = Path(tmp) / "live" / "install"
+        appdata = Path(tmp) / "live" / "appdata"
+        install.mkdir(parents=True, exist_ok=True)
+        appdata.mkdir(parents=True, exist_ok=True)
+        live = {"install": str(install), "appdata": str(appdata)}
+        session_id = "s-nospawn"
+        _real_open_record(config, session_id, live)
+        supervisor = _supervisor(
+            config, make_request(), certificate_api=isolation_certificate, verdict_recorder=None
+        )
+        supervisor.session_id = session_id
+        supervisor._gates = {"live_map": live}
+        supervisor.open_record = str(
+            isolation_certificate._open_record_path(Path(config.staging_root), session_id)
+        )
+        supervisor._record_started = True
+        supervisor._unmeasured_lockout = True
+        practice_host.set_host_lockout(config, reason="session_unmeasured", session_id=session_id)
+
+        result = supervisor._fail(practice_host.CODE_SERVER_FAILED)
+        assert result["ok"] is False and result["code"] == practice_host.CODE_SERVER_FAILED
+        assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+        closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert closed["status"] == "closed" and closed["close_problems"] == []
+        receipts = [row for row in _receipts(config) if row.get("session_id") == session_id]
+        assert receipts and receipts[-1]["verdict"] == "no_spawn"
+        assert practice_host.read_host_lockout(config)["locked"] is False
+
+
+def test_supervisor_void_closes_record_as_failed_and_allows_acknowledge():
+    """H-B: void -> failure receipt -> the existing acknowledge op completes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        install = Path(tmp) / "live" / "install"
+        appdata = Path(tmp) / "live" / "appdata"
+        install.mkdir(parents=True, exist_ok=True)
+        appdata.mkdir(parents=True, exist_ok=True)
+        live = {"install": str(install), "appdata": str(appdata)}
+        session_id = "s-void"
+        _real_open_record(config, session_id, live, pids={"human": [11], "ai": [22]})
+        session = FakeSession(roles=("human", "ai"))
+        session.session_id = session_id
+        session.nonce = "n" * 32
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            certificate_api=isolation_certificate,
+            verdict_recorder=None,
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        supervisor.session = session
+        supervisor.session_id = session_id
+        supervisor._gates = {"live_map": live}
+        supervisor.open_record = str(
+            isolation_certificate._open_record_path(Path(config.staging_root), session_id)
+        )
+        supervisor._record_started = True
+
+        result = supervisor._void(practice_host.CODE_LIVE_APPEARED)
+        assert result["code"] == practice_host.CODE_LIVE_APPEARED
+        assert isolation_certificate.list_open_records(Path(config.staging_root)) == []
+        closed = isolation_certificate.load_open_record(Path(config.staging_root), session_id)
+        assert closed["status"] == "failed"
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is True
+
+        # The existing daemon acknowledge op clears both the host and certificate lockouts.
+        daemon = practice_host.HostDaemon(
+            config, certificate_api=isolation_certificate, opener=_live_opener(config), enumerator=FakeEnumerator([])
+        )
+        ack = daemon._op_acknowledge({"confirm": True})
+        assert ack["ok"] is True and ack["cleared"] is True, ack
+        assert isolation_certificate.lockout(Path(config.staging_root))["locked"] is False
+
+
+def test_supervisor_fails_on_real_service_prestart_timeout():
+    """H-C: the real service's pre-start timeout is a failure, never a completion."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = FakeSession()
+
+        def factory(service_config):
+            return practice_service.PracticeService(
+                service_config,
+                source_provider=_FakeSourceProvider(),
+                worker_runner=_FakeWorkerRunner(),
+                prestart_timeout=0.2,
+                role_timeout=0.0,
+                watchdog_interval=0.02,
+            )
+
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=factory,
+            launch_runner=lambda plan, **kwargs: session,
+            clock=time.monotonic,
+            sleeper=lambda seconds: time.sleep(min(float(seconds), 0.01)),
+        )
+        result = supervisor.run()
+        assert result["ok"] is False, result
+        assert result["code"] == "practice_service_aborted", result
+        report = result["report"]
+        assert report["supervision"]["reason"] == practice_service.CODE_PRESTART_TIMEOUT, report["supervision"]
 
 
 def _run_all() -> int:

@@ -803,7 +803,10 @@ def verify_local_listener(
     owner_proven = None
     if expected_pid is not None:
         if pids:
-            if int(expected_pid) not in pids:
+            # M-2: the owner set must be *exactly* the owned server PID across both
+            # families. A foreign loopback listener squatting beside Node would add
+            # its own PID and must fail, not merely have to contain the server PID.
+            if pids != {int(expected_pid)}:
                 problems.append("match_listener_not_owned")
             else:
                 owner_proven = True
@@ -1583,7 +1586,7 @@ _SERVER_ENV_ALLOW = frozenset(
 _SERVER_ENV_DENY_PREFIXES = ("STEAM", "SDL", "LOVELY", "PYTHON", "AISP_")
 
 
-def server_environment(config: HostConfig, port: int, admin_port: int, base_env=None) -> dict:
+def server_environment(config: HostConfig, port: int, admin_port: int, base_env=None, *, session_dir=None) -> dict:
     source = os.environ if base_env is None else base_env
     env: dict = {}
     for key, value in source.items():
@@ -1592,9 +1595,42 @@ def server_environment(config: HostConfig, port: int, admin_port: int, base_env=
             env[key] = value
     env["PORT"] = str(int(port))
     env["ADMIN_PORT"] = str(int(admin_port))
-    env["LOG_HASH_DB_PATH"] = str(Path(config.server_root) / "data" / "log_hashes.db")
+    # M-5: the server's persistent SQLite ban/rate database is session-local, so
+    # three rate disconnects in one practice session can never ban ``127.0.0.1``
+    # for every later session. The real caller always passes the session workspace.
+    db_root = Path(session_dir) if session_dir is not None else Path(config.work_dir) / "server-data"
+    env["LOG_HASH_DB_PATH"] = str(db_root / "data" / "log_hashes.db")
     env["BAN_RELOAD_INTERVAL_MS"] = "60000"
     return env
+
+
+def _query_image_path(pid: int) -> Optional[str]:
+    """Read the image path of a PID through a single query-only native handle."""
+    handle = None
+    try:
+        handle = launch_practice.NativeProcessHandle.open(
+            int(pid), access=launch_practice.PROCESS_QUERY_LIMITED_INFORMATION
+        )
+        if handle is None:
+            return None
+        return handle.image_path()
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _same_image_path(left, right) -> bool:
+    if not left or not right:
+        return False
+    try:
+        return os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(os.path.abspath(str(right)))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def default_server_runner(
@@ -1606,16 +1642,49 @@ def default_server_runner(
     popen=None,
     job_factory=None,
     create_time_reader=None,
+    resume=None,
+    image_reader=None,
+    on_windows=None,
 ):
-    """Spawn the pinned Node server with a kill-on-close job and retained handle."""
+    """Spawn the pinned Node server with the roles' exact retained-ownership sequence (M-1).
+
+    The verified absolute Node path is ``command[0]``. On Windows the server is
+    created *suspended*, assigned to a mandatory kill-on-close Job Object and only
+    then resumed, and its create time is read from the retained handle. Its image
+    path is re-read through a separate query handle and must equal the launched
+    executable, so the record can never name a bare ``node`` resolved by PATH.
+    Every failure terminates the exact spawned child and raises ``HostError``.
+    """
     popen = popen or subprocess.Popen
-    create_time_reader = create_time_reader or launch_practice.read_process_create_time
     job_factory = job_factory or launch_practice.JobObject.create
+    create_time_reader = create_time_reader or launch_practice.read_owned_create_time
+    resume = resume or launch_practice._resume_process
+    image_reader = image_reader or _query_image_path
+    on_windows = os.name == "nt" if on_windows is None else bool(on_windows)
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
+    executable = str(command[0])
+
+    def _abort(proc=None, job=None):
+        if job is not None:
+            try:
+                job.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        raise HostError(CODE_SERVER_FAILED)
+
+    job = job_factory()
+    if on_windows and job is None:
+        # Mandatory suspended-before-Job: never start a server we cannot own.
+        _abort(job=job)
     out_handle = open(log_dir / "server.out.log", "ab")
     err_handle = open(log_dir / "server.err.log", "ab")
-    job = job_factory()
+    creationflags = launch_practice.CREATE_SUSPENDED if on_windows else 0
     try:
         proc = popen(
             [str(item) for item in command],
@@ -1624,26 +1693,49 @@ def default_server_runner(
             close_fds=True,
             stdout=out_handle,
             stderr=err_handle,
+            creationflags=creationflags,
         )
+    except (TypeError, ValueError):
+        _abort(job=job)
+    except OSError:
+        _abort(job=job)
     finally:
         out_handle.close()
         err_handle.close()
-    if job is not None:
+
+    if on_windows:
+        assigned = False
         try:
-            if not job.assign(proc):
-                job.close()
-                job = None
+            assigned = bool(job.assign(proc))
         except Exception:  # noqa: BLE001
-            job = None
-    create_time = create_time_reader(int(proc.pid))
-    return launch_practice.OwnedProcess(
+            assigned = False
+        if not assigned:
+            _abort(proc=proc, job=job)
+    elif job is not None:
+        try:
+            job.assign(proc)
+        except Exception:  # noqa: BLE001
+            pass
+
+    owned = launch_practice.OwnedProcess(
         role="server",
         handle=proc,
         pid=int(proc.pid),
-        create_time=float(create_time) if create_time is not None else None,
-        image_path=str(command[0]),
+        create_time=None,
+        image_path=executable,
         job=job,
     )
+    if on_windows and not resume(proc):
+        _abort(proc=proc, job=job)
+    create_time = create_time_reader(owned)
+    if create_time is None:
+        _abort(proc=proc, job=job)
+    owned.create_time = float(create_time)
+    image_path = image_reader(int(proc.pid))
+    if not _same_image_path(image_path, executable):
+        _abort(proc=proc, job=job)
+    owned.image_path = str(image_path)
+    return owned
 
 
 def wait_for_listener(port: int, *, probe=None, timeout: float = 15.0, interval: float = 0.25, clock=time.monotonic, sleeper=time.sleep) -> bool:
@@ -1710,6 +1802,7 @@ class MatchSupervisor:
         attestation_rotator=None,
         attestation_writer=None,
         verdict_recorder=None,
+        no_spawn_recorder=None,
         human_exit_waiter=None,
         ruleset_reader=None,
         runtime_checker=None,
@@ -1740,6 +1833,7 @@ class MatchSupervisor:
         self._attestation_rotator = attestation_rotator
         self._attestation_writer = attestation_writer
         self._verdict_recorder = verdict_recorder
+        self._no_spawn_recorder = no_spawn_recorder
         self._human_exit_waiter = human_exit_waiter
         self._ruleset_reader = ruleset_reader or ruleset_contract.expected_ruleset
         self._runtime_checker = runtime_checker
@@ -1929,12 +2023,9 @@ class MatchSupervisor:
             cert = certificate_gate(self.config, live_map=live_map, port=self.match_port, api=api)
             if not cert.get("ok"):
                 return {"ok": False, "code": cert.get("code", CODE_CERTIFICATE_REQUIRED), "certificate": cert}
-            prepared = self._prepare_session(live_map)
-            if not prepared.get("ok"):
-                return {"ok": False, "code": prepared.get("code", CODE_CERTIFICATE_REQUIRED), "prepared": prepared}
-            content_hash = certificate_content_hash(api, self.config.staging_root)
-            if not content_hash:
-                return {"ok": False, "code": CODE_CERTIFICATE_REQUIRED, "problems": ["role_parity_digest_unavailable"]}
+        # H-A: every check that does not need the game closed runs BEFORE the
+        # exclusive open record is written, so a refusal here can never strand an
+        # open record that nothing in the product can close.
         server = verify_server_adaptation(self.config, which=self._which)
         if not server.get("ok"):
             return {"ok": False, "code": CODE_SERVER_ADAPTATION, "server": server}
@@ -1942,6 +2033,9 @@ class MatchSupervisor:
         if not endpoints.get("ok"):
             return {"ok": False, "code": CODE_STAGED_ENDPOINTS, "endpoints": endpoints}
         if self.config.require_certificate:
+            content_hash = certificate_content_hash(api, self.config.staging_root)
+            if not content_hash:
+                return {"ok": False, "code": CODE_CERTIFICATE_REQUIRED, "problems": ["role_parity_digest_unavailable"]}
             ruleset = self._ruleset_reader(self.config.staging_root)
             if not ruleset.get("ok"):
                 return {"ok": False, "code": CODE_CONFIG_DIGEST, "ruleset": ruleset}
@@ -1956,15 +2050,12 @@ class MatchSupervisor:
             config_digest = _trusted_config_digest(content.get("digest"))
             if config_digest is None:
                 return {"ok": False, "code": CODE_CONFIG_DIGEST, "problems": ["config_digest_missing"]}
-        # Persistent unmeasured state BEFORE any server/role spawn (C1): only a
-        # measured passed verdict or a measured failure receipts clears it.
-        if self.config.require_certificate and prepared.get("open_record") is not None:
-            set_host_lockout(self.config, reason="session_unmeasured", session_id=self.session_id)
-            self._unmeasured_lockout = True
-            self._record_started = True
-            self.open_record = prepared.get("open_record")
-        if prepared.get("record") is not None:
-            self._open_session_record = prepared.get("record")
+        if self.config.require_certificate:
+            prepared = self._prepare_session(live_map)
+            if not prepared.get("ok"):
+                return {"ok": False, "code": prepared.get("code", CODE_CERTIFICATE_REQUIRED), "prepared": prepared}
+        # `_prepare_session` records the persistent unmeasured state BEFORE any
+        # server/role spawn (C1); only a measured pass/failure receipts clears it.
         return {
             "ok": True,
             "code": CODE_OK,
@@ -1978,6 +2069,7 @@ class MatchSupervisor:
             "ruleset": ruleset,
             "open_record": prepared.get("open_record"),
             "open_session": self._open_session_record,
+            "server": server,
         }
 
     def _prepare_session(self, live_map) -> dict:
@@ -2013,15 +2105,23 @@ class MatchSupervisor:
             result = dict(prepared)
             result["code"] = CODE_CERTIFICATE_REQUIRED
             return result
+        # H-A: the open record now exists, so record the persistent unmeasured
+        # state immediately. Even if the id-parity check below refuses, `_fail`
+        # will close this never-spawned record instead of stranding it.
+        self._open_record = prepared.get("open_record")
+        self.open_record = prepared.get("open_record")
+        if prepared.get("record") is not None:
+            self._open_session_record = prepared.get("record")
+        if self._open_record is not None:
+            set_host_lockout(self.config, reason="session_unmeasured", session_id=self.session_id)
+            self._unmeasured_lockout = True
+            self._record_started = True
         # The certificate's own evidence id is authoritative: never overwrite it with
         # a runner label, and require it to agree with the verifier-derived baseline
         # identity. The label stays display/directory metadata on the open record.
         returned_id = prepared.get("backup_id")
         if not _is_content_id(returned_id) or returned_id != baseline.get("backup_id"):
             return {"ok": False, "code": CODE_CERTIFICATE_REQUIRED, "problems": ["prepared_backup_id_mismatch"]}
-        self._open_record = prepared.get("open_record")
-        if prepared.get("record") is not None:
-            self._open_session_record = prepared.get("record")
         return prepared
 
     def _launch_and_supervise(self) -> dict:
@@ -2220,7 +2320,11 @@ class MatchSupervisor:
         verdict = self._record_live_verdict()
         self.live_verdict = verdict
         if verdict is not None and verdict.get("ok") is False:
-            return self._fail(CODE_LIVE_CHANGED, live_verdict=verdict)
+            # H-A: only a real measured byte diff is a live change; any other
+            # refusal (unmeasured closure) retains the unmeasured lockout instead.
+            if verdict.get("code") == "live_byte_diff_revoked":
+                return self._fail(CODE_LIVE_CHANGED, live_verdict=verdict)
+            return self._finalize_unverified_human()
         if verdict is None or verdict.get("ok") is not True:
             return self._finalize_unverified_human()
         self._clear_unmeasured_lockout()
@@ -2281,7 +2385,42 @@ class MatchSupervisor:
                 )
         except Exception:  # noqa: BLE001
             return {"ok": None, "code": "live_verdict_failed"}
-        if isinstance(verdict, dict) and verdict.get("ok") is False:
+        # H-A: only a measured byte diff raises the byte-diff lockout. A refusal for
+        # any other reason keeps the pre-spawn ``session_unmeasured`` lockout, so a
+        # run that never happened is never labelled ``live_byte_diff``.
+        if isinstance(verdict, dict) and verdict.get("ok") is False and verdict.get("code") == "live_byte_diff_revoked":
+            set_host_lockout(
+                self.config,
+                reason="live_byte_diff",
+                session_id=self.session_id,
+                extra={"changed_roots": verdict.get("changed_roots")},
+            )
+        return verdict
+
+    def _record_no_spawn_verdict(self):
+        """Measured closure of a prepared session that never spawned (H-A).
+
+        Used when the open record exists but no owned role handles do. The
+        certificate re-measures the after-snapshot and refuses if the live tree
+        changed; the returned receipt closes the record so the next ticket and the
+        acknowledgement are no longer wedged.
+        """
+        if not self.config.require_certificate:
+            return {"ok": None, "code": "no_spawn_not_measured"}
+        api = self._certificate_api
+        try:
+            if self._no_spawn_recorder is not None:
+                verdict = self._no_spawn_recorder(self.config, self.session_id, self.open_record)
+            else:
+                verdict = api.record_session_no_spawn(
+                    self.config.staging_root,
+                    session_id=self.session_id,
+                    live=self._live_map(),
+                    backup_id=self.backup_id,
+                )
+        except Exception:  # noqa: BLE001
+            return {"ok": None, "code": "no_spawn_failed"}
+        if isinstance(verdict, dict) and verdict.get("ok") is False and verdict.get("code") == "live_byte_diff_revoked":
             set_host_lockout(
                 self.config,
                 reason="live_byte_diff",
@@ -2338,10 +2477,13 @@ class MatchSupervisor:
         return self._finalize(error_code=CODE_HUMAN_EXIT_UNVERIFIED, human_retained=True)
 
     def _void(self, code: str, **extra) -> dict:
-        """A live game appeared: stop practice, void, require acknowledgement.
+        """A live game appeared: stop practice, close the record as failed, lock out.
 
-        The live tree is changing, so no after-snapshot is taken and the open record
-        is left open; the lockout plus the open record block the next ticket.
+        H-B: the live tree is changing, so no after-snapshot is taken, but the open
+        record must not be left open forever. Once the owned handles are confirmed
+        exited the certificate closes the record as a measured *failure* and raises
+        its persistent lockout; the existing ``acknowledge`` op then records an
+        append-only acknowledgement. Nothing is silently re-baselined.
         """
         self.voided = True
         self._set_phase("void")
@@ -2359,15 +2501,29 @@ class MatchSupervisor:
         self._stop_server()
         self._stop_service()
         self.human_retained = False
+        self._reap_owned()
         if self.session is not None:
             try:
                 self.session.close()
             except Exception:  # noqa: BLE001
                 pass
             self.session = None
+        if self._record_started and self.config.require_certificate:
+            self._record_failure_closure(code)
         self.code = code
         self.error = _compact_error(code)
         return self._finalize(error_code=code, void=True, **extra)
+
+    def _record_failure_closure(self, code: str) -> None:
+        """Close the open record as a measured failure and raise the cert lockout (H-B)."""
+        api = self._certificate_api
+        if api is None or not callable(getattr(api, "record_session_failure", None)):
+            return
+        try:
+            api.record_session_failure(self.config.staging_root, session_id=self.session_id, reason=str(code))
+        except Exception:  # noqa: BLE001
+            pass
+        self._record_started = False
 
     def _build_plan(self) -> dict:
         return {
@@ -2404,16 +2560,35 @@ class MatchSupervisor:
         self._descriptor_env_gap = _descriptor_env_gap()
         return descriptors
 
+    def _verified_node_path(self) -> Optional[str]:
+        """The verified absolute Node path (M-1), never a bare PATH-resolved name."""
+        verdict = self._gates.get("server") if isinstance(self._gates, Mapping) else None
+        candidate = verdict.get("node_executable") if isinstance(verdict, Mapping) else None
+        if not candidate:
+            which = self._which or shutil.which
+            try:
+                candidate = which(self.config.node_executable) or which("node")
+            except Exception:  # noqa: BLE001
+                candidate = None
+        if isinstance(candidate, str) and candidate and Path(candidate).is_file():
+            return candidate
+        return None
+
     def _start_server(self) -> dict:
         if self.match_port is None or self.admin_port is None:
             return {"ok": False, "code": CODE_MATCH_PORT}
         if not port_is_free(HOST, self.admin_port):
             self.admin_port = pick_free_port()
         entry = Path(self.config.server_root) / SERVER_ENTRY
-        env = server_environment(self.config, self.match_port, self.admin_port)
+        node = self._verified_node_path()
+        if node is None:
+            return {"ok": False, "code": CODE_SERVER_ADAPTATION, "problems": ["node_executable_unresolved"]}
+        env = server_environment(
+            self.config, self.match_port, self.admin_port, session_dir=self.workspace.server_dir
+        )
         try:
             self.server = self._server_runner(
-                [self.config.node_executable, str(entry)],
+                [node, str(entry)],
                 self.workspace.server_dir,
                 env,
                 self.workspace.log_dir,
@@ -2449,7 +2624,10 @@ class MatchSupervisor:
             if self.server is not None and not self.server.is_running():
                 return {"ok": False, "code": CODE_SERVER_FAILED}
             if self.service is not None and getattr(self.service, "aborted", False):
-                return {"ok": False, "code": "practice_service_aborted"}
+                # H-C: a role-loss/timeout/abort is an abnormal end, never a
+                # completion, even though its terminal phase reads ``closed``.
+                reason = getattr(self.service, "terminal_reason", None) or CODE_ROLE_EXITED
+                return {"ok": False, "code": "practice_service_aborted", "reason": reason}
             terminal = str(getattr(self.service, "terminal_phase", "none")) not in ("none", "", "None")
             if self.session is not None:
                 statuses = self.session.is_running()
@@ -2460,6 +2638,11 @@ class MatchSupervisor:
                     # The human closing its staged window ends the isolated session.
                     return {"ok": True, "code": CODE_OK, "role": "human"}
             if terminal:
+                # Only the human coordinator END authorizes a normal completion.
+                # Any other terminal reason (abort/role lost/close) is a failure.
+                reason = str(getattr(self.service, "terminal_reason", "") or "")
+                if reason != "human_end":
+                    return {"ok": False, "code": "practice_service_terminal_failed", "reason": reason}
                 # Human coordinator END authorizes teardown; the server/service stay
                 # up until the human window is retained/handled in _finalize_after_run.
                 return {"ok": True, "code": CODE_OK, "service_terminal": True}
@@ -2516,10 +2699,12 @@ class MatchSupervisor:
         """Close owned handles (except a retained human), then measure the after-diff.
 
         Every exit after the persistent record exists takes the certificate's own
-        measured verdict once live is actually closed. If the after-diff cannot be
-        measured (a live game is open or the verdict errors), the open record and
-        the unmeasured lockout are deliberately retained so the next session cannot
-        silently rebaseline (C1).
+        measured verdict once live is actually closed. If no role was ever spawned
+        (the record has no bound PIDs) the certificate's no-spawn closure is used
+        instead, so a pre-spawn failure cannot strand an open record (H-A). If the
+        closure cannot be measured (a live game is open or the verdict errors), the
+        open record and the unmeasured lockout are deliberately retained so the next
+        session cannot silently rebaseline (C1).
         """
         self._stop_server()
         self._stop_service()
@@ -2527,7 +2712,8 @@ class MatchSupervisor:
         self._reap_owned()
         live = self._live_closed()
         if live.get("ok"):
-            verdict = self._record_live_verdict()
+            spawned = self.session is not None and bool(getattr(self.session, "owned", ()))
+            verdict = self._record_live_verdict() if spawned else self._record_no_spawn_verdict()
             if isinstance(verdict, dict) and verdict.get("ok") is True:
                 self._clear_unmeasured_lockout()
         if self.session is not None:
@@ -2709,6 +2895,9 @@ class HostDaemon:
         enumerator=None,
         certificate_api=None,
         runtime_checker=None,
+        which=None,
+        ruleset_reader=None,
+        start_gate=None,
         secret: Optional[str] = None,
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
@@ -2721,6 +2910,18 @@ class HostDaemon:
         self._enumerator = enumerator
         self._runtime_checker = runtime_checker
         self._certificate_api = certificate_api if certificate_api is not None else isolation_certificate
+        self._which = which
+        self._ruleset_reader = ruleset_reader
+        # M-3: the pre-acknowledgement gate. Production always runs the real
+        # default; tests inject it so acceptance paths need no on-disk server.
+        self._start_gate = start_gate or (
+            lambda: default_start_gate(
+                config,
+                certificate_api=self._certificate_api,
+                which=self._which,
+                ruleset_reader=self._ruleset_reader,
+            )
+        )
         self._clock = clock
         self._sleeper = sleeper
         self._secret = secret or secrets.token_hex(32)
@@ -2956,20 +3157,56 @@ class HostDaemon:
         if self.human_active():
             # A new ticket must never terminate a retained human window (H4).
             return {"ok": False, "code": CODE_HUMAN_ACTIVE}
+        # M-4: reserve the ticket slot atomically in one locked block *before* any
+        # preflight. Two concurrent starts can no longer both be admitted and
+        # overwrite each other, which would orphan a retained human window.
+        with self._lock:
+            current = self._ticket
+            if current is not None and current.phase in (
+                "accepted",
+                "waiting_live_exit",
+                "launching",
+                "running",
+                "ending",
+            ):
+                return {"ok": False, "code": CODE_TICKET_ACTIVE}
+            previous = current
+            ticket = MatchTicket(
+                ticket="ticket-" + secrets.token_hex(8),
+                request={},
+                phase="accepted",
+                code=CODE_ACCEPTED,
+                accepted_unix=time.time(),
+            )
+            self._ticket = ticket
+
+        def _release() -> None:
+            with self._lock:
+                if self._ticket is ticket:
+                    self._ticket = previous
+
         open_records = certificate_open_records(self._certificate_api, self.config)
         if open_records:
+            _release()
             return {"ok": False, "code": CODE_OPEN_RECORD_BLOCKED, "open_records": open_records}
         lockout = read_host_lockout(self.config)
         if lockout.get("locked"):
+            _release()
             return {"ok": False, "code": CODE_ACK_REQUIRED, "lockout": lockout}
         cert_lock = _certificate_lockout(self._certificate_api, self.config)
         if cert_lock.get("locked"):
+            _release()
             return {"ok": False, "code": CODE_CERTIFICATE_LOCKED, "lockout": cert_lock}
-        clean = self._validate_start_request(request)
+        try:
+            clean = self._validate_start_request(request)
+        except HostError as error:
+            _release()
+            return {"ok": False, "code": error.code}
         live = verify_live_target(
             self.config, clean["live_pid"], clean["live_create_time"], opener=self._opener
         )
         if not live.get("ok"):
+            _release()
             return live
         # Runtime/policy preflight before acknowledgement (item 15): the menu may
         # only quit the game once the host has proven the real policy source,
@@ -2977,16 +3214,27 @@ class HostDaemon:
         # launched by this check.
         preflight = self._runtime_preflight()
         if not preflight.get("ok"):
+            _release()
             return {
                 "ok": False,
                 "code": CODE_RUNTIME_PREFLIGHT,
                 "problems": preflight.get("problems") or [],
             }
-        with self._lock:
-            if self._ticket is not None and self._ticket.phase in ("accepted", "waiting_live_exit", "launching", "running", "ending"):
-                return {"ok": False, "code": CODE_TICKET_ACTIVE}
-            previous = self._ticket
-            self._ticket = None
+        # M-3: every gate that does not need the game closed runs before the
+        # acknowledgement, so the user never quits Balatro only to fail afterwards.
+        try:
+            gate = self._start_gate()
+        except Exception:  # noqa: BLE001
+            gate = {"ok": False, "code": CODE_INTERNAL}
+        if not isinstance(gate, dict) or not gate.get("ok"):
+            _release()
+            gate = gate if isinstance(gate, dict) else {}
+            return {
+                "ok": False,
+                "code": gate.get("code") or CODE_INTERNAL,
+                "problems": gate.get("problems") or [],
+            }
+        ticket.request = clean
         # Retire a finished previous ticket's owned handles, but never a retained
         # human window (its handle stays owned by this daemon until it exits).
         if previous is not None and previous.supervisor is not None:
@@ -2999,15 +3247,6 @@ class HostDaemon:
                     previous.supervisor.cleanup()
                 except Exception:  # noqa: BLE001
                     pass
-        with self._lock:
-            ticket = MatchTicket(
-                ticket="ticket-" + secrets.token_hex(8),
-                request=clean,
-                phase="accepted",
-                code=CODE_ACCEPTED,
-                accepted_unix=time.time(),
-            )
-            self._ticket = ticket
         supervisor = self._supervisor_factory(self.config, clean)
         ticket.supervisor = supervisor
         thread = threading.Thread(
@@ -3093,6 +3332,44 @@ class HostDaemon:
 
 def _default_supervisor_factory(config, request):
     return MatchSupervisor(config, request)
+
+
+def default_start_gate(config, *, certificate_api=None, which=None, ruleset_reader=None) -> dict:
+    """Gates that do not need the game closed, run before the quit acknowledgement (M-3).
+
+    A missing fixed match port, a missing certificate, a drifted server adaptation,
+    missing staged endpoints or a ruleset-digest failure must refuse the
+    acknowledgement, so the user never quits Balatro only to watch the session fail
+    after launch. Nothing here spawns a process or touches the live tree.
+    """
+    if config.require_fixed_match_port and config.match_port is None:
+        return {"ok": False, "code": CODE_MATCH_PORT_UNCONFIGURED, "problems": ["match_port_unconfigured"]}
+    port = config.match_port
+    if config.require_certificate:
+        missing = measurement_api_problems(certificate_api)
+        if missing:
+            return {"ok": False, "code": CODE_MEASUREMENT_API_MISSING, "problems": missing}
+        cert_lock = _certificate_lockout(certificate_api, config)
+        if cert_lock.get("locked"):
+            return {"ok": False, "code": CODE_CERTIFICATE_LOCKED, "lockout": cert_lock}
+        cert = certificate_gate(config, port=port, api=certificate_api)
+        if not cert.get("ok"):
+            return {"ok": False, "code": cert.get("code", CODE_CERTIFICATE_REQUIRED), "certificate": cert}
+    server = verify_server_adaptation(config, which=which)
+    if not server.get("ok"):
+        return {"ok": False, "code": CODE_SERVER_ADAPTATION, "server": server}
+    endpoints = staging.verify_staged_endpoints(config.staging_root, port=port)
+    if not endpoints.get("ok"):
+        return {"ok": False, "code": CODE_STAGED_ENDPOINTS, "endpoints": endpoints}
+    if config.require_certificate:
+        reader = ruleset_reader or ruleset_contract.expected_ruleset
+        try:
+            ruleset = reader(config.staging_root)
+        except Exception:  # noqa: BLE001
+            ruleset = {"ok": False, "problems": ["ruleset_unreadable"]}
+        if not isinstance(ruleset, dict) or not ruleset.get("ok"):
+            return {"ok": False, "code": CODE_CONFIG_DIGEST, "ruleset": ruleset}
+    return {"ok": True, "code": CODE_OK}
 
 
 class _HostHandler(socketserver.StreamRequestHandler):
@@ -3250,6 +3527,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 0
     if args.command == "serve":
+        if config.require_fixed_match_port and config.match_port is None:
+            # M-3: never start a daemon whose every acknowledgement would fail after
+            # the user has already quit Balatro for a fixed, unconfigured port.
+            _emit({"ok": False, "code": CODE_MATCH_PORT_UNCONFIGURED})
+            return 3
         daemon = HostDaemon(config)
         result = daemon.start()
         _emit(result)
@@ -3291,6 +3573,8 @@ __all__ = [
     "create_session_workspace",
     "default_config",
     "default_runtime_checker",
+    "default_server_runner",
+    "default_start_gate",
     "discovery_state",
     "fresh_backup_baseline",
     "generate_developer_launcher",
