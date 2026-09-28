@@ -85,6 +85,14 @@ PROBE_MP = "aisparring_probe_mp.txt"
 # ``package.loaded.luasteam`` values.
 PROBE_STEAM_MARKER = "aisparring_probe_steam_marker.txt"
 PROBE_STEAM_POST = "aisparring_probe_steam_post.txt"
+# Measurement-only P2 dead-port instrumentation artifact. It is written by the
+# env-gated staged MP guard and copied immutably into the phase receipt: the tool
+# never accepts a caller-supplied attempt count.
+PROBE_P2 = "aisparring_probe_p2.txt"
+# Measurement-only env gates. They are set by the tool launcher for the CRASH and
+# P2 phases only and can never change normal MATCH runtime behavior.
+MEASURE_CRASH_ENV = "AISP_MEASURE_CRASH"
+MEASURE_P2_ENV = "AISP_MEASURE_P2"
 
 PROOF_SCHEMA = "aisparring.isolation_proof.v2"
 MEASURE_SCHEMA = "aisparring.isolation_measure.v1"
@@ -1370,6 +1378,32 @@ def bootstrap_exit_patch() -> dict:
     }
 
 
+def measurement_crash_patch(patch_id: str = PATCH_ID) -> dict:
+    """Measurement-only CRASH stimulus, gated by ``AISP_MEASURE_CRASH``.
+
+    It is placed after every probe patch and only fires when the tool sets the gate
+    env var for the CRASH phase, so a normal match can never abort here. The exit
+    code is read from the retained process handle by the tool; the game writes no
+    success flag.
+    """
+    payload = (
+        "do\n"
+        "  if os.getenv('" + MEASURE_CRASH_ENV + "') == '1' then\n"
+        "    error('AISparring measurement: staged crash fixture (" + patch_id + ")', 0)\n"
+        "  end\n"
+        "end"
+    )
+    return {
+        "kind": "pattern",
+        "target": "main.lua",
+        "pattern": LOVE_LOAD_END_LITERAL,
+        "position": "before",
+        "payload": payload,
+        "match_indent": False,
+        "times": 1,
+    }
+
+
 def save_thread_probe_patch(patch_id: str = PATCH_ID) -> dict:
     payload = (
         "love.filesystem.write('" + PROBE_SAVE_THREAD + "', "
@@ -1401,6 +1435,14 @@ def mp_guard_payload(port: int, patch_id: str = PATCH_ID) -> str:
         "  local ai_mods = os.getenv('LOVELY_MOD_DIR') or ''\n"
         "  local ai_save = (love.filesystem.getSaveDirectory and love.filesystem.getSaveDirectory()) or ''\n"
         "  love.filesystem.write('" + PROBE_MP + "', 'probe=mp\\npatch=' .. ai_patch .. '\\nnonce=' .. ai_nonce .. '\\nurl=' .. tostring(ai_url) .. '\\nport=' .. tostring(ai_port) .. '\\nmods=' .. ai_mods .. '\\nsave=' .. tostring(ai_save))\n"
+        "  if os.getenv('" + MEASURE_P2_ENV + "') == '1' then\n"
+        "    -- Measurement-only P2 dead-port instrumentation. It records the *pinned\n"
+        "    -- endpoint* and a start marker only. A start marker is NOT a measured\n"
+        "    -- connection failure, so no attempt/retry count is written here; the tool's\n"
+        "    -- own refused-connect probe covers the initial failure, and reconnect/\n"
+        "    -- keepalive stay pending unless a real engine artifact reports them.\n"
+        "    love.filesystem.write('" + PROBE_P2 + "', 'probe=p2\\npatch=' .. ai_patch .. '\\nnonce=' .. ai_nonce .. '\\nurl=' .. tostring(ai_url) .. '\\nport=' .. tostring(ai_port) .. '\\nmods=' .. ai_mods .. '\\nsave=' .. tostring(ai_save) .. '\\nstarted=1')\n"
+        "  end\n"
         "end"
     )
 
@@ -1424,6 +1466,7 @@ def staging_patches(expected_save_dir, expected_mods_dir, bootstrap: bool = Fals
         main_guard_patch(expected_save_dir, expected_mods_dir),
         steam_post_probe_patch(),
         save_thread_probe_patch(),
+        measurement_crash_patch(),
     ]
     if bootstrap:
         patches.append(bootstrap_exit_patch())
@@ -1929,6 +1972,7 @@ def collect_role_probes(
     require_mp: bool = False,
     expected_port: Optional[int] = None,
     time_tolerance: float = START_TIME_TOLERANCE,
+    required_names: Optional[Sequence[str]] = None,
 ) -> dict:
     """Exact parsed probe evidence for a role run.
 
@@ -1940,9 +1984,12 @@ def collect_role_probes(
     save_dir = paths.data / "Balatro"
     problems: list = []
     probes: dict = {}
-    required = [PROBE_MAIN, PROBE_GUARD, PROBE_STEAM_MARKER, PROBE_STEAM_POST, PROBE_SAVE_THREAD]
-    if require_mp:
-        required.append(PROBE_MP)
+    if required_names is not None:
+        required = [str(name) for name in required_names]
+    else:
+        required = [PROBE_MAIN, PROBE_GUARD, PROBE_STEAM_MARKER, PROBE_STEAM_POST, PROBE_SAVE_THREAD]
+        if require_mp:
+            required.append(PROBE_MP)
     for name in required:
         entry = _read_probe_entry(save_dir, name, expected_nonce, spawn_time, problems, time_tolerance)
         if entry is not None:
@@ -2007,7 +2054,7 @@ def check_lovely_evidence(
     this checker proves the artefacts are under the exact staged ``Mods`` tree and
     were written after the run's spawn time.
     """
-    paths = role_paths(staging_root, role)
+    paths = _paths_for_role(staging_root, role)
     problems: list = []
     expected = expected_mods if expected_mods is not None else paths.mods
     if _norm_path(expected) != _norm_path(paths.mods):

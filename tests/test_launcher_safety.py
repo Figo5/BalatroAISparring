@@ -21,6 +21,7 @@ for path in (str(TOOLS), str(REPO)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+import isolation_certificate as ic  # noqa: E402
 import launch_practice  # noqa: E402
 import staging  # noqa: E402
 
@@ -785,11 +786,28 @@ def test_spawn_verified_rejects_unsafe_role_environment():
         assert result["code"] == "role_environment_unsafe", result
 
 
-def test_execute_launch_ignores_forged_may_launch():
+def _persist_open_record(staging_root, session_id, *, phase="P1B", nonce="n" * 32, pids=None):
+    record = {
+        "schema": ic.OPEN_SESSION_SCHEMA,
+        "session_id": session_id,
+        "phase": phase,
+        "nonce": nonce,
+        "port": 8788,
+        "certificate_id": None,
+        "backup_id": "a" * 64,
+        "pids": pids or {},
+        "status": "open",
+    }
+    ic._write_open_record(staging_root, record)
+    return record
+
+
+def test_execute_launch_ignores_forged_may_launch_and_reloads_record():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         staging_root = root / "staging"
         staging_root.mkdir(parents=True)
+        _persist_open_record(staging_root, "forged", phase="P1B")
         forged = {
             "may_launch": True,
             "blocked": [],
@@ -799,7 +817,7 @@ def test_execute_launch_ignores_forged_may_launch():
             "backup_root": str(root / "backups"),
             "port": 8788,
         }
-        open_session = {"status": "open", "session_id": "forged", "nonce": "n" * 32}
+        open_session = {"status": "open", "session_id": "forged", "nonce": "n" * 32, "phase": "P1B"}
         called = []
 
         def popen(*args, **kwargs):
@@ -813,6 +831,7 @@ def test_execute_launch_ignores_forged_may_launch():
             live_appdata_root=root / "appdata",
             steam_root=root / "Steam",
             open_session=open_session,
+            require_certificate=False,
         )
         assert result["code"] == "launch_blocked", result
         assert called == []
@@ -830,10 +849,34 @@ def test_execute_launch_requires_an_open_session():
         assert result["code"] == "open_session_required", result
 
 
+def test_execute_launch_refuses_fabricated_open_session_mapping():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        staging_root = root / "staging"
+        staging_root.mkdir(parents=True)
+        called = []
+
+        def popen(*args, **kwargs):
+            called.append(args)
+            raise AssertionError("must not spawn without a persisted open record")
+
+        result = launch_practice.execute_launch(
+            {"staging_root": str(staging_root), "session_id": "ghost"},
+            enumerator=FakeEnumerator([]),
+            open_session={"status": "open", "session_id": "ghost", "nonce": "n" * 32, "phase": "P1B"},
+            popen=popen,
+            require_certificate=False,
+        )
+        assert result["code"] == "open_session_missing", result
+        assert called == []
+
+
 def test_execute_launch_descriptors_require_match_phase():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         staging_root = root / "staging"
+        staging_root.mkdir(parents=True)
+        _persist_open_record(staging_root, "x", phase="P1A", nonce="n" * 32)
         result = launch_practice.execute_launch(
             {"staging_root": str(staging_root), "session_id": "x"},
             enumerator=FakeEnumerator([]),
@@ -1250,6 +1293,74 @@ def test_spawn_verified_requires_descriptor_for_every_role():
         result, spawned = _spawn_with_descriptor(staging_root, "ai", {})
         assert result["code"] == "session_descriptor_missing", result
         assert spawned == []
+
+
+def test_supervise_session_aborts_owned_only_on_unexpected_balatro():
+    with tempfile.TemporaryDirectory() as tmp:
+        session, proc, job = _live_session(tmp, alive=True)
+        result = launch_practice.supervise_session(
+            session,
+            timeout=5,
+            poll_interval=0.01,
+            unexpected_check=lambda statuses: {"ok": False, "code": "foreign_balatro_running"},
+        )
+        assert not result["ok"] and result["code"] == "foreign_balatro_running"
+        assert proc.alive is False and job.terminated >= 1
+
+
+def test_execute_launch_refuses_mismatched_open_session_fields():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        staging_root = root / "staging"
+        staging_root.mkdir(parents=True)
+        _persist_open_record(staging_root, "m1", phase="P1B", nonce="n" * 32)
+
+        def must_not_spawn(*args, **kwargs):
+            raise AssertionError("must not spawn")
+
+        wrong_nonce = launch_practice.execute_launch(
+            {"staging_root": str(staging_root), "session_id": "m1"},
+            enumerator=FakeEnumerator([]),
+            open_session={"status": "open", "session_id": "m1", "nonce": "x" * 32, "phase": "P1B"},
+            popen=must_not_spawn,
+            require_certificate=False,
+        )
+        assert wrong_nonce["code"] == "open_session_nonce_mismatch", wrong_nonce
+
+        wrong_phase = launch_practice.execute_launch(
+            {"staging_root": str(staging_root), "session_id": "m1"},
+            enumerator=FakeEnumerator([]),
+            open_session={"status": "open", "session_id": "m1", "nonce": "n" * 32, "phase": "MATCH"},
+            popen=must_not_spawn,
+            require_certificate=False,
+        )
+        assert wrong_phase["code"] == "open_session_phase_mismatch", wrong_phase
+
+        _persist_open_record(staging_root, "m1-bound", phase="P1B", nonce="n" * 32, pids={"ai": [7]})
+        bound = launch_practice.execute_launch(
+            {"staging_root": str(staging_root), "session_id": "m1-bound"},
+            enumerator=FakeEnumerator([]),
+            open_session={"status": "open", "session_id": "m1-bound", "nonce": "n" * 32, "phase": "P1B"},
+            popen=must_not_spawn,
+            require_certificate=False,
+        )
+        assert bound["code"] == "open_session_pids_bound", bound
+
+
+def test_cli_bootstrap_timeout_is_wired_to_the_measurement_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        captured = {}
+
+        def fake_execute(*args, **kwargs):
+            captured.update(kwargs)
+            return {"receipt": {"ok": True}}
+
+        with patched(launch_practice, execute_measurement_phase=fake_execute):
+            code = launch_practice.main(
+                ["bootstrap", "--execute", "--timeout", "4.25", "--staging-root", str(Path(tmp) / "staging")]
+            )
+        assert code == 0
+        assert captured.get("timeout") == 4.25
 
 
 def _run_all() -> int:

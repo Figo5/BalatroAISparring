@@ -31,10 +31,14 @@ normal match lifecycle (prepared open session + current certificate + live
 attestation). The tool-owned measurement path is separate and cannot enable an
 AI/match capability:
 
-- `bootstrap --execute` runs the **P1A phase lifecycle** (prepare → launch →
-  supervise → record the measured receipt).
+- `bootstrap --execute [--timeout]` runs the **P1A phase lifecycle** (prepare →
+  launch → supervise → record the measured receipt). The bounded supervisor
+  timeout is wired through to the run (L9).
 - `measure --phase P1B|FULL_P1|CRASH|P2` runs a role measurement phase, gated on
-  the previous phase receipt (P1A→P1B→FULL_P1→CRASH/P2).
+  the previous phase receipt (P1A→P1B→FULL_P1→CRASH/P2). CRASH and P2 actually
+  exercise their phase: the tool sets the env-gated staged CRASH stimulus and, for
+  P2, measures the dead match port (both-family listener absence + a real refused
+  loopback connect) before spawning. No `observation` argument exists any more.
 - `acknowledge-lockout --operator --reason` appends the only record that clears
   the global lockout.
 
@@ -49,30 +53,63 @@ Each receipt is produced by `isolation_certificate.record_phase_receipt` after a
 exited launch session. The recorder:
 
 - loads the exclusive open record and requires the session id/nonce to match;
-- takes its own `after` `snapshot_live` and requires zero live byte diff against
-  the prepared `before` snapshot (per root, recomputed from the file maps);
-- re-parses the actual staged probe files and validates nonce, patch id and (NH1)
-  the patch-applied marker plus the post-Steam-block probe (`steam=nil`,
-  `luasteam=nil`), and the exact `Mods` paths;
-- copies the probes immutably under `evidence/receipts/` and writes the receipt
-  content-addressed;
+- requires a real `live_closed` callback (R2): a missing callable, `False` or an
+  exception fails closed and raises the global lockout;
+- takes its own `after` `snapshot_live`, requires zero live byte diff against the
+  prepared `before` snapshot (per root, recomputed from the file maps) and stores
+  the **raw** before/after file manifests (L7);
+- re-parses the actual staged probe files through the strong
+  `collect_role_probes` / `check_lovely_evidence` checkers (M2): nonce, patch id,
+  Steam marker + post-block probe, exact save/`Mods`/`lovely_mod_dir`, MP
+  loopback/port, and a **fresh** Lovely log + `main.lua` dump which is copied into
+  the receipt evidence;
+- derives CRASH and P2 from tool-owned measurements only (H3): CRASH from the
+  retained-handle exit codes after the env-gated staged crash stimulus, P2 from
+  the tool's persisted dead-port setup plus the staged MP instrumentation artifact;
+- copies the probes, the dump and a hashed `measurement.json` immutably under
+  `evidence/receipts/` and writes the receipt content-addressed;
 - asserts P1A binds the bootstrap install digest to **both** role digests, and
   P1B/FULL_P1 bind the role Mods digests and parity digest.
 
 `build_certificate` re-parses every receipt copy, requires **distinct nonces per
-phase**, and refuses P1B/FULL_P1 whose Mods digest no longer matches the current
-layer M. `check_certificate` re-validates the receipts, recomputes the
-certificate id from the layers/tools/receipts/evidence and refuses on any drift.
+phase**, requires the certificate tool map to equal `bound_tool_specs()` exactly
+(M3, so an empty/subset map cannot drop a binding), and refuses P1B/FULL_P1 whose
+Mods digest no longer matches the current layer M. P2 never stamps a broad pass
+  from one event: the receipt lists `pending_subgates` and the certificate stays
+  **partial** while any remain (`P2_pending:<subgate>`). A staged start/`started`
+  marker never counts as a measured connection failure; `initial_failure`,
+  `reconnect` and `keepalive` are covered only by real engine attempt evidence.
+  `check_certificate` re-validates the receipts, the
+evidence dumps, recomputes the certificate id from the
+layers/tools/receipts/evidence and refuses on any drift.
 
 ## 4. Per-session lifecycle (NH2)
 
-- `prepare_session` requires a passing `closed_check`, a **verified backup**
-  (`backup_verify`), the phase prerequisite receipt, and no other open record.
-  It rotates stale probes/attestations, takes the `before` full snapshot and
-  writes one exclusive open record holding the single nonce, certificate id,
-  backup id and the before file maps.
-- `execute_launch` requires that open record; `bind_open_session` records the
-  exact owned PIDs and spawn time.
+- `prepare_session` requires a passing `closed_check`, the phase prerequisite
+  receipt, and no other open record. `backup_verify` must return the **real**
+  `check_backup_evidence` verdict (R1): its `manifest_sha256`, content-derived
+  `backup_id`, verified `backup_label` and per-root `files_digest` are bound into
+  the record, and the measured `before` snapshot must match those digests for the
+  identical live-root keys. A caller-supplied `backup_id` must equal the evidence
+  id or its authenticated manifest label (the host's fresh-backup label), so a
+  caller can never substitute or mismatch real evidence. The nonce is always
+  minted internally (no caller override, L5), and a previously used session id is
+  refused before any write (`session_id_reused`, L6). It rotates stale
+  probes/attestations, takes the `before` full snapshot and writes one exclusive
+  open record holding the single nonce, certificate id, backup evidence and the
+  before file maps.
+- `execute_launch`/`execute_bootstrap` reload the **persisted** open record and
+  require it to be `open`, match the caller's session id/nonce/phase, carry no
+  bound PIDs, and be phase `MATCH` exactly when a certificate is required (a
+  measurement phase otherwise); the caller's mapping is never trusted (M1).
+  `bind_open_session` records the exact owned PIDs and spawn time and is
+  **mandatory**: a bind failure aborts the spawned session and raises the lockout.
+- Any post-spawn exception or `KeyboardInterrupt` (supervisor, receipt step or
+  bind failure) terminates only the owned handles, records
+  `record_session_failure(reason=\"exception:<type>\")` and re-raises, so no record
+  is left open (R3). Supervision also polls an unexpected-Balatro monitor and
+  aborts only the owned staged processes if the user's game (or a foreign copy)
+  appears (R2).
 - `record_session_verdict` **computes the after snapshot itself** after the owned
   processes exit, re-derives the before digest from the stored file maps, checks
   the root set, the timestamp order and the backup id, refuses a reused session

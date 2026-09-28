@@ -49,7 +49,7 @@ def test_measurement_phase_requires_prerequisite_receipts():
                     port=fixture.PORT if phase != "P1A" else None,
                     closed_check=lambda: True,
                     phase=phase,
-                    backup_verify=fixture._backup_verify(),
+                    backup_verify=fixture._backup_verify(staged),
                 )
                 assert not refused["ok"], phase
                 assert any(problem.startswith("phase_prerequisite_missing") for problem in refused["problems"]), phase
@@ -66,7 +66,7 @@ def test_measurement_phase_allows_p1a_first():
                 session_id="bootstrap-first",
                 closed_check=lambda: True,
                 phase="P1A",
-                backup_verify=fixture._backup_verify(),
+                backup_verify=fixture._backup_verify(staged),
             )
         assert prepared["ok"], prepared
         assert prepared["certificate_id"] is None
@@ -93,7 +93,7 @@ def test_record_receipt_refuses_running_owned_processes():
                 session_id="running",
                 closed_check=lambda: True,
                 phase="P1A",
-                backup_verify=fixture._backup_verify(),
+                backup_verify=fixture._backup_verify(staged),
             )
             assert prepared["ok"]
             fixture._write_probes(staging.bootstrap_paths(staged["staging_root"]), nonce=prepared["nonce"])
@@ -104,6 +104,7 @@ def test_record_receipt_refuses_running_owned_processes():
                 session_id="running",
                 session=session,
                 live=staged["live_map"],
+                live_closed=lambda: True,
             )
         assert not result["ok"] and "owned_processes_running" in result["problems"]
         assert ic.load_open_record(staged["staging_root"], "running")["status"] == "failed"
@@ -168,7 +169,7 @@ def test_abandon_prepared_session_uses_measured_no_spawn_path():
                 session_id="abandoned",
                 closed_check=lambda: True,
                 phase="P1A",
-                backup_verify=fixture._backup_verify("bk"),
+                backup_verify=fixture._backup_verify(staged),
             )
             assert prepared["ok"], prepared
             result = launch_practice.abandon_prepared_session(
@@ -179,6 +180,119 @@ def test_abandon_prepared_session_uses_measured_no_spawn_path():
                 steam_root=root / "Steam",
             )
         assert result["ok"] and result["receipt"]["verdict"] == "no_spawn"
+
+
+class _FakeProc:
+    def __init__(self, pid):
+        self.pid = pid
+        self.returncode = 0
+        self.alive = True
+
+    def poll(self):
+        return None if self.alive else self.returncode
+
+    def kill(self):
+        self.alive = False
+
+
+class _FakeJob:
+    def assign(self, process):
+        return True
+
+    def terminate(self):
+        return True
+
+    def close(self):
+        return None
+
+
+def _bootstrap_phase_kwargs(root, staged):
+    return dict(
+        live_install_root=staged["live_map"]["install"],
+        live_appdata_root=staged["live_map"]["appdata"],
+        steam_root=root / "Steam",
+        backup_root=staged["backup_root"],
+        enumerator=_EmptyEnumerator(),
+        create_time_reader=lambda process: 1000.0,
+        job_factory=_FakeJob,
+        resume=lambda process: True,
+    )
+
+
+def test_r3_supervisor_interrupt_records_failure_and_lockout():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        staged = fixture._stage_all(root)
+        spawned = []
+
+        def popen(command, cwd=None, env=None, close_fds=None, creationflags=0):
+            process = _FakeProc(6100 + len(spawned))
+            spawned.append(process)
+            return process
+
+        def boom(session):
+            raise KeyboardInterrupt
+
+        with fixture.synthetic_tools(root):
+            try:
+                launch_practice.execute_measurement_phase(
+                    staged["staging_root"], phase="P1A", session_id="r3-int",
+                    popen=popen, supervisor=boom, **_bootstrap_phase_kwargs(root, staged),
+                )
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("KeyboardInterrupt must propagate")
+        assert spawned, "the phase should have spawned before the interrupt"
+        assert ic.lockout(staged["staging_root"])["locked"] is True
+        record = ic.load_open_record(staged["staging_root"], "r3-int")
+        assert record["status"] == "failed"
+
+
+def test_r3_supervisor_exception_records_failure_and_lockout():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        staged = fixture._stage_all(root)
+
+        def popen(command, cwd=None, env=None, close_fds=None, creationflags=0):
+            return _FakeProc(6300)
+
+        def boom(session):
+            raise RuntimeError("supervisor exploded")
+
+        with fixture.synthetic_tools(root):
+            try:
+                launch_practice.execute_measurement_phase(
+                    staged["staging_root"], phase="P1A", session_id="r3-throw",
+                    popen=popen, supervisor=boom, **_bootstrap_phase_kwargs(root, staged),
+                )
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("the supervisor exception must propagate")
+        assert ic.lockout(staged["staging_root"])["locked"] is True
+        assert ic.load_open_record(staged["staging_root"], "r3-throw")["status"] == "failed"
+
+
+def test_r3_bind_failure_aborts_and_locks_out():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        staged = fixture._stage_all(root)
+
+        def popen(command, cwd=None, env=None, close_fds=None, creationflags=0):
+            return _FakeProc(6200)
+
+        def failing_bind(staging_root, session_id, **kwargs):
+            return {"ok": False, "code": "open_session_bind_failed"}
+
+        with fixture.synthetic_tools(root), fixture.patched(ic, bind_open_session=failing_bind):
+            result = launch_practice.execute_measurement_phase(
+                staged["staging_root"], phase="P1A", session_id="r3-bind",
+                popen=popen, **_bootstrap_phase_kwargs(root, staged),
+            )
+        assert result["code"] == "measurement_launch_failed", result
+        assert result["result"]["code"] == "open_session_bind_failed", result
+        assert ic.lockout(staged["staging_root"])["locked"] is True
 
 
 def _run_all() -> int:

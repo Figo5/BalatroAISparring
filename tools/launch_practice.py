@@ -710,12 +710,15 @@ def supervise_session(
     timeout: Optional[float] = None,
     poll_interval: float = 1.0,
     on_tick: Optional[Callable[[list], None]] = None,
+    unexpected_check: Optional[Callable[[list], dict]] = None,
 ) -> dict:
     """Block while retaining the exact handles until owned processes exit.
 
     Keeps the Job Objects and Popen handles alive for the whole run. On timeout it
     terminates only the owned staged handles (never the parent game) and reports
-    ``supervision_timeout``.
+    ``supervision_timeout``. R2: an ``unexpected_check`` callback is polled on every
+    tick; if it reports a live/foreign Balatro, only the owned staged handles are
+    terminated and the run is voided with ``unexpected_balatro_running``.
     """
     if not isinstance(session, LaunchSession) or not session.ok:
         return {"ok": False, "code": "not_a_live_session"}
@@ -726,6 +729,19 @@ def supervise_session(
         statuses = session.is_running()
         if on_tick is not None:
             on_tick(statuses)
+        if unexpected_check is not None:
+            try:
+                verdict = unexpected_check(statuses)
+            except Exception:  # noqa: BLE001
+                verdict = {"ok": False, "code": "unexpected_check_failed"}
+            if isinstance(verdict, Mapping) and verdict.get("ok") is False:
+                return {
+                    "ok": False,
+                    "code": verdict.get("code") or "unexpected_balatro_running",
+                    "statuses": statuses,
+                    "conflict": dict(verdict),
+                    "termination": session.terminate(),
+                }
         if not any(item["running"] for item in statuses):
             return {"ok": True, "code": "supervision_exited", "statuses": statuses}
         if deadline is not None and time.time() >= deadline:
@@ -1488,6 +1504,8 @@ def _spawn_verified(
     resume: Optional[Callable[[object], bool]] = None,
     session_descriptors: Optional[Mapping[str, "SessionDescriptor"]] = None,
     expected_session_id: Optional[str] = None,
+    measure_crash: bool = False,
+    measure_p2: bool = False,
 ) -> LaunchSession:
     """Start each role suspended, assign it to a mandatory Job Object, then resume.
 
@@ -1584,6 +1602,10 @@ def _spawn_verified(
                 return abort(descriptor_problems[0], role=role, problems=descriptor_problems)
             env.update(session_env_overrides(descriptor))
         env[PROBE_NONCE_VAR] = nonce
+        if measure_crash:
+            env[staging.MEASURE_CRASH_ENV] = "1"
+        if measure_p2:
+            env[staging.MEASURE_P2_ENV] = "1"
         on_windows = os.name == "nt"
         job = job_factory()
         if on_windows and job is None:
@@ -1702,27 +1724,46 @@ def execute_launch(
     session_descriptors: Optional[Mapping[str, "SessionDescriptor"]] = None,
     open_session: Optional[Mapping] = None,
     require_certificate: bool = True,
+    measure_crash: bool = False,
+    measure_p2: bool = False,
 ) -> object:
     """Spawn the two roles, but only under an exclusive prepared open session.
 
-    ``open_session`` supplies the single session nonce; a caller-supplied nonce is
-    never minted here. The plan is re-derived from disk immediately before spawning.
+    M1: the caller's ``open_session`` mapping is never trusted. The persisted open
+    record is reloaded from disk and must be ``open``, match the caller's session
+    id/nonce/phase, carry no previously bound PIDs, and be phase ``MATCH`` exactly
+    when ``require_certificate`` is true (a measurement phase otherwise). The plan
+    is re-derived from disk immediately before spawning.
     """
     staging_root = Path(staging_root or plan.get("staging_root") or staging.DEFAULT_STAGING_ROOT)
     backup_root = Path(backup_root or plan.get("backup_root") or staging.DEFAULT_BACKUP_ROOT)
     live_install_root = Path(live_install_root or plan.get("live_install_root") or staging.DEFAULT_INSTALL)
     port = int(port if port is not None else plan.get("port", 8788))
     enumerator = enumerator or default_enumerator()
-    if not isinstance(open_session, Mapping) or open_session.get("status") != "open":
+    if not isinstance(open_session, Mapping):
         return LaunchSession(
             str(plan.get("session_id", "")), staging_root, [], [], "", 0.0, code="open_session_required"
         )
     session_id = str(open_session.get("session_id"))
-    nonce = open_session.get("nonce")
     if session_descriptors is not None and open_session.get("phase") != isolation_certificate.MATCH:
         return LaunchSession(
-            session_id, staging_root, [], [], nonce, 0.0, code="session_descriptors_require_match_phase"
+            session_id, staging_root, [], [], open_session.get("nonce"), 0.0,
+            code="session_descriptors_require_match_phase",
         )
+    allowed = (
+        (isolation_certificate.MATCH,)
+        if require_certificate
+        else ("P1B", "FULL_P1", "CRASH", "P2")
+    )
+    record, record_problems = _resolved_open_session(
+        staging_root, open_session, allowed_phases=allowed
+    )
+    if record_problems:
+        return LaunchSession(
+            session_id, staging_root, [], [], open_session.get("nonce"), 0.0,
+            code=record_problems[0], blocked=sorted(set(record_problems)),
+        )
+    nonce = record.get("nonce")
     fresh = build_launch_plan(
         staging_root=staging_root,
         port=port,
@@ -1748,12 +1789,64 @@ def execute_launch(
         resume=resume,
         session_descriptors=session_descriptors,
         expected_session_id=session_id,
+        measure_crash=measure_crash,
+        measure_p2=measure_p2,
     )
     if session.ok:
-        _bind_open_session(staging_root, session)
+        bound = _bind_open_session(staging_root, session)
+        if not bound.get("ok"):
+            return _abort_spawned_session(
+                staging_root, session, bound.get("code", "open_session_bind_failed"), on_terminate
+            )
     if session.ok and supervisor is not None:
         return supervisor(session)
     return session
+
+
+def _resolved_open_session(staging_root, open_session: Mapping, *, allowed_phases) -> tuple:
+    """Reload and validate the persisted open record; never trust the caller mapping."""
+    session_id = open_session.get("session_id")
+    if not isinstance(session_id, str) or not isolation_certificate.SESSION_ID_RE.match(session_id):
+        return None, ["open_session_required"]
+    record = isolation_certificate.load_open_record(staging_root, session_id)
+    if not isinstance(record, Mapping):
+        return None, ["open_session_missing"]
+    problems: list = []
+    if open_session.get("status") != "open" or record.get("status") != "open":
+        problems.append("open_session_not_open")
+    if record.get("session_id") != session_id:
+        problems.append("open_session_mismatch")
+    for key in ("nonce", "phase", "certificate_id", "port"):
+        if key in open_session and open_session.get(key) != record.get(key):
+            problems.append(f"open_session_{key}_mismatch")
+    if record.get("pids"):
+        problems.append("open_session_pids_bound")
+    if record.get("phase") not in set(allowed_phases):
+        problems.append("open_session_phase_mismatch")
+    if problems:
+        return None, problems
+    return record, []
+
+
+def _abort_spawned_session(staging_root, session: LaunchSession, code: str, on_terminate=None) -> LaunchSession:
+    """Terminate the owned handles, record the global lockout, and return the failure."""
+    _terminate_owned_handles(session.owned, on_terminate)
+    try:
+        isolation_certificate.record_session_failure(
+            staging_root, session_id=session.session_id, reason=str(code)
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return LaunchSession(
+        session.session_id,
+        session.staging_root,
+        session.records,
+        [],
+        session.nonce,
+        session.spawn_time,
+        code=str(code),
+        rollback={"rolled_back": bool(session.owned), "termination": []},
+    )
 
 
 def execute_bootstrap(
@@ -1777,12 +1870,18 @@ def execute_bootstrap(
     backup_root = Path(backup_root or plan.get("backup_root") or staging.DEFAULT_BACKUP_ROOT)
     live_install_root = Path(live_install_root or plan.get("live_install_root") or staging.DEFAULT_INSTALL)
     enumerator = enumerator or default_enumerator()
-    if not isinstance(open_session, Mapping) or open_session.get("status") != "open":
+    if not isinstance(open_session, Mapping):
         return LaunchSession(
             str(plan.get("session_id", "")), staging_root, [], [], "", 0.0, code="open_session_required"
         )
     session_id = str(open_session.get("session_id"))
-    nonce = open_session.get("nonce")
+    record, record_problems = _resolved_open_session(staging_root, open_session, allowed_phases=("P1A",))
+    if record_problems:
+        return LaunchSession(
+            session_id, staging_root, [], [], open_session.get("nonce"), 0.0,
+            code=record_problems[0], blocked=sorted(set(record_problems)),
+        )
+    nonce = record.get("nonce")
     fresh = build_bootstrap_plan(
         staging_root=staging_root,
         live_install_root=live_install_root,
@@ -1807,23 +1906,35 @@ def execute_bootstrap(
         expected_session_id=session_id,
     )
     if session.ok:
-        _bind_open_session(staging_root, session)
+        bound = _bind_open_session(staging_root, session)
+        if not bound.get("ok"):
+            return _abort_spawned_session(
+                staging_root, session, bound.get("code", "open_session_bind_failed"), on_terminate
+            )
     if session.ok and supervisor is not None:
         return supervisor(session)
     return session
 
 
-def _bind_open_session(staging_root, session: LaunchSession) -> None:
-    """Record spawn time and exact owned PIDs on the open record (best-effort, owned only)."""
+def _bind_open_session(staging_root, session: LaunchSession) -> dict:
+    """Record spawn time and exact owned PIDs on the open record.
+
+    R3: binding is mandatory, never best effort. A failure is surfaced so the
+    caller can abort the spawned session and raise the global lockout.
+    """
     pids: dict = {}
     for record in session.records:
         pids.setdefault(record.role, []).append(int(record.pid))
     try:
-        isolation_certificate.bind_open_session(
+        result = isolation_certificate.bind_open_session(
             staging_root, session.session_id, pids=pids, spawn_time=session.spawn_time
         )
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as error:  # noqa: BLE001
+        return {"ok": False, "code": "open_session_bind_failed", "detail": type(error).__name__}
+    if not isinstance(result, Mapping) or not result.get("ok"):
+        code = result.get("code") if isinstance(result, Mapping) else "open_session_bind_failed"
+        return {"ok": False, "code": code or "open_session_bind_failed"}
+    return dict(result)
 
 
 def verify_bootstrap_run(session: LaunchSession) -> dict:
@@ -1905,6 +2016,14 @@ def check_backup_current(manifest: Mapping, backup_root, sources: Mapping) -> di
 
 
 def check_backup_evidence(backup_root, sources=None) -> dict:
+    """Verify the backup and return its cryptographic identity plus verified roots.
+
+    R1: the result carries the sha256 of ``BACKUP_MANIFEST.json`` (``manifest_sha256``)
+    and a content-derived ``backup_id`` over that manifest hash and every verified
+    per-entry file map, together with each entry's ``files_digest``. A later
+    ``prepare_session`` binds its own before-snapshot to these digests; the id can
+    no longer be replaced by a caller label.
+    """
     manifest_path = Path(backup_root) / BACKUP_MANIFEST_NAME
     if not manifest_path.is_file():
         return {"ok": False, "code": "backup_manifest_missing", "path": str(manifest_path)}
@@ -1915,6 +2034,7 @@ def check_backup_evidence(backup_root, sources=None) -> dict:
     if manifest.get("schema") != BACKUP_SCHEMA:
         return {"ok": False, "code": "backup_manifest_schema_mismatch", "path": str(manifest_path)}
     problems: list = []
+    roots: dict = {}
     entries = manifest.get("entries") or {}
     for key in ("install", "appdata"):
         if not entries.get(key):
@@ -1925,14 +2045,43 @@ def check_backup_evidence(backup_root, sources=None) -> dict:
         verdict = verify_backup_entry(entry, backup_root)
         if not verdict["ok"]:
             problems.append(f"{key}_{verdict['code']}")
+            continue
+        entry_manifest_path = Path(entry.get("manifest", ""))
+        try:
+            entry_manifest = staging.read_json(entry_manifest_path)
+        except (OSError, ValueError):
+            problems.append(f"{key}_entry_manifest_unreadable")
+            continue
+        files = entry_manifest.get("files") or {}
+        roots[str(key)] = {
+            "source_root": str(entry.get("source_root") or ""),
+            "files_digest": staging._digest_of(files),
+            "entry_manifest_sha256": staging.sha256_file(entry_manifest_path),
+            "file_count": len(files),
+        }
     if sources is not None:
         current = check_backup_current(manifest, backup_root, sources)
         problems.extend(current["problems"])
+    manifest_sha256 = staging.sha256_file(manifest_path)
+    backup_id = staging._digest_of(
+        {
+            "schema": BACKUP_SCHEMA,
+            "manifest_sha256": manifest_sha256,
+            "roots": {
+                key: {"source_root": value["source_root"], "files_digest": value["files_digest"]}
+                for key, value in sorted(roots.items())
+            },
+        }
+    )
     return {
         "ok": not problems,
         "code": "ok" if not problems else "backup_evidence_incomplete",
         "problems": problems,
         "path": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "backup_id": backup_id,
+        "backup_label": manifest.get("label"),
+        "roots": roots,
     }
 
 
@@ -2062,6 +2211,99 @@ def create_live_backup(
     return {"ok": True, "code": "backup_created", "execute": True, "manifest": str(manifest_path), "entries": entries}
 
 
+def _pick_free_loopback_port() -> Optional[int]:
+    import socket as _socket
+
+    server = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    try:
+        server.bind(("127.0.0.1", 0))
+        return int(server.getsockname()[1])
+    except OSError:
+        return None
+    finally:
+        server.close()
+
+
+def _default_port_probe(port: int, attempts: int = 3, timeout: float = 0.5) -> dict:
+    """Tool-owned native measurement: both-family listener absence + refused connect.
+
+    Loopback only; it never contacts an external host. A successful bind proves no
+    listener owns the port for that address family, and the connect attempts record
+    the real refusal and timing.
+    """
+    import socket as _socket
+
+    result = {
+        "listener_absent": {"ipv4": False, "ipv6": False},
+        "refused": False,
+        "timings": [],
+        "attempts": 0,
+    }
+    for family, address, key in (
+        (_socket.AF_INET, "127.0.0.1", "ipv4"),
+        (_socket.AF_INET6, "::1", "ipv6"),
+    ):
+        probe = _socket.socket(family, _socket.SOCK_STREAM)
+        try:
+            probe.bind((address, int(port)))
+            result["listener_absent"][key] = True
+        except OSError:
+            result["listener_absent"][key] = False
+        finally:
+            probe.close()
+    for _ in range(max(1, int(attempts))):
+        client = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        client.settimeout(timeout)
+        start = time.perf_counter()
+        try:
+            client.connect(("127.0.0.1", int(port)))
+            result["refused"] = False
+        except OSError:
+            result["refused"] = True
+        finally:
+            client.close()
+        result["timings"].append(round(time.perf_counter() - start, 6))
+        result["attempts"] += 1
+    return result
+
+
+def measure_dead_port(port=None, *, prober=None, chooser=None, attempts: int = 3) -> dict:
+    """Tool-owned P2 dead-port setup: prove a loopback port has no listener at all.
+
+    With an explicit ``port`` (the staged match port) the tool verifies nothing is
+    bound to it before spawning: that is the real dead-port condition P2 requires.
+    ``prober``/``chooser`` are injectable so fixtures never open a socket.
+    """
+    prober = prober or (lambda candidate: _default_port_probe(candidate, attempts=attempts))
+    candidates = [port] if port is not None else []
+    if not candidates:
+        chooser = chooser or _pick_free_loopback_port
+        candidates = [chooser() for _ in range(8)]
+    for candidate in candidates:
+        if not isinstance(candidate, int) or isinstance(candidate, bool) or not (1 <= candidate <= 65535):
+            continue
+        evidence = prober(candidate) or {}
+        absent = evidence.get("listener_absent") or {}
+        if evidence.get("refused") and absent.get("ipv4") and absent.get("ipv6"):
+            return {
+                "ok": True,
+                "kind": "dead_port",
+                "dead_port": int(candidate),
+                "host": "127.0.0.1",
+                "refused": True,
+                "listener_absent": {"ipv4": True, "ipv6": True},
+                "attempts": int(evidence.get("attempts") or attempts),
+                "timings": list(evidence.get("timings") or []),
+                "measured_unix": int(time.time()),
+            }
+    return {
+        "ok": False,
+        "kind": "dead_port",
+        "code": "dead_port_unavailable",
+        "problems": ["dead_port_unavailable"],
+    }
+
+
 PHASE_LAUNCH_ORDER = ("P1A", "P1B", "FULL_P1", "CRASH", "P2")
 
 
@@ -2082,15 +2324,15 @@ def execute_measurement_phase(
     resume: Optional[Callable[[object], bool]] = None,
     on_terminate: Optional[Callable[[OwnedProcess], None]] = None,
     supervisor: Optional[Callable[[LaunchSession], dict]] = None,
-    observation=None,
+    timeout: Optional[float] = None,
+    dead_port_probe=None,
 ) -> dict:
     """Tool-owned measurement launch path for P1A→P1B→FULL_P1→CRASH/P2.
 
-    Prerequisite receipts are enforced by :func:`isolation_certificate.prepare_session`,
-    so P1B cannot run before P1A, FULL_P1 before P1B, and CRASH/P2 before FULL_P1.
-    Nothing here enables an AI capability or a match: it only produces measured
-    phase receipts. The certificate-backed plan gates are skipped for role phases
-    because the certificate is what these runs build.
+    H3/R3: CRASH is triggered by the tool (env-gated staged guard error) and read
+    back from the retained handles; P2's dead port is selected and measured by the
+    tool before spawn. Nothing here enables an AI capability or a match. Any
+    post-spawn exception/KeyboardInterrupt records the global lockout and re-raises.
     """
     import isolation_certificate
 
@@ -2111,75 +2353,112 @@ def execute_measurement_phase(
     def backup_verify() -> dict:
         return check_backup_evidence(backup_root, sources)
 
-    prepared = isolation_certificate.prepare_session(
-        staging_root,
-        live=live_map,
-        session_id=session_id,
-        port=port if phase != "P1A" else None,
-        closed_check=closed_check,
-        phase=phase,
-        backup_verify=backup_verify,
-    )
-    if not prepared.get("ok"):
-        return {"code": "measurement_refused", "phase": phase, "problems": prepared.get("problems", [])}
-    open_session = prepared["record"]
-    if phase == "P1A":
-        plan = build_bootstrap_plan(
-            staging_root=staging_root,
-            live_install_root=live_install_root,
-            backup_root=backup_root,
-            enumerator=enumerator,
-            session_id=session_id,
-            live_appdata_root=appdata_root,
-            steam_root=steam_root,
-        )
-        session = execute_bootstrap(
-            plan,
-            staging_root=staging_root,
-            popen=popen,
-            create_time_reader=create_time_reader,
-            enumerator=enumerator,
-            job_factory=job_factory,
-            resume=resume,
-            on_terminate=on_terminate,
-            open_session=open_session,
-        )
-    else:
-        plan = build_launch_plan(
-            staging_root=staging_root,
-            port=port,
-            live_install_root=live_install_root,
-            backup_root=backup_root,
-            enumerator=enumerator,
-            session_id=session_id,
-            live_appdata_root=appdata_root,
-            steam_root=steam_root,
-            require_certificate=False,
-        )
-        session = execute_launch(
-            plan,
-            staging_root=staging_root,
-            live_install_root=live_install_root,
-            popen=popen,
-            create_time_reader=create_time_reader,
-            enumerator=enumerator,
-            job_factory=job_factory,
-            resume=resume,
-            on_terminate=on_terminate,
-            open_session=open_session,
-            require_certificate=False,
-        )
-    if not isinstance(session, LaunchSession) or not session.ok:
-        isolation_certificate.record_session_failure(
-            staging_root, session_id=session_id, reason=str(getattr(session, "code", "launch_failed"))
-        )
-        return {"ok": False, "code": "measurement_launch_failed", "phase": phase,
-                "result": _as_dict(session)}
+    measurement_setup = None
+    launch_port = port
+    if phase == "P2":
+        dead = measure_dead_port(port=port, prober=dead_port_probe)
+        if not dead.get("ok"):
+            return {"ok": False, "code": dead.get("code", "dead_port_unavailable"), "phase": phase,
+                    "problems": dead.get("problems", ["dead_port_unavailable"])}
+        launch_port = int(dead["dead_port"])
+        measurement_setup = dead
+    elif phase == "CRASH":
+        measurement_setup = {"kind": "crash", "stimulus": "env_gated_guard_error"}
+
+    session = None
     try:
+        prepared = isolation_certificate.prepare_session(
+            staging_root,
+            live=live_map,
+            session_id=session_id,
+            port=launch_port if phase != "P1A" else None,
+            closed_check=closed_check,
+            phase=phase,
+            backup_verify=backup_verify,
+            measurement_setup=measurement_setup,
+        )
+        if not prepared.get("ok"):
+            return {"code": "measurement_refused", "phase": phase, "problems": prepared.get("problems", [])}
+        open_session = prepared["record"]
+        if phase == "P1A":
+            plan = build_bootstrap_plan(
+                staging_root=staging_root,
+                live_install_root=live_install_root,
+                backup_root=backup_root,
+                enumerator=enumerator,
+                session_id=session_id,
+                live_appdata_root=appdata_root,
+                steam_root=steam_root,
+            )
+            session = execute_bootstrap(
+                plan,
+                staging_root=staging_root,
+                backup_root=backup_root,
+                live_install_root=live_install_root,
+                live_appdata_root=appdata_root,
+                steam_root=steam_root,
+                popen=popen,
+                create_time_reader=create_time_reader,
+                enumerator=enumerator,
+                job_factory=job_factory,
+                resume=resume,
+                on_terminate=on_terminate,
+                open_session=open_session,
+            )
+        else:
+            plan = build_launch_plan(
+                staging_root=staging_root,
+                port=launch_port,
+                live_install_root=live_install_root,
+                backup_root=backup_root,
+                enumerator=enumerator,
+                session_id=session_id,
+                live_appdata_root=appdata_root,
+                steam_root=steam_root,
+                require_certificate=False,
+            )
+            session = execute_launch(
+                plan,
+                staging_root=staging_root,
+                backup_root=backup_root,
+                live_install_root=live_install_root,
+                live_appdata_root=appdata_root,
+                steam_root=steam_root,
+                popen=popen,
+                create_time_reader=create_time_reader,
+                enumerator=enumerator,
+                job_factory=job_factory,
+                resume=resume,
+                on_terminate=on_terminate,
+                open_session=open_session,
+                require_certificate=False,
+                measure_crash=(phase == "CRASH"),
+                measure_p2=(phase == "P2"),
+            )
+        if not isinstance(session, LaunchSession) or not session.ok:
+            isolation_certificate.record_session_failure(
+                staging_root, session_id=session_id, reason=str(getattr(session, "code", "launch_failed"))
+            )
+            return {"ok": False, "code": "measurement_launch_failed", "phase": phase,
+                    "result": _as_dict(session)}
+        owned_pids = [record.pid for record in session.records]
+
+        def unexpected(statuses=None) -> dict:
+            live = check_live_balatro_closed(enumerator, live_install_root)
+            if not live.get("ok"):
+                return live
+            return check_no_staged_session(
+                enumerator, staging_root, live_install_root, ignore_pids=owned_pids
+            )
+
         supervision = (
             supervisor(session)
             if supervisor is not None
-            else supervise_session(session, timeout=plan.get("timeout"))
+            else supervise_session(
+                session,
+                timeout=timeout if timeout is not None else plan.get("timeout"),
+                unexpected_check=unexpected,
+            )
         )
         if not supervision.get("ok"):
             isolation_certificate.record_session_failure(
@@ -2192,12 +2471,21 @@ def execute_measurement_phase(
             session_id=session_id,
             session=session,
             live=live_map,
-            port=port if phase != "P1A" else None,
-            observation=observation,
+            port=launch_port if phase != "P1A" else None,
+            live_closed=closed_check,
         )
         return {"phase": phase, "supervision": supervision, "receipt": receipt}
+    except BaseException as error:  # noqa: BLE001
+        try:
+            isolation_certificate.record_session_failure(
+                staging_root, session_id=session_id, reason=f"exception:{type(error).__name__}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     finally:
-        session.close()
+        if isinstance(session, LaunchSession):
+            session.close()
 
 
 def prepare_match_session(
@@ -2428,6 +2716,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 live_appdata_root=args.appdata,
                 steam_root=args.steam_root,
                 backup_root=args.backup_root,
+                timeout=args.timeout,
             )
             _emit({"plan": redacted_plan(plan), "measurement": result})
             return 0 if result.get("receipt", {}).get("ok") else 3

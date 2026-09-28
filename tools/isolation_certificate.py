@@ -79,7 +79,7 @@ PHASE_EVIDENCE = {
     "P1B": ("steam_marker", "steam_post", "guard", "mp", "main"),
     "FULL_P1": ("steam_marker", "steam_post", "guard", "mp", "save_thread", "main"),
     "CRASH": ("save_thread", "guard"),
-    "P2": ("steam_marker", "steam_post", "mp", "guard"),
+    "P2": ("steam_marker", "steam_post", "mp", "guard", "p2"),
 }
 PHASE_PREREQUISITE = {"P1A": None, "P1B": "P1A", "FULL_P1": "P1B", "CRASH": "FULL_P1", "P2": "FULL_P1"}
 PROBE_BY_LABEL = {
@@ -89,6 +89,7 @@ PROBE_BY_LABEL = {
     "mp": staging.PROBE_MP,
     "steam_marker": PROBE_STEAM_MARKER,
     "steam_post": PROBE_STEAM_POST,
+    "p2": staging.PROBE_P2,
 }
 ALL_PROBE_NAMES = (
     staging.PROBE_MAIN,
@@ -97,6 +98,7 @@ ALL_PROBE_NAMES = (
     staging.PROBE_MP,
     PROBE_STEAM_MARKER,
     PROBE_STEAM_POST,
+    staging.PROBE_P2,
 )
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -407,9 +409,11 @@ def _mods_role_entry(staging_root, role: str) -> dict:
     paths = staging.role_paths(staging_root, role)
     endpoint = staging.verify_staged_endpoints(staging_root, roles=(role,))["roles"].get(role, {"ok": False})
     matches = staging.find_multiplayer_mod(paths.mods)
-    suppression = (
-        staging.scan_network_suppressions(paths.mods).get("applied") if paths.mods.is_dir() else None
-    )
+    if paths.mods.is_dir():
+        scan = staging.scan_network_suppressions(paths.mods)
+        suppression = {"applied": scan.get("applied") or {}, "ok": bool(scan.get("ok"))}
+    else:
+        suppression = {"applied": {}, "ok": False}
     return {
         "mods_digest": staging._tree_digest(paths.mods, staging.MODS_HASH_POLICY),
         "role_parity_digest": _role_parity_digest(paths),
@@ -524,10 +528,15 @@ def _layer_problems(layer_n: Mapping, layer_m: Mapping, port) -> list:
 # ---------------------------------------------------------------------------
 
 def snapshot_root_keys(live: Mapping) -> list:
-    """Game-relevant live roots only (never the whole Steam installation)."""
+    """Game-relevant live roots only (never the whole Steam installation).
+
+    The bare ``steam_userdata`` key duplicates the first profile app dir, so only
+    the explicit ``steam_userdata/<profile>`` keys are snapshotted; that keeps the
+    snapshot root keys identical to the verified backup root keys.
+    """
     keys: list = []
     for key in live:
-        if key in ("install", "appdata", "steam_userdata") or key.startswith("steam_userdata/"):
+        if key in ("install", "appdata") or key.startswith("steam_userdata/"):
             keys.append(key)
     return sorted(keys)
 
@@ -753,6 +762,42 @@ def _copy_receipt_evidence(staging_root, evidence_key: str, items: Mapping) -> d
     return stored
 
 
+def _select_dump_files(paths, fresh_dumps: Sequence) -> dict:
+    """Choose the actual Lovely ``main.lua`` dump (else the first fresh dump)."""
+    mods = Path(paths.mods)
+    chosen = None
+    for rel in fresh_dumps:
+        if Path(str(rel)).name.lower() == "main.lua":
+            chosen = rel
+            break
+    if chosen is None and fresh_dumps:
+        chosen = fresh_dumps[0]
+    if chosen is None:
+        return {}
+    source = mods / str(chosen)
+    if not source.is_file():
+        return {}
+    return {"lovely_dump": source}
+
+
+def _write_measurement_artifact(staging_root, evidence_key: str, phase: str, measured: Mapping) -> dict:
+    """Persist the tool-derived measurement as an immutable, hashed raw artifact."""
+    staging_root = Path(staging_root).resolve()
+    payload = {
+        "schema": "aisparring.phase_measurement.v1",
+        "phase": phase,
+        "measured": dict(measured),
+        "measured_unix": int(time.time()),
+    }
+    text = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+    path = _receipts_dir(staging_root) / evidence_key / "measurement.json"
+    written = _write_immutable(staging_root, path, None, text=text)
+    return {
+        "copy": path.relative_to(staging_root).as_posix(),
+        "copy_sha256": written["sha256"],
+    }
+
+
 def _receipt_open_record(staging_root, session_id: str):
     return _read_json(_open_record_path(staging_root, session_id))
 
@@ -781,6 +826,155 @@ def _owned_all_exited(session) -> bool:
     if not isinstance(statuses, (list, tuple)):
         return False
     return not any(bool((item or {}).get("running")) for item in statuses)
+
+
+def _owned_exit_code(owned):
+    """Read the exit code from a *retained* owned handle, never by reopening a PID."""
+    handle = getattr(owned, "handle", None)
+    if handle is None:
+        return None
+    code = getattr(handle, "returncode", None)
+    if code is None and hasattr(handle, "poll"):
+        try:
+            code = handle.poll()
+        except Exception:  # noqa: BLE001
+            code = None
+    if isinstance(code, int) and not isinstance(code, bool):
+        return code
+    return None
+
+
+def _owned_exit_codes(session) -> dict:
+    """Per-role exit codes read from the retained handles (tool-owned, not caller)."""
+    codes: dict = {}
+    for record in getattr(session, "records", ()) or ():
+        role = getattr(record, "role", None)
+        if role is not None:
+            codes.setdefault(str(role), None)
+    for owned in getattr(session, "owned", ()) or ():
+        role = getattr(owned, "role", None)
+        if role is None:
+            continue
+        codes[str(role)] = _owned_exit_code(owned)
+    return codes
+
+
+def _measure_crash(session) -> dict:
+    """CRASH evidence derived from the retained handles and the measured stimulus.
+
+    No caller-supplied observation is read: the abnormal exit code comes from the
+    owned Popen handles and cleanup is the retained-ownership exit measurement.
+    """
+    codes = _owned_exit_codes(session)
+    abnormal = {
+        role: code
+        for role, code in codes.items()
+        if isinstance(code, int) and not isinstance(code, bool) and code != 0
+    }
+    exited = _owned_all_exited(session)
+    return {
+        "crash_stimulus": "env_gated_guard_error",
+        "crash_exit_codes": codes,
+        "crash_observed": bool(abnormal),
+        "cleanup_ok": bool(exited),
+        "owned_exited": bool(exited),
+        "exit_code_measured": all(value is not None for value in codes.values()) if codes else False,
+    }
+
+
+P2_REQUIRED_SUBGATES = ("initial_failure", "reconnect", "keepalive")
+
+
+def _measure_p2(staging_root, record: Mapping, session, port) -> dict:
+    """P2 evidence derived from the tool's dead-port setup and the staged artifact.
+
+    The dead-port setup (both-family listener absence + a real refused connect) is
+    measured and persisted by the tool *before* spawn; the attempt/reconnect/
+    keepalive subgates come from the env-gated staged MP instrumentation artifact
+    copied into the receipt. No caller observation is accepted.
+    """
+    setup = record.get("measurement_setup") or {}
+    dead = None
+    listener_absent = {"ipv4": False, "ipv6": False}
+    refused = False
+    probe_attempts = 0
+    timings: list = []
+    if isinstance(setup, Mapping) and setup.get("kind") == "dead_port":
+        dead = setup.get("dead_port")
+        listener_absent = {
+            "ipv4": bool((setup.get("listener_absent") or {}).get("ipv4")),
+            "ipv6": bool((setup.get("listener_absent") or {}).get("ipv6")),
+        }
+        refused = bool(setup.get("refused"))
+        probe_attempts = setup.get("attempts") if _is_int(setup.get("attempts")) else 0
+        timings = list(setup.get("timings") or [])
+    if not _is_port(dead):
+        dead = int(port) if _is_port(port) else None
+
+    artifact = _read_p2_probe_fields(staging_root, record) or {}
+    # A start marker or an attempt count is not a measured connection failure: the
+    # initial-failure subgate is covered only when the engine artifact reports an
+    # explicit observed connect failure, never by the tool's own dead-port probe or
+    # by the mere intent to start the MP thread.
+    engine_attempts = artifact.get("attempts") if _is_int(artifact.get("attempts")) else None
+    observed_failure = any(
+        str(artifact.get(key)).strip().lower() in ("true", "1")
+        for key in ("connect_refused", "connect_failed", "failure")
+    )
+    covered: list = []
+    if observed_failure and engine_attempts is not None and engine_attempts >= 1:
+        covered.append("initial_failure")
+    if "initial_failure" in covered and _is_int(artifact.get("reconnect")) and artifact.get("reconnect") >= 1:
+        covered.append("reconnect")
+    if "initial_failure" in covered and str(artifact.get("keepalive")).strip().lower() in ("true", "1"):
+        covered.append("keepalive")
+    pending = [name for name in P2_REQUIRED_SUBGATES if name not in covered]
+    attempts = max(probe_attempts, engine_attempts or 0)
+    return {
+        "dead_port": dead,
+        "refused": bool(refused),
+        "attempts": attempts,
+        "probe_attempts": probe_attempts,
+        "engine_attempts": engine_attempts,
+        "attempt_timings": timings,
+        "listener_absent": listener_absent,
+        "pinned_endpoint": {
+            "url": artifact.get("url"),
+            "port": artifact.get("port"),
+            "nonce": artifact.get("nonce"),
+        },
+        "covered_subgates": covered,
+        "pending_subgates": pending,
+        "p2_artifact_present": bool(artifact),
+    }
+
+
+def _read_p2_probe_fields(staging_root, record: Mapping) -> dict:
+    """Parse the staged P2 instrumentation artifact if the tool launcher left it."""
+    try:
+        paths = staging.role_paths(staging_root, "ai")
+    except Exception:  # noqa: BLE001
+        return {}
+    target = paths.data / "Balatro" / staging.PROBE_P2
+    if not target.is_file():
+        return {}
+    try:
+        fields = staging.parse_probe(target.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return {}
+    if fields.get("nonce") and fields.get("nonce") != record.get("nonce"):
+        return {}
+    for key in ("port", "attempts", "reconnect", "keepalive"):
+        if key in fields:
+            fields[key] = _coerce_int(fields[key])
+    return fields
+
+
+def _coerce_int(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return value
 
 
 def _probe_fields(staging_root, role: str, receipt: Mapping) -> dict:
@@ -834,10 +1028,14 @@ def _validate_crash_observation(receipt: Mapping) -> list:
         problems.append("CRASH_exit_codes_missing")
     elif not any(_is_int(value) and value != 0 for value in codes.values()):
         problems.append("CRASH_no_abnormal_exit")
+    if measured.get("exit_code_measured") is not True:
+        problems.append("CRASH_exit_code_unmeasured")
     if measured.get("cleanup_ok") is not True:
         problems.append("CRASH_cleanup_missing")
     if measured.get("crash_observed") is not True:
         problems.append("CRASH_not_observed")
+    if measured.get("crash_stimulus") != "env_gated_guard_error":
+        problems.append("CRASH_stimulus_unbound")
     return problems
 
 
@@ -848,9 +1046,30 @@ def _validate_p2_observation(receipt: Mapping) -> list:
         problems.append("P2_dead_port_missing")
     if measured.get("refused") is not True:
         problems.append("P2_refused_missing")
+    absent = measured.get("listener_absent") or {}
+    if absent.get("ipv4") is not True:
+        problems.append("P2_listener_absent_ipv4_missing")
+    if absent.get("ipv6") is not True:
+        problems.append("P2_listener_absent_ipv6_missing")
     if not _is_int(measured.get("attempts")) or measured.get("attempts", 0) < 1:
         problems.append("P2_attempts_missing")
+    endpoint = measured.get("pinned_endpoint") or {}
+    if endpoint.get("url") != "127.0.0.1":
+        problems.append("P2_endpoint_not_loopback")
+    elif not _is_port(endpoint.get("port")):
+        problems.append("P2_endpoint_port_missing")
+    elif _is_port(measured.get("dead_port")) and int(endpoint["port"]) != int(measured["dead_port"]):
+        problems.append("P2_endpoint_port_mismatch")
     return problems
+
+
+def _validate_p2_coverage(receipt: Mapping) -> list:
+    """Never stamp a broad P2 pass from a single initial-failure event."""
+    measured = receipt.get("measured") or {}
+    pending = measured.get("pending_subgates")
+    if not isinstance(pending, list):
+        return ["P2_coverage_unbound"]
+    return [f"P2_pending:{str(name)}" for name in pending]
 
 
 def _validate_receipt_against_layers(phase: str, receipt: Mapping, layer_n: Mapping, layer_m: Mapping, port) -> list:
@@ -904,7 +1123,7 @@ def _validate_receipt_against_layers(phase: str, receipt: Mapping, layer_n: Mapp
     return problems
 
 
-def _measured_for_phase(phase: str, session, observation, layer_n, layer_m, port) -> dict:
+def _measured_for_phase(phase: str, session, staging_root, record, layer_n, layer_m, port) -> dict:
     measured: dict = {}
     if phase == "P1A":
         measured["bootstrap_install_digest"] = (layer_n.get("bootstrap") or {}).get("install_digest")
@@ -919,15 +1138,9 @@ def _measured_for_phase(phase: str, session, observation, layer_n, layer_m, port
         measured["role_parity_digest"] = next(iter(parities)) if len(parities) == 1 else None
         measured["port"] = int(port) if _is_port(port) else None
     elif phase == "CRASH":
-        observation = observation or {}
-        measured["crash_exit_codes"] = dict(observation.get("crash_exit_codes") or {})
-        measured["cleanup_ok"] = bool(observation.get("cleanup_ok"))
-        measured["crash_observed"] = bool(observation.get("crash_observed"))
+        measured.update(_measure_crash(session))
     elif phase == "P2":
-        observation = observation or {}
-        measured["dead_port"] = observation.get("dead_port")
-        measured["refused"] = bool(observation.get("refused"))
-        measured["attempts"] = observation.get("attempts")
+        measured.update(_measure_p2(staging_root, record, session, port))
     return measured
 
 
@@ -972,14 +1185,15 @@ def record_phase_receipt(
     session,
     live,
     port=None,
-    observation=None,
+    live_closed=None,
 ) -> dict:
     """Tool-owned recorder: take after-snapshot, re-verify probes, write an immutable receipt.
 
     The caller supplies only the completed ``session`` (an exited ``LaunchSession``),
-    the session id and optional launcher-observed ``observation`` for the crash and
-    dead-port phases. Every digest, nonce binding and snapshot is recomputed here
-    from disk. No caller-supplied measured/evidence dictionary is accepted.
+    the session id and a real ``live_closed`` callable. Every digest, nonce binding,
+    snapshot and the CRASH/P2 measurement are recomputed here from retained handles,
+    the tool's dead-port setup and the staged artifacts. No caller-supplied
+    measured/evidence/observation dictionary is accepted.
     """
     staging_root = Path(staging_root).resolve()
     problems = _phase_receipt_problems(phase)
@@ -995,6 +1209,14 @@ def record_phase_receipt(
         problems.append("open_session_missing")
     elif record.get("status") != "open":
         problems.append("open_session_not_open")
+    if not callable(live_closed):
+        problems.append("live_closed_check_unavailable")
+    else:
+        try:
+            if not bool(live_closed()):
+                problems.append("live_game_running")
+        except Exception:  # noqa: BLE001
+            problems.append("live_closed_check_failed")
     if problems:
         return _record_receipt_failure(staging_root, session_id, problems)
 
@@ -1002,6 +1224,11 @@ def record_phase_receipt(
     spawn_time = record.get("spawn_time")
     if getattr(session, "nonce", None) != nonce:
         return _record_receipt_failure(staging_root, session_id, ["session_nonce_mismatch"])
+    closure = {
+        "owned_exited": True,
+        "live_closed": True,
+        "checked_unix": int(time.time()),
+    }
     live_roots = record.get("live_roots") or {}
     current_live = {key: str(value) for key, value in _normalize_live(live).items()}
     if {key: _norm_root(value) for key, value in live_roots.items()} != {
@@ -1016,12 +1243,13 @@ def record_phase_receipt(
         return _record_receipt_failure(staging_root, session_id, snapshot_problems)
 
     roles = PHASE_ROLES[phase]
+    labels = PHASE_EVIDENCE.get(phase, ())
     probe_problems: list = []
     evidence_items: dict = {}
+    dump_items: dict = {}
     for role in roles:
         paths = staging._paths_for_role(staging_root, role)
         save_dir = paths.data / "Balatro"
-        labels = PHASE_EVIDENCE.get(phase, ())
         evidence_items[role] = {}
         for label in labels:
             source = save_dir / PROBE_BY_LABEL[label]
@@ -1032,9 +1260,31 @@ def record_phase_receipt(
     if probe_problems:
         return _record_receipt_failure(staging_root, session_id, probe_problems)
 
+    # M2: use the strong exact-path/MP-endpoint/probe and fresh Lovely checkers for
+    # every required role, and copy the actual Lovely dump into receipt evidence.
+    strong_problems: list = []
+    for role in roles:
+        paths = staging._paths_for_role(staging_root, role)
+        probe_verdict = staging.collect_role_probes(
+            paths,
+            nonce,
+            spawn_time,
+            require_mp=bool(PHASE_REQUIRE_MP.get(phase, False)),
+            expected_port=port if _is_port(port) else None,
+            required_names=[PROBE_BY_LABEL[label] for label in labels if label in PROBE_BY_LABEL],
+        )
+        strong_problems.extend(f"{role}:{item}" for item in probe_verdict.get("problems", ()))
+        lovely = staging.check_lovely_evidence(
+            staging_root, role, spawn_time, require_dump=True
+        )
+        strong_problems.extend(f"{role}:{item}" for item in lovely.get("problems", ()))
+        dump_items[role] = _select_dump_files(paths, lovely.get("fresh_dumps") or [])
+    if strong_problems:
+        return _record_receipt_failure(staging_root, session_id, strong_problems)
+
     layer_n = collect_layer_n(staging_root, live=live)
     layer_m = collect_layer_m(staging_root, live=live)
-    measured = _measured_for_phase(phase, session, observation, layer_n, layer_m, port)
+    measured = _measured_for_phase(phase, session, staging_root, record, layer_n, layer_m, port)
 
     evidence_key = _digest(
         {
@@ -1048,17 +1298,33 @@ def record_phase_receipt(
         }
     )
     copies = _copy_receipt_evidence(staging_root, evidence_key, evidence_items)
+    dump_copies = (
+        _copy_receipt_evidence(staging_root, evidence_key, dump_items) if any(dump_items.values()) else {}
+    )
+    measurement_artifact = _write_measurement_artifact(
+        staging_root, evidence_key, phase, measured
+    )
 
     probes: dict = {}
     for role in roles:
         probes[role] = {}
-        for label in PHASE_EVIDENCE.get(phase, ()):
+        for label in labels:
             source = evidence_items[role][label]
             probes[role][label] = {
                 "copy": copies[role][label]["copy"],
                 "copy_sha256": copies[role][label]["copy_sha256"],
                 "source_sha256": copies[role][label]["source_sha256"],
             }
+    dumps: dict = {}
+    for role, items in dump_copies.items():
+        dumps[role] = {
+            label: {
+                "copy": item["copy"],
+                "copy_sha256": item["copy_sha256"],
+                "source_sha256": item["source_sha256"],
+            }
+            for label, item in items.items()
+        }
 
     before_roots = (before.get("roots") or {}) if isinstance(before, Mapping) else {}
     after_roots = after.get("roots") or {}
@@ -1081,10 +1347,15 @@ def record_phase_receipt(
         "pids": _owned_pids(session),
         "port": int(port) if _is_port(port) else None,
         "live_roots": current_live,
-        "before": {"digest": before.get("digest"), "roots": _digest_roots(before)},
+        "before": {"digest": before.get("digest"), "roots": before.get("roots") or {}},
         "after": {"digest": after.get("digest"), "roots": _digest_roots(after)},
+        "before_files": record.get("before_files") or {},
+        "after_files": after_roots,
         "changed_roots": changed,
+        "closure": closure,
         "probes": probes,
+        "dumps": dumps,
+        "measurement_artifact": measurement_artifact,
         "measured": measured,
         "evidence_key": evidence_key,
     }
@@ -1138,10 +1409,75 @@ def _validate_receipt(staging_root, phase: str, receipt: Mapping) -> list:
         problems.append("receipt_live_diff")
     if receipt.get("before", {}).get("digest") != receipt.get("after", {}).get("digest"):
         problems.append("receipt_snapshot_digest_mismatch")
+    closure = receipt.get("closure")
+    if not isinstance(closure, Mapping):
+        problems.append("receipt_closure_missing")
+    else:
+        if closure.get("owned_exited") is not True:
+            problems.append("receipt_owned_process_running")
+        if closure.get("live_closed") is not True:
+            problems.append("receipt_live_game_open")
+    before_files = receipt.get("before_files")
+    after_files = receipt.get("after_files")
+    if not isinstance(before_files, Mapping) or not isinstance(after_files, Mapping):
+        problems.append("receipt_raw_manifest_missing")
+    else:
+        recomputed_before = {
+            key: staging._digest_of(entry or {})
+            for key, entry in _raw_root_files(before_files).items()
+        }
+        declared_before = {key: (entry or {}).get("digest") for key, entry in (receipt.get("before", {}).get("roots") or {}).items()}
+        if recomputed_before != declared_before:
+            problems.append("receipt_before_manifest_unbound")
+        recomputed_after = {
+            key: staging._digest_of(entry or {})
+            for key, entry in _raw_root_files(after_files).items()
+        }
+        declared_after = {key: (entry or {}).get("digest") for key, entry in (receipt.get("after", {}).get("roots") or {}).items()}
+        if recomputed_after != declared_after:
+            problems.append("receipt_after_manifest_unbound")
     problems.extend(_validate_receipt_probes(staging_root, phase, receipt))
+    problems.extend(_validate_receipt_dumps(staging_root, phase, receipt))
+    problems.extend(_validate_measurement_artifact(staging_root, receipt))
     layer_n = collect_layer_n(staging_root, live=receipt.get("live_roots"))
     layer_m = collect_layer_m(staging_root, live=receipt.get("live_roots"))
     problems.extend(_validate_receipt_against_layers(phase, receipt, layer_n, layer_m, receipt.get("port")))
+    return problems
+
+
+def _raw_root_files(manifest: Mapping) -> dict:
+    """Normalize both receipt raw-manifest shapes to ``key -> files`` maps."""
+    normalized: dict = {}
+    for key, entry in manifest.items():
+        if isinstance(entry, Mapping) and "files" in entry:
+            normalized[key] = entry.get("files") or {}
+        else:
+            normalized[key] = entry or {}
+    return normalized
+
+
+def _validate_receipt_dumps(staging_root, phase: str, receipt: Mapping) -> list:
+    problems: list = []
+    dumps = receipt.get("dumps") or {}
+    for role in PHASE_ROLES.get(phase, ()):
+        if not dumps.get(role):
+            problems.append(f"{phase}_{role}_lovely_dump_missing")
+            continue
+        for label, item in dumps[role].items():
+            copy = Path(staging_root) / item.get("copy", "")
+            if not copy.is_file() or staging.sha256_file(copy) != item.get("copy_sha256"):
+                problems.append(f"{phase}_{role}_{label}_dump_tampered")
+    return problems
+
+
+def _validate_measurement_artifact(staging_root, receipt: Mapping) -> list:
+    problems: list = []
+    artifact = receipt.get("measurement_artifact")
+    if not isinstance(artifact, Mapping):
+        return ["receipt_measurement_artifact_missing"]
+    copy = Path(staging_root) / artifact.get("copy", "")
+    if not copy.is_file() or staging.sha256_file(copy) != artifact.get("copy_sha256"):
+        problems.append("receipt_measurement_artifact_tampered")
     return problems
 
 
@@ -1255,8 +1591,14 @@ def _certificate_provisional(certificate: Mapping) -> dict:
         "receipts": certificate.get("receipts"),
         "evidence": {
             phase: {
-                role: {label: item.get("copy_sha256") for label, item in labels.items()}
-                for role, labels in (bundle.get("probes") or {}).items()
+                "probes": {
+                    role: {label: item.get("copy_sha256") for label, item in labels.items()}
+                    for role, labels in (bundle.get("probes") or {}).items()
+                },
+                "dumps": {
+                    role: {label: item.get("copy_sha256") for label, item in labels.items()}
+                    for role, labels in (bundle.get("dumps") or {}).items()
+                },
             }
             for phase, bundle in (certificate.get("evidence") or {}).items()
         },
@@ -1316,15 +1658,23 @@ def build_certificate(
             nonces.append(receipt.get("nonce"))
     if len(set(nonces)) != len(nonces):
         problems.append("phase_nonces_not_distinct")
+    problems.extend(_p2_coverage_problems(staging_root, receipt_ids))
     layer_n = collect_layer_n(staging_root, live=live)
     layer_m = collect_layer_m(staging_root, live=live, server_bind=server_bind)
     problems.extend(_layer_problems(layer_n, layer_m, port))
+    required_tools = set(bound_tool_specs())
     if tools is None:
         tools_map = collect_bound_tools()
         for name, entry in tools_map.items():
             if not entry.get("present"):
                 problems.append(f"bound_tool_missing:{name}")
     else:
+        if set(tools) != required_tools:
+            problems.append("bound_tools_incomplete")
+            for name in sorted(required_tools - set(tools)):
+                problems.append(f"bound_tool_missing:{name}")
+            for name in sorted(set(tools) - required_tools):
+                problems.append(f"bound_tool_unknown:{name}")
         tools_map, tool_problems = _validate_tools(tools)
         problems.extend(tool_problems)
     problems = sorted(set(problems))
@@ -1348,6 +1698,13 @@ def build_certificate(
                     for label, item in labels.items()
                 }
                 for role, labels in (receipt.get("probes") or {}).items()
+            },
+            "dumps": {
+                role: {
+                    label: {"copy": item.get("copy"), "copy_sha256": item.get("copy_sha256")}
+                    for label, item in labels.items()
+                }
+                for role, labels in (receipt.get("dumps") or {}).items()
             },
         }
     certificate = {
@@ -1384,7 +1741,14 @@ def build_certificate(
 def collect_bound_tools_check(proof: Mapping) -> tuple:
     problems: list = []
     current = collect_bound_tools()
-    for name, entry in (proof.get("tools") or {}).items():
+    stored = proof.get("tools") or {}
+    if set(stored) != set(current):
+        problems.append("bound_tools_incomplete")
+        for name in sorted(set(current) - set(stored)):
+            problems.append(f"bound_tool_missing:{name}")
+        for name in sorted(set(stored) - set(current)):
+            problems.append(f"bound_tool_unknown:{name}")
+    for name, entry in stored.items():
         actual = current.get(name)
         if actual is None or not actual.get("present"):
             problems.append(f"bound_tool_missing:{name}")
@@ -1393,6 +1757,14 @@ def collect_bound_tools_check(proof: Mapping) -> tuple:
         elif actual.get("sha256") != entry.get("sha256"):
             problems.append(f"bound_tool_changed:{name}")
     return current, problems
+
+
+def _p2_coverage_problems(staging_root, receipt_ids: Mapping) -> list:
+    receipt_id = (receipt_ids or {}).get("P2")
+    receipt = load_phase_receipt(staging_root, receipt_id) if _is_sha256(receipt_id) else None
+    if not isinstance(receipt, Mapping):
+        return []
+    return _validate_p2_coverage(receipt)
 
 
 def _certificate_receipt_problems(staging_root, certificate: Mapping) -> list:
@@ -1413,6 +1785,7 @@ def _certificate_receipt_problems(staging_root, certificate: Mapping) -> list:
             nonces.append(receipt.get("nonce"))
     if len(set(nonces)) != len(nonces):
         problems.append("phase_nonces_not_distinct")
+    problems.extend(_p2_coverage_problems(staging_root, receipts))
     return problems
 
 
@@ -1465,11 +1838,12 @@ def check_certificate(staging_root, live=None, port=None, server_bind=None) -> d
             problems.append("match_port_mismatch")
     problems.extend(_certificate_receipt_problems(staging_root, certificate))
     for phase, bundle in (certificate.get("evidence") or {}).items():
-        for role, labels in (bundle.get("probes") or {}).items():
-            for label, item in labels.items():
-                copy_path = staging_root / item.get("copy", "")
-                if not copy_path.is_file() or staging.sha256_file(copy_path) != item.get("copy_sha256"):
-                    problems.append(f"evidence_tampered:{phase}:{role}:{label}")
+        for kind in ("probes", "dumps"):
+            for role, labels in (bundle.get(kind) or {}).items():
+                for label, item in labels.items():
+                    copy_path = staging_root / item.get("copy", "")
+                    if not copy_path.is_file() or staging.sha256_file(copy_path) != item.get("copy_sha256"):
+                        problems.append(f"evidence_tampered:{phase}:{role}:{label}")
     recomputed = _digest(_certificate_provisional(certificate))
     if certificate_id != recomputed:
         problems.append("certificate_id_mismatch")
@@ -1593,6 +1967,22 @@ def bind_open_session_pids(staging_root, session_id: str, pids: Mapping) -> dict
     return bind_open_session(staging_root, session_id, pids=pids)
 
 
+def record_measurement_setup(staging_root, session_id: str, *, setup: Mapping) -> dict:
+    """Persist tool-measured setup (e.g. P2 dead-port evidence) on the open record.
+
+    This is the tool's own pre-spawn measurement, written to the exclusive open
+    record so :func:`record_phase_receipt` derives CRASH/P2 evidence from it rather
+    than from any caller observation dict.
+    """
+    record = _receipt_open_record(staging_root, session_id)
+    if not isinstance(record, Mapping) or record.get("status") != "open":
+        return {"ok": False, "code": "open_session_missing"}
+    record = dict(record)
+    record["measurement_setup"] = dict(setup)
+    _write_open_record(staging_root, record)
+    return {"ok": True, "code": "measurement_setup_recorded"}
+
+
 # ---------------------------------------------------------------------------
 # Per-session prepare / verdict
 # ---------------------------------------------------------------------------
@@ -1603,11 +1993,11 @@ def prepare_session(
     live,
     session_id: str,
     port=None,
-    nonce: Optional[str] = None,
     closed_check=None,
     phase: str = MATCH,
     backup_id=None,
     backup_verify=None,
+    measurement_setup=None,
 ) -> dict:
     """Closed-game preparation: verify prerequisites/backup, mint one nonce, open exclusively.
 
@@ -1617,8 +2007,14 @@ def prepare_session(
     phase receipt instead of a certificate. A second open record is refused until
     the previous one is closed by :func:`record_phase_receipt`,
     :func:`record_session_verdict` or :func:`record_session_no_spawn`.
-    ``backup_verify`` is a callable returning ``{"ok": bool, ...}`` that verifies
-    the fresh backup; it is required (a caller boolean is never enough).
+
+    ``backup_verify`` is a callable returning the **real** ``check_backup_evidence``
+    verdict: the record binds its cryptographic manifest identity and every
+    verified per-root digest, and the before-snapshot is required to match those
+    digests for the identical live-root keys. A caller-supplied ``backup_id`` must
+    equal that evidence id (or the manifest label it authenticated); it can never
+    stand in for missing evidence. The nonce is always minted here (never a caller
+    value), and a session id can never be reused.
     """
     staging_root = Path(staging_root).resolve()
     problems = _session_id_problems(session_id)
@@ -1639,12 +2035,18 @@ def prepare_session(
         problems.append("certificate_locked_out")
     if list_open_records(staging_root):
         problems.append("session_already_open")
+    if _receipt_open_record(staging_root, session_id) is not None:
+        problems.append("session_id_reused")
     if phase == MATCH:
         verdict = check_certificate(staging_root, live=live, port=port)
         if not verdict.get("ok"):
             problems.append(f"certificate_not_valid:{verdict.get('code')}")
     else:
         problems.extend(_phase_prerequisite_problems(staging_root, phase))
+
+    evidence_id: Optional[str] = None
+    evidence_label = None
+    evidence_roots: dict = {}
     if not callable(backup_verify):
         problems.append("backup_verify_required")
     else:
@@ -1656,9 +2058,23 @@ def prepare_session(
             if not isinstance(verdict, Mapping) or not verdict.get("ok"):
                 problems.append("backup_not_verified")
             else:
-                backup_id = backup_id or verdict.get("digest") or verdict.get("id")
-                if not backup_id:
-                    problems.append("backup_id_missing")
+                evidence_id = verdict.get("backup_id")
+                evidence_label = verdict.get("backup_label")
+                roots_raw = verdict.get("roots")
+                if (
+                    not _is_sha256(evidence_id)
+                    or not isinstance(roots_raw, Mapping)
+                    or not roots_raw
+                ):
+                    problems.append("backup_evidence_unbound")
+                else:
+                    for key, entry in roots_raw.items():
+                        digest = (entry or {}).get("files_digest") if isinstance(entry, Mapping) else None
+                        evidence_roots[str(key)] = digest
+                    if not all(_is_sha256(value) for value in evidence_roots.values()):
+                        problems.append("backup_evidence_unbound")
+                if backup_id is not None and backup_id not in (evidence_id, evidence_label):
+                    problems.append("backup_id_mismatch")
     if problems:
         return {
             "ok": False,
@@ -1672,7 +2088,26 @@ def prepare_session(
     removed_attestations = rotate_attestation_files(staging_root)
     restore_mutable_paths(staging_root)
     before = snapshot_live(live)
-    session_nonce = nonce or secrets.token_hex(16)
+    before_roots = {
+        key: (entry or {}).get("digest") for key, entry in (before.get("roots") or {}).items()
+    }
+    tie_problems: list = []
+    if set(evidence_roots) != set(before_roots):
+        tie_problems.append("backup_roots_mismatch")
+    else:
+        for key, digest in evidence_roots.items():
+            if before_roots.get(key) != digest:
+                tie_problems.append(f"backup_snapshot_mismatch:{key}")
+    if tie_problems:
+        return {
+            "ok": False,
+            "code": "session_prepare_refused",
+            "session_id": session_id,
+            "phase": phase,
+            "nonce": None,
+            "problems": sorted(set(tie_problems)),
+        }
+    session_nonce = secrets.token_hex(16)
     _path, certificate = _load_current(staging_root)
     record = {
         "schema": OPEN_SESSION_SCHEMA,
@@ -1681,10 +2116,13 @@ def prepare_session(
         "nonce": session_nonce,
         "port": int(port) if port is not None else None,
         "certificate_id": (certificate or {}).get("certificate_id"),
-        "backup_id": backup_id,
+        "backup_id": evidence_id,
+        "backup_label": evidence_label,
+        "backup_roots": evidence_roots,
         "live_roots": _normalize_live(live),
         "before": {"digest": before.get("digest"), "roots": _digest_roots(before)},
         "before_files": before.get("roots"),
+        "measurement_setup": dict(measurement_setup) if measurement_setup else None,
         "spawn_time": None,
         "pids": {},
         "status": "open",
@@ -1699,7 +2137,8 @@ def prepare_session(
         "nonce": session_nonce,
         "port": port,
         "certificate_id": record["certificate_id"],
-        "backup_id": backup_id,
+        "backup_id": evidence_id,
+        "backup_label": evidence_label,
         "open_record": str(path),
         "record": record,
         "removed_probes": removed,
@@ -1816,10 +2255,13 @@ def record_session_verdict(
     if after.get("measured_unix", 0) < int(record.get("created_unix") or 0):
         return {"ok": False, "code": "session_verdict_invalid", "problems": ["snapshot_time_order"]}
     expected_backup = record.get("backup_id")
+    allowed_backups = {expected_backup, record.get("backup_label")} - {None}
+    if not _is_sha256(expected_backup):
+        return {"ok": False, "code": "session_verdict_invalid", "problems": ["backup_evidence_missing"]}
     effective_backup = backup_id if backup_id is not None else expected_backup
     if not effective_backup:
         return {"ok": False, "code": "session_verdict_invalid", "problems": ["backup_id_required"]}
-    if expected_backup and backup_id is not None and backup_id != expected_backup:
+    if backup_id is not None and backup_id not in allowed_backups:
         return {"ok": False, "code": "session_verdict_invalid", "problems": ["backup_id_mismatch"]}
     if certificate_id is None:
         certificate_id = record.get("certificate_id")
@@ -2046,6 +2488,8 @@ def write_launcher_attestation(
             problems.append("open_session_nonce_mismatch")
         if not record.get("pids"):
             problems.append("open_session_pids_missing")
+        if record.get("phase") != MATCH:
+            problems.append("attestation_phase_not_match")
     if spawn_time is None and isinstance(record, Mapping):
         spawn_time = record.get("spawn_time")
     if not _is_number(spawn_time):
@@ -2060,6 +2504,8 @@ def write_launcher_attestation(
             "code": "attestation_refused",
             "problems": [f"certificate_not_valid:{verdict.get('code')}"],
         }
+    if record.get("certificate_id") != verdict.get("certificate_id"):
+        return {"ok": False, "code": "attestation_refused", "problems": ["attestation_certificate_mismatch"]}
     content_hash = next(
         (
             entry.get("role_parity_digest")

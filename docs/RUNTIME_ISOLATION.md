@@ -341,16 +341,17 @@ All entry points below are also re-exported as thin wrappers on `staging`
 | `isolation_certificate.bound_tool_specs()` | the bound tool set: `staging`, `launcher`, `prepare_server`, `practice_service`, `practice_host`, `certificate_checker` |
 | `isolation_certificate.collect_layer_n(staging_root, live=None)` | measured native layer N |
 | `isolation_certificate.collect_layer_m(staging_root, live=None, server_bind=None)` | measured Mods layer M |
-| `isolation_certificate.build_certificate(staging_root, *, phases, live=None, port=None, server_bind=None, tools=None, extra=None)` | validate explicit measured phase evidence and publish an immutable generation; returns `status: "partial"` (unpublished) when anything is missing, including crash/P2 |
+| `isolation_certificate.build_certificate(staging_root, *, receipt_ids, live=None, port=None, server_bind=None, tools=None, extra=None)` | validate the tool-owned phase **receipt IDs** and publish an immutable generation; the legacy `phases=` dict is always refused; requires `tools` (if given) to equal `bound_tool_specs()` exactly (M3); returns `status: "partial"` while anything is missing, including pending P2 subgates |
 | `isolation_certificate.check_certificate(staging_root, live=None, port=None)` | recompute N/M/tools/evidence/endpoint/live-roots; never compares live contents |
 | `staging.check_isolation_proof(staging_root, live=None, roles=...)` | host-facing wrapper the launcher/host already call |
 | `staging.check_steam_guard(staging_root, role, live=None, proof=None)` | static staged Steam guard (patch hash + marker/probes + absent natives); ignores `live`/`proof`, never reads the mutable proof |
 | `staging.check_steam_probes(staging_root, role, expected_nonce, spawn_time)` | fresh real-probe checker: nonce-bound marker + absent `G.STEAM`/`package.loaded.luasteam` |
 | `staging.check_lovely_evidence(staging_root, role, spawn_time, expected_mods=None, require_dump=True)` | exact staged `Mods` binding plus fresh `Mods/lovely/{log,dump}` artefacts |
 | `isolation_certificate.snapshot_live(live, *, label=None)` | full byte manifest of live install + AppData + every Steam `2379780` profile app dir (never the whole Steam install) |
-| `isolation_certificate.prepare_session(staging_root, *, live, session_id, port=None, nonce=None, closed_check=None)` | closed-game prep: certificate + not-locked-out + rotate stale probes **and any previous attestation** (safe staging writes) + fresh nonce; requires a real `closed_check` callable |
-| `isolation_certificate.record_session_verdict(staging_root, *, session_id, before, after, backup_id=None, certificate_id=None)` | append-only receipt; live byte diff -> persistent lockout + revocation + stored before/after manifests |
-| `isolation_certificate.write_launcher_attestation(staging_root, *, session_id, nonce, content_hash, control_port, spawn_time, port=None)` | re-verify **both** roles' probes, then write the fixed session-bound attestation to `<role save root>/aisparring-launcher-attestation.json` (outside Mods) via staging safe writes |
+| `isolation_certificate.prepare_session(staging_root, *, live, session_id, port=None, closed_check=None, phase=MATCH, backup_id=None, backup_verify=None, measurement_setup=None)` | closed-game prep: certificate/prerequisite + not-locked-out + refuse a reused session id (L6) + a real `closed_check` + the verified backup evidence bound to the before snapshot (R1) + rotate stale probes/attestation (safe staging writes) + internally minted nonce (no caller override, L5) |
+| `isolation_certificate.record_phase_receipt(staging_root, *, phase, session_id, session, live, port=None, live_closed=None)` | tool-owned receipt: requires `live_closed` (R2) and derives CRASH/P2 from retained handles + tool setup (H3); copies probes, the Lovely dump and a hashed `measurement.json` (M2) |
+| `isolation_certificate.record_session_verdict(staging_root, *, session_id, live, backup_id=None, certificate_id=None, session=None, live_closed=None)` | append-only receipt; **computes** the after snapshot; live byte diff -> persistent lockout + revocation + stored raw before/after manifests |
+| `isolation_certificate.write_launcher_attestation(staging_root, *, session_id, nonce, control_port, port, spawn_time=None, live=None)` | re-verify **both** roles' probes, require phase `MATCH` and the current certificate id (L4), then write the fixed session-bound attestation to `<role save root>/aisparring-launcher-attestation.json` (outside Mods) |
 | `isolation_certificate.launcher_session_env_names()` | the exact session-descriptor env names derived from the real `launch_practice.SESSION_ENV_KEYS` (no speculative aliases) |
 | `isolation_certificate.rotate_attestation_files(staging_root)` | remove any previous session's attestation inside staging only |
 | `isolation_certificate.lockout(staging_root)` / `certificate_status(staging_root)` | persistent lockout and generation/revocation status |
@@ -369,15 +370,33 @@ the launcher is unavailable the certificate is refused, not guessed. The host
 writes the session-bound attestation only after both roles' probes verify;
 `prepare_session` rotates any previous attestation inside staging before launch.
 
-`phases` keys are `P1A`, `P1B`, `FULL_P1`, `CRASH`, `P2`. Each bundle carries a
-session `nonce`, a `spawn_time`, a `measured` mapping of real digests/flags and an
-`evidence_files` mapping of probe/manifest files to copy. `P1A.measured` must hold
-equal `bootstrap_install_digest` and `role_install_digests`; `FULL_P1.measured`
-requires equal `live_before_digest`/`live_after_digest`; `CRASH` requires
-`crash_observed` and `cleanup_ok`; `P2` requires `dead_port` and `refused`. A bare
-`{"passed": true}` bundle fails validation. There is deliberately **no rebase
+Receipt phases are `P1A`, `P1B`, `FULL_P1`, `CRASH`, `P2`. Each receipt carries a
+session `nonce`, a `spawn_time`, `closure`, raw `before_files`/`after_files`, a
+`measured` mapping derived by the tool, copied probe/dump evidence and a hashed
+`measurement.json`. `P1A.measured` holds equal `bootstrap_install_digest` and
+`role_install_digests`; `P1B`/`FULL_P1` bind the role Mods digests, parity digest
+and port; `CRASH` binds the retained-handle exit codes, the env-gated stimulus and
+cleanup; `P2` binds the tool's both-family listener absence + refused connect,
+the pinned loopback endpoint and the covered/pending subgates. A staged
+`started` marker is never counted as a measured connection failure, and
+`build_certificate` stays **partial** while any P2 subgate
+(`initial_failure`/`reconnect`/`keepalive`) lacks real engine evidence, so a
+single event is never stamped as a broad P2 pass. There is deliberately **no rebase
 API**: historical certificate evidence is immutable, and recovery requires a new
 P1 run that produces a new measured generation.
+
+## 11. Cross-owner host contract (report, not implemented here)
+
+Host/service code is owned elsewhere. Two call sites already stay compatible with
+the repaired tool API and need no change: `practice_host._call_prepare_session`
+passes the fresh backup **label** (`create_live_backup`'s manifest `label`), which
+`prepare_session` accepts because it is the authenticated `backup_label`; and
+`_finalize` passes that same label to `record_session_verdict`, which accepts the
+record's evidence id or its authenticated label. If the host ever wants the
+cryptographic id instead, it should use `check_backup_evidence(...)["backup_id"]`.
+Any future host edit must keep using the real `check_backup_evidence` verdict and
+the real `closed_check`, and must pass the persisted open record (not a fabricated
+mapping) to `execute_launch`.
 
 ## 11. Sources
 

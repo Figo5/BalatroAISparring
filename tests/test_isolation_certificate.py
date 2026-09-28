@@ -9,6 +9,7 @@ revocation and the global lockout are asserted negative.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import shutil
 import sys
@@ -174,6 +175,18 @@ def _write_probes(paths, nonce=NONCE, port=PORT):
         f"probe=steam_post\npatch={staging.PATCH_ID}\nnonce={nonce}\nsteam=nil\nluasteam=nil\nsave={save}\n",
         encoding="utf-8",
     )
+    (save / staging.PROBE_P2).write_text(
+        f"probe=p2\npatch={staging.PATCH_ID}\nnonce={nonce}\nurl=127.0.0.1\nport={port}\n"
+        f"mods={paths.mods}\nsave={save}\nattempts=4\nconnect_refused=true\nreconnect=3\nkeepalive=true\n",
+        encoding="utf-8",
+    )
+    # M2: a fresh Lovely log and the actual main.lua dump under the exact staged Mods.
+    for sub in ("log", "dump"):
+        directory = paths.mods / staging.LOVELY_DIR_NAME / sub
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / ("main.lua" if sub == "dump" else "lovely.log")).write_text(
+            "-- lovely %s evidence\n" % sub, encoding="utf-8"
+        )
     return {
         "main": save / staging.PROBE_MAIN,
         "guard": save / staging.PROBE_GUARD,
@@ -181,7 +194,35 @@ def _write_probes(paths, nonce=NONCE, port=PORT):
         "mp": save / staging.PROBE_MP,
         "steam_marker": save / ic.PROBE_STEAM_MARKER,
         "steam_post": save / ic.PROBE_STEAM_POST,
+        "p2": save / staging.PROBE_P2,
     }
+
+
+class _EmptyEnumerator(launch_practice.ProcessEnumerator):
+    def list(self):
+        return []
+
+
+def _make_backup(root: Path, live_map, label="fixture-backup"):
+    """A real, synthetic live backup so evidence comes from the production checker."""
+    backup_root = root / "backups"
+    steam_roots = [value for key, value in live_map.items() if key.startswith("steam_userdata/")]
+    created = launch_practice.create_live_backup(
+        install_root=live_map["install"],
+        appdata_root=live_map["appdata"],
+        steam_userdata_roots=steam_roots,
+        backup_root=backup_root,
+        enumerator=_EmptyEnumerator(),
+        live_install_root=live_map["install"],
+        label=label,
+        execute=True,
+    )
+    assert created["ok"], created
+    sources = {"install": live_map["install"], "appdata": live_map["appdata"]}
+    for key, value in live_map.items():
+        if key.startswith("steam_userdata/"):
+            sources[key] = value
+    return backup_root, sources
 
 
 def _stage_all(root: Path):
@@ -204,7 +245,20 @@ def _stage_all(root: Path):
     probes = {"bootstrap": _write_probes(staging.bootstrap_paths(staging_root))}
     for role in staging.ROLES:
         probes[role] = _write_probes(staging.role_paths(staging_root, role))
-    return {"root": root, "staging_root": staging_root, "live_map": live_map, "probes": probes}
+    backup_root, sources = _make_backup(root, live_map)
+    return {
+        "root": root,
+        "staging_root": staging_root,
+        "live_map": live_map,
+        "probes": probes,
+        "backup_root": backup_root,
+        "sources": sources,
+    }
+
+
+def _backup_verify(fixture):
+    """The real backup-evidence callable bound to the fixture's synthetic backup."""
+    return lambda: launch_practice.check_backup_evidence(fixture["backup_root"], fixture["sources"])
 
 
 # Legacy caller-dict fixture kept only so the negative test proves it is refused.
@@ -262,15 +316,33 @@ def _phases(fixture, *, role_digests=None, live_before=None, live_after=None):
 
 # --- tool-owned phase receipt fixtures -------------------------------------
 
-class _FakeSession:
-    """Exited synthetic LaunchSession: records + owned all stopped."""
+class _FakeExitHandle:
+    """Retained-handle stand-in with a measured exit code."""
 
-    def __init__(self, session_id, staging_root, nonce, spawn_time, roles):
+    def __init__(self, code):
+        self.returncode = code
+
+    def poll(self):
+        return self.returncode
+
+
+class _FakeOwned:
+    def __init__(self, role, pid, exit_code=0):
+        self.role = role
+        self.pid = pid
+        self.handle = _FakeExitHandle(exit_code)
+
+
+class _FakeSession:
+    """Exited synthetic LaunchSession: records + owned handles already stopped."""
+
+    def __init__(self, session_id, staging_root, nonce, spawn_time, roles, exit_codes=None):
         self.session_id = session_id
         self.staging_root = Path(staging_root)
         self.nonce = nonce
         self.spawn_time = spawn_time
         self.code = "launched"
+        exit_codes = exit_codes or {}
         self.records = [
             launch_practice.ProcessRecord(
                 role=role,
@@ -281,7 +353,10 @@ class _FakeSession:
             )
             for index, role in enumerate(roles)
         ]
-        self.owned = []
+        self.owned = [
+            _FakeOwned(role, 100 + index, exit_codes.get(role, 0))
+            for index, role in enumerate(roles)
+        ]
 
     @property
     def ok(self):
@@ -297,12 +372,21 @@ class _FakeSession:
         return None
 
 
-_CRASH_OBS = {"crash_exit_codes": {"human": 1, "ai": 1}, "cleanup_ok": True, "crash_observed": True}
-_P2_OBS = {"dead_port": 9, "refused": True, "attempts": 3}
+_CRASH_EXITS = {"human": 1, "ai": 1}
 
 
-def _backup_verify(digest="backup-digest"):
-    return lambda: {"ok": True, "digest": digest}
+def _fake_dead_port_setup(port=PORT):
+    return {
+        "ok": True,
+        "kind": "dead_port",
+        "dead_port": PORT,
+        "host": "127.0.0.1",
+        "refused": True,
+        "listener_absent": {"ipv4": True, "ipv6": True},
+        "attempts": 3,
+        "timings": [0.001, 0.001, 0.001],
+        "measured_unix": int(time.time()),
+    }
 
 
 def _synthetic_server_binding(staging_root=None, *, config=None):
@@ -352,19 +436,22 @@ def synthetic_tools(root: Path):
         yield specs
 
 
-def _record_phase(fixture, phase, observation=None):
+def _record_phase(fixture, phase, exit_codes=None, prepared=None, session_id=None):
     staging_root = fixture["staging_root"]
     live = fixture["live_map"]
-    session_id = f"phase-{phase.lower()}"
-    prepared = ic.prepare_session(
-        staging_root,
-        live=live,
-        session_id=session_id,
-        port=PORT if phase != "P1A" else None,
-        closed_check=lambda: True,
-        phase=phase,
-        backup_verify=_backup_verify(f"backup-{phase.lower()}"),
-    )
+    session_id = session_id or f"phase-{phase.lower()}"
+    if prepared is None:
+        setup = _fake_dead_port_setup() if phase == "P2" else None
+        prepared = ic.prepare_session(
+            staging_root,
+            live=live,
+            session_id=session_id,
+            port=PORT if phase != "P1A" else None,
+            closed_check=lambda: True,
+            phase=phase,
+            backup_verify=_backup_verify(fixture),
+            measurement_setup=setup,
+        )
     assert prepared["ok"], (phase, prepared)
     nonce = prepared["nonce"]
     spawn_time = time.time() - 1
@@ -372,7 +459,7 @@ def _record_phase(fixture, phase, observation=None):
     _write_probes(staging.bootstrap_paths(staging_root), nonce=nonce)
     for role in staging.ROLES:
         _write_probes(staging.role_paths(staging_root, role), nonce=nonce)
-    session = _FakeSession(session_id, staging_root, nonce, spawn_time, ic.PHASE_ROLES[phase])
+    session = _FakeSession(session_id, staging_root, nonce, spawn_time, ic.PHASE_ROLES[phase], exit_codes=exit_codes)
     return ic.record_phase_receipt(
         staging_root,
         phase=phase,
@@ -380,15 +467,15 @@ def _record_phase(fixture, phase, observation=None):
         session=session,
         live=live,
         port=PORT if phase != "P1A" else None,
-        observation=observation,
+        live_closed=lambda: True,
     )
 
 
 def _receipt_ids(fixture) -> dict:
     receipt_ids: dict = {}
     for phase in ic.REQUIRED_PHASES:
-        observation = _CRASH_OBS if phase == "CRASH" else (_P2_OBS if phase == "P2" else None)
-        result = _record_phase(fixture, phase, observation=observation)
+        exit_codes = _CRASH_EXITS if phase == "CRASH" else None
+        result = _record_phase(fixture, phase, exit_codes=exit_codes)
         assert result["ok"], (phase, result)
         receipt_ids[phase] = result["receipt_id"]
     return receipt_ids
@@ -485,37 +572,11 @@ def test_receipts_must_have_distinct_nonces():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         fixture = _stage_all(root)
-        with synthetic_tools(root):
+        with synthetic_tools(root), patched(ic.secrets, token_hex=lambda size: "f" * 32):
             receipt_ids = {}
             for phase in ic.REQUIRED_PHASES:
-                observation = _CRASH_OBS if phase == "CRASH" else (_P2_OBS if phase == "P2" else None)
-                staging_root = fixture["staging_root"]
-                session_id = f"dup-{phase.lower()}"
-                prepared = ic.prepare_session(
-                    staging_root,
-                    live=fixture["live_map"],
-                    session_id=session_id,
-                    port=PORT if phase != "P1A" else None,
-                    nonce="fixed-nonce",
-                    closed_check=lambda: True,
-                    phase=phase,
-                    backup_verify=_backup_verify("b"),
-                )
-                assert prepared["ok"], (phase, prepared)
-                ic.bind_open_session(staging_root, session_id, pids={"bootstrap": [1]}, spawn_time=time.time() - 1)
-                _write_probes(staging.bootstrap_paths(staging_root), nonce="fixed-nonce")
-                for role in staging.ROLES:
-                    _write_probes(staging.role_paths(staging_root, role), nonce="fixed-nonce")
-                session = _FakeSession(session_id, staging_root, "fixed-nonce", time.time() - 1, ic.PHASE_ROLES[phase])
-                result = ic.record_phase_receipt(
-                    staging_root,
-                    phase=phase,
-                    session_id=session_id,
-                    session=session,
-                    live=fixture["live_map"],
-                    port=PORT if phase != "P1A" else None,
-                    observation=observation,
-                )
+                exit_codes = _CRASH_EXITS if phase == "CRASH" else None
+                result = _record_phase(fixture, phase, exit_codes=exit_codes, session_id=f"dup-{phase.lower()}")
                 assert result["ok"], (phase, result)
                 receipt_ids[phase] = result["receipt_id"]
             verdict = ic.build_certificate(
@@ -685,14 +746,15 @@ def test_snapshot_live_is_full_byte_manifest_over_all_profiles_only():
         assert ic._recompute_snapshot_digest(snapshot) == snapshot["digest"]
 
 
-def _prepare_for_verdict(fixture, session_id="s1", backup_id="b1"):
+def _prepare_for_verdict(fixture, session_id="s1", backup_id=None):
     prepared = ic.prepare_session(
         fixture["staging_root"],
         live=fixture["live_map"],
         session_id=session_id,
         closed_check=lambda: True,
         phase="P1A",
-        backup_verify=_backup_verify(backup_id),
+        backup_id=backup_id,
+        backup_verify=_backup_verify(fixture),
     )
     assert prepared["ok"], prepared
     return prepared
@@ -800,7 +862,7 @@ def test_failed_session_leaves_persistent_global_lockout():
             session_id="next",
             closed_check=lambda: True,
             phase="P1A",
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
         assert not blocked["ok"] and "certificate_locked_out" in blocked["problems"]
         assert ic.acknowledge_lockout(fixture["staging_root"], operator="user", reason="reviewed")["ok"]
@@ -810,7 +872,7 @@ def test_failed_session_leaves_persistent_global_lockout():
             session_id="next",
             closed_check=lambda: True,
             phase="P1A",
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
         assert allowed["ok"], allowed
         receipts = (fixture["staging_root"] / "evidence" / "sessions" / "receipts.jsonl").read_text(encoding="utf-8")
@@ -821,7 +883,7 @@ def test_no_spawn_closure_is_measured():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         fixture = _stage_all(root)
-        _prepare_for_verdict(fixture, "never-spawned", backup_id="nb")
+        _prepare_for_verdict(fixture, "never-spawned")
         closed = ic.record_session_no_spawn(
             fixture["staging_root"], session_id="never-spawned", live=fixture["live_map"]
         )
@@ -832,7 +894,7 @@ def test_no_spawn_closure_is_measured():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         fixture = _stage_all(root)
-        _prepare_for_verdict(fixture, "diff", backup_id="df")
+        _prepare_for_verdict(fixture, "diff")
         (fixture["live_map"]["appdata"] / "Mods" / "x.lua").write_text("changed", encoding="utf-8")
         revoked = ic.record_session_no_spawn(fixture["staging_root"], session_id="diff", live=fixture["live_map"])
         assert not revoked["ok"] and revoked["code"] == "live_byte_diff_revoked"
@@ -841,7 +903,7 @@ def test_no_spawn_closure_is_measured():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         fixture = _stage_all(root)
-        _prepare_for_verdict(fixture, "spawned", backup_id="sp")
+        _prepare_for_verdict(fixture, "spawned")
         ic.bind_open_session(fixture["staging_root"], "spawned", pids={"bootstrap": [7]}, spawn_time=time.time() - 1)
         refused = ic.record_session_no_spawn(
             fixture["staging_root"], session_id="spawned", live=fixture["live_map"]
@@ -870,7 +932,7 @@ def test_verdict_requires_backup_and_refuses_reuse():
             backup_verify=lambda: {"ok": False},
         )
         assert not denied["ok"] and "backup_not_verified" in denied["problems"]
-        prepared = _prepare_for_verdict(fixture, "reuse", backup_id="b")
+        prepared = _prepare_for_verdict(fixture, "reuse")
         assert ic.record_session_verdict(
             fixture["staging_root"],
             session_id="reuse",
@@ -893,18 +955,17 @@ def test_prepare_session_is_exclusive_and_single_nonce_owner():
             live=fixture["live_map"],
             session_id="one",
             closed_check=lambda: True,
-            nonce="n-one",
             phase="P1A",
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
-        assert first["ok"] and first["nonce"] == "n-one"
+        assert first["ok"] and isinstance(first["nonce"], str) and first["nonce"]
         second = ic.prepare_session(
             fixture["staging_root"],
             live=fixture["live_map"],
             session_id="two",
             closed_check=lambda: True,
             phase="P1A",
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
         assert not second["ok"] and "session_already_open" in second["problems"]
 
@@ -927,11 +988,10 @@ def test_prepare_session_requires_closed_check_and_rotates_probes():
             live=fixture["live_map"],
             session_id="p1",
             closed_check=lambda: True,
-            nonce="fresh-nonce",
             phase="P1A",
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
-        assert prepared["ok"] and prepared["nonce"] == "fresh-nonce"
+        assert prepared["ok"] and isinstance(prepared["nonce"], str) and prepared["nonce"]
         assert prepared["removed_probes"]
         for role in list(staging.ROLES) + [staging.BOOTSTRAP_ROLE]:
             save = staging._paths_for_role(fixture["staging_root"], role).data / "Balatro"
@@ -952,7 +1012,7 @@ def test_prepare_session_rotates_old_attestation():
             session_id="new",
             closed_check=lambda: True,
             phase="P1A",
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
         assert prepared["ok"] and prepared["removed_attestations"]
         for role in staging.ROLES:
@@ -980,7 +1040,7 @@ def test_lockout_is_global_and_only_cleared_by_explicit_ack():
             session_id="after",
             closed_check=lambda: True,
             phase="P1A",
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
         assert prepared["ok"], prepared
 
@@ -999,8 +1059,8 @@ def test_launcher_attestation_derives_inputs_and_writes_atomically():
                 session_id="att",
                 port=PORT,
                 closed_check=lambda: True,
-                phase="P1B",
-                backup_verify=_backup_verify(),
+                phase=ic.MATCH,
+                backup_verify=_backup_verify(fixture),
             )
             assert prepared["ok"], prepared
             nonce = prepared["nonce"]
@@ -1112,7 +1172,7 @@ def test_match_phase_requires_a_current_certificate():
             port=PORT,
             closed_check=lambda: True,
             phase=ic.MATCH,
-            backup_verify=_backup_verify(),
+            backup_verify=_backup_verify(fixture),
         )
         assert not without["ok"]
         assert any(problem.startswith("certificate_not_valid") for problem in without["problems"])
@@ -1125,7 +1185,7 @@ def test_match_phase_requires_a_current_certificate():
                 port=PORT,
                 closed_check=lambda: True,
                 phase=ic.MATCH,
-                backup_verify=_backup_verify(),
+                backup_verify=_backup_verify(fixture),
             )
         assert prepared["ok"], prepared
         assert prepared["phase"] == ic.MATCH
@@ -1151,7 +1211,7 @@ def test_record_receipt_failure_raises_global_lockout():
                 session_id="bad-receipt",
                 closed_check=lambda: True,
                 phase="P1A",
-                backup_verify=_backup_verify(),
+                backup_verify=_backup_verify(fixture),
             )
             assert prepared["ok"]
             session = _retained(fixture, "bad-receipt", prepared["nonce"], running=True)
@@ -1164,6 +1224,308 @@ def test_record_receipt_failure_raises_global_lockout():
             )
         assert not result["ok"] and "owned_processes_running" in result["problems"]
         assert ic.lockout(fixture["staging_root"])["locked"] is True
+
+
+def _prepare_and_probes(fixture, phase, session_id, **kwargs):
+    setup = _fake_dead_port_setup() if phase == "P2" else None
+    prepared = ic.prepare_session(
+        fixture["staging_root"],
+        live=fixture["live_map"],
+        session_id=session_id,
+        port=PORT if phase != "P1A" else None,
+        closed_check=lambda: True,
+        phase=phase,
+        backup_verify=_backup_verify(fixture),
+        measurement_setup=setup,
+        **kwargs,
+    )
+    assert prepared["ok"], prepared
+    bind = time.time() - 1
+    ic.bind_open_session(fixture["staging_root"], session_id, pids={"bootstrap": [1]}, spawn_time=bind)
+    _write_probes(staging.bootstrap_paths(fixture["staging_root"]), nonce=prepared["nonce"])
+    for role in staging.ROLES:
+        _write_probes(staging.role_paths(fixture["staging_root"], role), nonce=prepared["nonce"])
+    return prepared, bind
+
+
+# --- R1: real backup evidence bound to the measured before-snapshot -----------
+
+def test_r1_backup_evidence_binds_before_snapshot():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        staging_root = fixture["staging_root"]
+        bogus = ic.prepare_session(
+            staging_root, live=fixture["live_map"], session_id="r1-bogus",
+            closed_check=lambda: True, phase="P1A", backup_id="caller-label",
+            backup_verify=_backup_verify(fixture),
+        )
+        assert not bogus["ok"] and "backup_id_mismatch" in bogus["problems"]
+
+        label = launch_practice.check_backup_evidence(fixture["backup_root"], fixture["sources"])["backup_label"]
+        accepted = ic.prepare_session(
+            staging_root, live=fixture["live_map"], session_id="r1-label",
+            closed_check=lambda: True, phase="P1A", backup_id=label,
+            backup_verify=_backup_verify(fixture),
+        )
+        assert accepted["ok"] and ic._is_sha256(accepted["backup_id"])
+        assert ic.load_open_record(staging_root, "r1-label")["backup_label"] == label
+        assert ic.record_session_no_spawn(
+            staging_root, session_id="r1-label", live=fixture["live_map"]
+        )["ok"]
+
+        # A live byte drift makes the fresh-check refuse it.
+        (fixture["live_map"]["appdata"] / "Mods" / "x.lua").write_text("drift", encoding="utf-8")
+        drifted = ic.prepare_session(
+            staging_root, live=fixture["live_map"], session_id="r1-drift",
+            closed_check=lambda: True, phase="P1A", backup_verify=_backup_verify(fixture),
+        )
+        assert not drifted["ok"] and "backup_not_verified" in drifted["problems"]
+
+        # A stale-but-consistent manifest is caught by the before-snapshot tie.
+        tie = ic.prepare_session(
+            staging_root, live=fixture["live_map"], session_id="r1-tie",
+            closed_check=lambda: True, phase="P1A",
+            backup_verify=lambda: launch_practice.check_backup_evidence(fixture["backup_root"]),
+        )
+        assert not tie["ok"]
+        assert any(problem.startswith("backup_snapshot_mismatch") for problem in tie["problems"])
+
+
+def test_r1_backup_manifest_mutation_changes_identity_and_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        first = launch_practice.check_backup_evidence(fixture["backup_root"], fixture["sources"])
+        manifest_path = fixture["backup_root"] / launch_practice.BACKUP_MANIFEST_NAME
+        body = json.loads(manifest_path.read_text(encoding="utf-8"))
+        body["label"] = body.get("label", "") + "-mutated"
+        manifest_path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        second = launch_practice.check_backup_evidence(fixture["backup_root"])
+        assert second["manifest_sha256"] != first["manifest_sha256"]
+        assert second["backup_id"] != first["backup_id"]
+        stale = ic.prepare_session(
+            fixture["staging_root"], live=fixture["live_map"], session_id="r1-stale",
+            closed_check=lambda: True, phase="P1A", backup_id=first["backup_id"],
+            backup_verify=_backup_verify(fixture),
+        )
+        assert not stale["ok"] and "backup_id_mismatch" in stale["problems"]
+
+        # A mutated copy is caught by the verified entry manifest, not just the id.
+        entry = body["entries"]["appdata"]
+        Path(entry["dir"], "Mods", "x.lua").write_text("tampered copy", encoding="utf-8")
+        assert not launch_practice.check_backup_evidence(fixture["backup_root"])["ok"]
+
+
+def test_r1_missing_live_root_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        short_live = dict(fixture["live_map"])
+        dropped = next(key for key in short_live if key.startswith("steam_userdata/"))
+        short_live.pop(dropped)
+        verdict = ic.prepare_session(
+            fixture["staging_root"], live=short_live, session_id="r1-missing",
+            closed_check=lambda: True, phase="P1A",
+            backup_verify=lambda: launch_practice.check_backup_evidence(fixture["backup_root"]),
+        )
+        assert not verdict["ok"] and "backup_roots_mismatch" in verdict["problems"]
+
+
+# --- R2: required live-closed callback and unexpected-game supervision ---------
+
+def test_r2_phase_receipt_requires_live_closed_callback():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        prepared, bind = _prepare_and_probes(fixture, "P1A", "r2-a")
+        session = _FakeSession("r2-a", fixture["staging_root"], prepared["nonce"], bind, ("bootstrap",))
+        result = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P1A", session_id="r2-a", session=session,
+            live=fixture["live_map"],
+        )
+        assert not result["ok"] and "live_closed_check_unavailable" in result["problems"]
+        assert ic.lockout(fixture["staging_root"])["locked"] is True
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        prepared, bind = _prepare_and_probes(fixture, "P1A", "r2-b")
+        session = _FakeSession("r2-b", fixture["staging_root"], prepared["nonce"], bind, ("bootstrap",))
+        result = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P1A", session_id="r2-b", session=session,
+            live=fixture["live_map"], live_closed=lambda: False,
+        )
+        assert not result["ok"] and "live_game_running" in result["problems"]
+        assert ic.load_open_record(fixture["staging_root"], "r2-b")["status"] == "failed"
+        assert ic.lockout(fixture["staging_root"])["locked"] is True
+
+
+# --- H3: CRASH/P2 are tool-derived; the caller observation is gone -------------
+
+def test_h3_caller_observation_is_not_accepted():
+    assert "observation" not in inspect.signature(ic.record_phase_receipt).parameters
+    assert "observation" not in inspect.signature(launch_practice.execute_measurement_phase).parameters
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        prepared, bind = _prepare_and_probes(fixture, "P1A", "h3-a")
+        session = _FakeSession("h3-a", fixture["staging_root"], prepared["nonce"], bind, ("bootstrap",))
+        try:
+            ic.record_phase_receipt(
+                fixture["staging_root"], phase="P1A", session_id="h3-a", session=session,
+                live=fixture["live_map"], live_closed=lambda: True,
+                observation={"crash_observed": True},
+            )
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("caller observation must not be accepted")
+
+
+def test_h3_crash_and_p2_derive_from_tool_evidence():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            ids = _receipt_ids(fixture)
+        crash = ic.load_phase_receipt(fixture["staging_root"], ids["CRASH"])
+        assert crash["measured"]["crash_exit_codes"] == _CRASH_EXITS
+        assert crash["measured"]["crash_stimulus"] == "env_gated_guard_error"
+        p2 = ic.load_phase_receipt(fixture["staging_root"], ids["P2"])
+        assert p2["measured"]["dead_port"] == PORT
+        assert p2["measured"]["pinned_endpoint"]["url"] == "127.0.0.1"
+        assert p2["measured"]["pending_subgates"] == []
+        assert p2["probes"]["ai"]["p2"]["copy_sha256"]
+        assert p2["measurement_artifact"]["copy_sha256"]
+
+
+def test_h3_p2_pending_subgates_do_not_broad_pass():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            ids = {}
+            for phase in ("P1A", "P1B", "FULL_P1"):
+                result = _record_phase(fixture, phase)
+                assert result["ok"], (phase, result)
+                ids[phase] = result["receipt_id"]
+            prepared, bind = _prepare_and_probes(fixture, "P2", "p2-pending")
+            # A real stage-start marker is NOT a measured connection failure: with no
+            # engine attempt/retry/keepalive evidence, every subgate stays pending.
+            p2_path = staging.role_paths(fixture["staging_root"], "ai").data / "Balatro" / staging.PROBE_P2
+            p2_path.write_text(
+                f"probe=p2\npatch={staging.PATCH_ID}\nnonce={prepared['nonce']}\nurl=127.0.0.1\n"
+                f"port={PORT}\nmods={staging.role_paths(fixture['staging_root'], 'ai').mods}\n"
+                f"save={staging.role_paths(fixture['staging_root'], 'ai').data / 'Balatro'}\nstarted=1\n",
+                encoding="utf-8",
+            )
+            session = _FakeSession("p2-pending", fixture["staging_root"], prepared["nonce"], bind, ("ai",))
+            result = ic.record_phase_receipt(
+                fixture["staging_root"], phase="P2", session_id="p2-pending", session=session,
+                live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+            )
+            assert result["ok"], result
+            ids["P2"] = result["receipt_id"]
+            build = ic.build_certificate(
+                fixture["staging_root"], receipt_ids=ids, live=fixture["live_map"], port=PORT
+            )
+        assert not build["ok"] and "P2_pending:initial_failure" in build["problems"]
+        assert "P2_pending:reconnect" in build["problems"]
+        assert "P2_pending:keepalive" in build["problems"]
+
+
+# --- M2: strong probe/lovely checkers inside receipts -------------------------
+
+def test_m2_receipt_rejects_wrong_mods_root_and_missing_dump():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        prepared, bind = _prepare_and_probes(fixture, "P1A", "m2-a")
+        paths = staging.bootstrap_paths(fixture["staging_root"])
+        save = paths.data / "Balatro"
+        (save / staging.PROBE_GUARD).write_text(
+            f"probe=guard\npatch={staging.PATCH_ID}\nnonce={prepared['nonce']}\nsave={save}\n"
+            f"lovely_mod_dir={root / 'elsewhere'}\nmods={paths.mods}\n",
+            encoding="utf-8",
+        )
+        session = _FakeSession("m2-a", fixture["staging_root"], prepared["nonce"], bind, ("bootstrap",))
+        wrong = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P1A", session_id="m2-a", session=session,
+            live=fixture["live_map"], live_closed=lambda: True,
+        )
+        assert not wrong["ok"] and any("lovely_mod_dir_not_exact" in problem for problem in wrong["problems"])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        prepared, bind = _prepare_and_probes(fixture, "P1A", "m2-b")
+        dump_dir = staging.bootstrap_paths(fixture["staging_root"]).mods / staging.LOVELY_DIR_NAME / staging.LOVELY_DUMP_DIR_NAME
+        shutil.rmtree(dump_dir)
+        session = _FakeSession("m2-b", fixture["staging_root"], prepared["nonce"], bind, ("bootstrap",))
+        missing = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P1A", session_id="m2-b", session=session,
+            live=fixture["live_map"], live_closed=lambda: True,
+        )
+        assert not missing["ok"] and any("lovely_dump_missing" in problem for problem in missing["problems"])
+
+
+# --- M3: the bound tool map cannot be emptied ---------------------------------
+
+def test_m3_tool_binding_cannot_be_emptied():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            ids = _receipt_ids(fixture)
+            empty = ic.build_certificate(
+                fixture["staging_root"], receipt_ids=ids, live=fixture["live_map"], port=PORT, tools={}
+            )
+        assert not empty["ok"] and "bound_tools_incomplete" in empty["problems"]
+        _current, problems = ic.collect_bound_tools_check({"tools": {}})
+        assert "bound_tools_incomplete" in problems
+
+
+# --- Easy lows in the same code ----------------------------------------------
+
+def test_low_session_id_reuse_and_copy_manifests():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        assert "nonce" not in inspect.signature(ic.prepare_session).parameters
+        prepared = ic.prepare_session(
+            fixture["staging_root"], live=fixture["live_map"], session_id="low-reuse",
+            closed_check=lambda: True, phase="P1A", backup_verify=_backup_verify(fixture),
+        )
+        assert prepared["ok"], prepared
+        closed = ic.record_session_no_spawn(
+            fixture["staging_root"], session_id="low-reuse", live=fixture["live_map"]
+        )
+        assert closed["ok"]
+        again = ic.prepare_session(
+            fixture["staging_root"], live=fixture["live_map"], session_id="low-reuse",
+            closed_check=lambda: True, phase="P1A", backup_verify=_backup_verify(fixture),
+        )
+        assert not again["ok"] and "session_id_reused" in again["problems"]
+
+        with synthetic_tools(root):
+            receipt_ids = _receipt_ids(fixture)
+        receipt = ic.load_phase_receipt(fixture["staging_root"], receipt_ids["P1A"])
+        assert receipt["before_files"] and receipt["after_files"]
+        layers = ic.collect_layer_m(fixture["staging_root"])
+        assert layers["roles"]["ai"]["network_suppression"]["ok"] is True
+
+
+def test_low_attestation_requires_match_phase():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        prepared, bind = _prepare_and_probes(fixture, "P1A", "low-att")
+        refused = ic.write_launcher_attestation(
+            fixture["staging_root"], session_id="low-att", nonce=prepared["nonce"],
+            control_port=9000, port=PORT, spawn_time=bind, live=fixture["live_map"],
+        )
+        assert not refused["ok"] and "attestation_phase_not_match" in refused["problems"]
 
 
 def _run_all() -> int:
