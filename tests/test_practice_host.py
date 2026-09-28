@@ -914,17 +914,160 @@ def test_prepare_live_baseline_requires_a_real_backup_id():
         )
         assert refused["code"] == practice_host.CODE_FRESH_BACKUP_REQUIRED
 
-        no_id = practice_host.prepare_live_baseline(
-            config, live, api=api, backup_runner=lambda c, l, label: {"ok": True}, sleeper=lambda _s: None
-        )
+        with patched(practice_host, _verify_fresh_backup=lambda c, l: {"ok": True}):
+            no_id = practice_host.prepare_live_baseline(
+                config, live, api=api, backup_runner=lambda c, l, label: {"ok": True}, sleeper=lambda _s: None
+            )
         assert no_id["code"] == practice_host.CODE_FRESH_BACKUP_REQUIRED
         assert "backup_id_missing" in no_id["problems"]
 
-        with patched(practice_host, _verify_fresh_backup=lambda c, l: {"ok": True}):
+        # The verifier content identity is the id; a runner label is display metadata
+        # only and can never stand in for it (R1).
+        content_id = "a" * 64
+        verify = {
+            "ok": True,
+            "backup_id": content_id,
+            "backup_label": "bk1",
+            "manifest_sha256": "b" * 64,
+            "roots": {"install": {"files_digest": "c" * 64}},
+        }
+        with patched(practice_host, _verify_fresh_backup=lambda c, l: dict(verify)):
             prepared = practice_host.prepare_live_baseline(
                 config, live, api=api, backup_runner=lambda c, l, label: {"ok": True, "label": "bk1"}, sleeper=lambda _s: None
             )
-        assert prepared["ok"] is True and prepared["backup_id"] == "bk1"
+        assert prepared["ok"] is True, prepared
+        assert prepared["backup_id"] == content_id and prepared["backup_id"] != "bk1"
+        assert prepared["backup_label"] == "bk1"
+        assert prepared["roots"] == verify["roots"]
+        assert prepared["manifest_sha256"] == "b" * 64
+
+
+def _synthetic_live(config, *, profile="390025789"):
+    """Synthetic install/AppData/Steam profile: no real game or live path."""
+    install = Path(config.live_install_root)
+    appdata = Path(config.live_appdata_root)
+    app_dir = Path(config.steam_root) / "userdata" / profile / "2379780"
+    (install / "AISparring").mkdir(parents=True, exist_ok=True)
+    (install / "AISparring" / "mod.json").write_text('{"m":1}\n', encoding="utf-8")
+    appdata.mkdir(parents=True, exist_ok=True)
+    (appdata / "profile.json").write_text('{"p":1}\n', encoding="utf-8")
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "save.jkr").write_text("save-1\n", encoding="utf-8")
+    return launch_practice.live_source_map(install, appdata, config.steam_root)
+
+
+def _real_backup_runner(config, live_map, label):
+    """The real backup path, on synthetic trees, with the fixed display label echoed."""
+    ensured = label if isinstance(label, str) and label else "synthetic-backup"
+    result = launch_practice.create_live_backup(
+        install_root=config.live_install_root,
+        appdata_root=config.live_appdata_root,
+        steam_root=config.steam_root,
+        backup_root=config.backup_root,
+        enumerator=FakeEnumerator([]),
+        live_install_root=config.live_install_root,
+        label=ensured,
+        execute=True,
+    )
+    if isinstance(result, dict) and result.get("ok"):
+        result["label"] = result.get("label") or ensured
+    return result
+
+
+def test_prepare_live_baseline_binds_verifier_content_identity():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_live(config)
+        prepared = practice_host.prepare_live_baseline(
+            config, live, backup_runner=_real_backup_runner, sleeper=lambda _s: None, label="display-label-1"
+        )
+        assert prepared["ok"] is True, prepared
+        evidence = launch_practice.check_backup_evidence(config.backup_root, live)
+        assert evidence["ok"] is True, evidence
+        assert prepared["backup_id"] == evidence["backup_id"]
+        assert prepared["backup_id"] != "display-label-1"
+        assert practice_host._is_content_id(prepared["backup_id"])
+        assert prepared["backup_label"] == "display-label-1"
+        assert prepared["manifest_sha256"] == evidence["manifest_sha256"]
+        assert set(prepared["roots"]) == set(evidence["roots"])
+        assert set(prepared["roots"]) == {"install", "appdata", "steam_userdata/390025789"}
+        for key, entry in prepared["roots"].items():
+            assert entry["files_digest"] == evidence["roots"][key]["files_digest"]
+
+
+def test_prepare_live_baseline_refuses_drift_before_spawn():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_live(config)
+        first = practice_host.prepare_live_baseline(
+            config, live, backup_runner=_real_backup_runner, sleeper=lambda _s: None, label="drift-base"
+        )
+        assert first["ok"] is True, first
+        # A live byte change after the backup invalidates freshness: the real
+        # checker refuses, so nothing is prepared and nothing can spawn.
+        (Path(config.live_install_root) / "AISparring" / "mod.json").write_text('{"m":2}\n', encoding="utf-8")
+        drifted = practice_host.prepare_live_baseline(
+            config, live, backup_runner=lambda c, l, label: {"ok": True, "label": "unused"},
+            sleeper=lambda _s: None, label="drift-second",
+        )
+        assert drifted["ok"] is False
+        assert drifted["code"] == practice_host.CODE_FRESH_BACKUP_REQUIRED
+        assert any("live_changed_since_backup" in item for item in drifted["verify"]["problems"]), drifted
+
+
+def test_prepare_live_baseline_refuses_missing_root_map_before_spawn():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = _synthetic_live(config)
+        first = practice_host.prepare_live_baseline(
+            config, live, backup_runner=_real_backup_runner, sleeper=lambda _s: None, label="missingmap"
+        )
+        assert first["ok"] is True, first
+        manifest_path = Path(config.backup_root) / launch_practice.BACKUP_MANIFEST_NAME
+        record = json.loads(manifest_path.read_text(encoding="utf-8"))
+        del record["entries"]["appdata"]
+        manifest_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        refused = practice_host.prepare_live_baseline(
+            config, live, backup_runner=lambda c, l, label: {"ok": True, "label": "unused"},
+            sleeper=lambda _s: None, label="missingmap-second",
+        )
+        assert refused["ok"] is False
+        assert refused["code"] == practice_host.CODE_FRESH_BACKUP_REQUIRED
+        assert "appdata_missing" in refused["verify"]["problems"], refused
+
+
+def test_real_prepare_session_binds_content_identity_not_label():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        Path(config.staging_root).mkdir(parents=True, exist_ok=True)
+        live = _synthetic_live(config)
+        prepared = practice_host.prepare_live_baseline(
+            config, live, backup_runner=_real_backup_runner, sleeper=lambda _s: None, label="display-label-2"
+        )
+        assert prepared["ok"] is True, prepared
+        satisfied = lambda staging_root, live=None, port=None: {
+            "ok": True, "code": "ok", "certificate_id": "cert-fixture",
+        }
+        with patched(isolation_certificate, check_certificate=satisfied):
+            result = practice_host._call_prepare_session(
+                isolation_certificate,
+                config,
+                live,
+                session_id="bind-identity-1",
+                port=8788,
+                backup_id=prepared["backup_id"],
+                backup_verify=lambda: prepared["verify"],
+                enumerator=FakeEnumerator([]),
+            )
+        assert result["ok"] is True, result
+        assert result["backup_id"] == prepared["backup_id"]
+        assert result["backup_label"] == "display-label-2"
+        assert result["record"]["backup_id"] == prepared["backup_id"]
+        assert result["record"]["backup_label"] == "display-label-2"
+        # The certificate bound its own before-snapshot to the verified root digests.
+        assert result["record"]["backup_roots"] == {
+            key: value["files_digest"] for key, value in prepared["roots"].items()
+        }
 
 
 def test_wait_for_attestation_requires_both_roles():
@@ -1738,6 +1881,83 @@ def test_supervisor_forwards_prepared_open_session_to_launcher():
         assert "nonce_factory" not in captured
 
 
+def test_supervisor_prepare_session_preserves_certificate_content_identity():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        Path(config.staging_root).mkdir(parents=True, exist_ok=True)
+        live = _synthetic_live(config)
+        prepared = practice_host.prepare_live_baseline(
+            config, live, backup_runner=_real_backup_runner, sleeper=lambda _s: None, label="display-label-3"
+        )
+        assert prepared["ok"] is True, prepared
+        satisfied = lambda staging_root, live=None, port=None: {
+            "ok": True, "code": "ok", "certificate_id": "cert-fixture",
+        }
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            certificate_api=isolation_certificate,
+            baseline_preparer=lambda cfg, live_map: prepared,
+        )
+        supervisor.match_port = 8788
+        with patched(isolation_certificate, check_certificate=satisfied):
+            verdict = supervisor._prepare_session(live)
+        assert verdict["ok"] is True, verdict
+        # The certificate's returned identity is authoritative and never rewritten
+        # to the runner label.
+        assert verdict["backup_id"] == prepared["backup_id"]
+        assert verdict["record"]["backup_id"] == prepared["backup_id"]
+
+        # A certificate that disagrees with the verifier identity is a refusal, not a
+        # silent overwrite of the returned evidence.
+        divergent = FakeCertificateApi(
+            prepare={
+                "ok": True,
+                "code": "session_prepared",
+                "nonce": "n" * 32,
+                "backup_id": "f" * 64,
+                "open_record": "/stage/open/x.json",
+                "record": {"status": "open", "session_id": "x", "backup_id": "f" * 64},
+            }
+        )
+        other = _supervisor(
+            config,
+            make_request(),
+            certificate_api=divergent,
+            baseline_preparer=lambda cfg, live_map: prepared,
+        )
+        other.match_port = 8788
+        refused = other._prepare_session(live)
+        assert refused["ok"] is False
+        assert "prepared_backup_id_mismatch" in refused["problems"], refused
+
+
+def test_supervisor_refuses_missing_config_digest_before_service_start():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        events = []
+        launched = []
+
+        def factory(cfg):
+            events.append("service")
+            return FakeService(cfg, ended=True, terminal_phase="closed")
+
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=factory,
+            launch_runner=lambda plan, **kwargs: launched.append(plan) or FakeSession(),
+            # A content hash is present, but the required derived config digest is not.
+            gate_evaluator=lambda: _gate_ok(config, config_digest=None, content_hash="c" * 64),
+        )
+        result = supervisor.run()
+        assert result["ok"] is False
+        assert result["code"] == practice_host.CODE_CONFIG_DIGEST
+        assert events == [] and launched == []
+        report = json.loads(supervisor.workspace.report_path.read_text(encoding="utf-8"))
+        assert report["config_digest"] is None
+
+
 def test_default_launch_runner_uses_open_session_not_nonce_factory():
     with tempfile.TemporaryDirectory() as tmp:
         config = make_config(tmp)
@@ -1756,6 +1976,23 @@ def test_default_launch_runner_uses_open_session_not_nonce_factory():
             "nonce": "n" * 32,
             "phase": isolation_certificate.MATCH,
         }
+        # Real launcher API shape (M1): the launcher reloads the persisted open
+        # record from disk; the caller mapping is never trusted on its own.
+        staging_root = Path(config.staging_root)
+        staging_root.mkdir(parents=True, exist_ok=True)
+        isolation_certificate._write_open_record(
+            staging_root,
+            {
+                "schema": isolation_certificate.OPEN_SESSION_SCHEMA,
+                "session_id": "s-1",
+                "phase": isolation_certificate.MATCH,
+                "nonce": "n" * 32,
+                "port": 8788,
+                "certificate_id": "cert-fixture",
+                "status": "open",
+                "pids": {},
+            },
+        )
         # Real launcher path: the prepared record (not a nonce factory) is the
         # contract; a blocked re-derived plan must return cleanly, never TypeError.
         session = practice_host._default_launch_runner(
@@ -1788,6 +2025,7 @@ def test_record_live_verdict_uses_real_certificate_closure_api():
         live = {"install": str(install), "appdata": str(appdata)}
         before = isolation_certificate.snapshot_live(live)
         session_id, nonce = "s-real", "n" * 32
+        backup_id = "b" * 64
         record = {
             "schema": isolation_certificate.OPEN_SESSION_SCHEMA,
             "session_id": session_id,
@@ -1795,7 +2033,8 @@ def test_record_live_verdict_uses_real_certificate_closure_api():
             "nonce": nonce,
             "port": 8788,
             "certificate_id": "cert1",
-            "backup_id": "bk1",
+            "backup_id": backup_id,
+            "backup_label": "display-label",
             "live_roots": {key: str(value) for key, value in live.items()},
             "before": {"digest": before["digest"], "roots": isolation_certificate._digest_roots(before)},
             "before_files": before["roots"],
@@ -1823,7 +2062,7 @@ def test_record_live_verdict_uses_real_certificate_closure_api():
         supervisor.session_id = session_id
         supervisor._gates = {"live_map": live}
         supervisor.open_record = str(isolation_certificate._open_record_path(staging_root, session_id))
-        supervisor.backup_id = "bk1"
+        supervisor.backup_id = backup_id
         supervisor.certificate_id = "cert1"
 
         verdict = supervisor._record_live_verdict()

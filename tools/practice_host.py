@@ -1189,6 +1189,20 @@ _MEASUREMENT_API_METHODS = (
     "collect_layer_m",
 )
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _trusted_config_digest(value) -> Optional[str]:
+    """A real host-derived Major League config digest; never a content-hash fallback.
+
+    The digest is the shared FNV1a-32 ``major_league_digest`` (or, on the non-
+    certificate path, the source-derived staged content digest). It must match the
+    service's own digest grammar; a missing or malformed value fails closed instead
+    of silently falling back to the role-parity ``content_hash``.
+    """
+    if isinstance(value, str) and practice_service.DIGEST_PATTERN.match(value):
+        return value
+    return None
 
 
 def measurement_api_problems(api) -> list:
@@ -1285,11 +1299,22 @@ def check_quiescence(config: HostConfig, live_map, *, api=None, samples: int = 2
     return {"ok": True, "code": CODE_OK, "digests": digests}
 
 
+def _is_content_id(value) -> bool:
+    """A verifier-derived content identity: the 64-hex digest the backup evidence mints."""
+    return isinstance(value, str) and bool(_SHA256_RE.match(value))
+
+
 def prepare_live_baseline(config: HostConfig, live_map, *, api=None, backup_runner=None, sleeper=None, label=None) -> dict:
     """Quiescence, a fresh verified full byte backup, then the fresh before-manifest.
 
-    The returned ``backup_id`` must be a real generated safe id (M5): a backup with
-    no usable id is refused rather than passed on as ``None``.
+    R1/the backup contract: the returned ``backup_id`` is **only** the
+    verifier-derived content identity from the real ``check_backup_evidence`` (the
+    manifest hash bound over every verified per-root file map). A backup-runner
+    label, ``digest`` alias or ``id`` is display/directory metadata and can never
+    stand in for that identity; a result without a real content id is refused
+    rather than passed on. The complete verified per-root ``roots`` evidence (and
+    the manifest hash) is preserved so ``prepare_session`` can bind its own
+    before-snapshot to the identical digests.
     """
     api = api if api is not None else isolation_certificate
     if api is None:
@@ -1301,16 +1326,22 @@ def prepare_live_baseline(config: HostConfig, live_map, *, api=None, backup_runn
     backup = backup_runner(config, live_map, label)
     if not isinstance(backup, dict) or not backup.get("ok"):
         return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "backup": backup}
-    backup_id = backup.get("label") or backup.get("backup_id") or backup.get("digest") or backup.get("id")
-    if not isinstance(backup_id, str) or not _SAFE_ID_RE.match(backup_id):
-        return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "problems": ["backup_id_missing"], "backup": backup}
     verify = _verify_fresh_backup(config, live_map)
-    if not verify.get("ok"):
+    if not isinstance(verify, dict) or not verify.get("ok"):
         return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "backup": backup, "verify": verify}
+    backup_id = verify.get("backup_id")
+    if not _is_content_id(backup_id):
+        return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "problems": ["backup_id_missing"], "backup": backup, "verify": verify}
+    roots = verify.get("roots")
+    if not isinstance(roots, Mapping) or not roots:
+        return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "problems": ["backup_roots_missing"], "backup": backup, "verify": verify}
     return {
         "ok": True,
         "code": CODE_OK,
         "backup_id": backup_id,
+        "backup_label": verify.get("backup_label"),
+        "manifest_sha256": verify.get("manifest_sha256"),
+        "roots": {str(key): dict(value) for key, value in roots.items()},
         "backup": backup,
         "verify": verify,
     }
@@ -1914,13 +1945,17 @@ class MatchSupervisor:
             ruleset = self._ruleset_reader(self.config.staging_root)
             if not ruleset.get("ok"):
                 return {"ok": False, "code": CODE_CONFIG_DIGEST, "ruleset": ruleset}
-            config_digest = ruleset.get("config_digest")
+            config_digest = _trusted_config_digest(ruleset.get("config_digest"))
+            if config_digest is None:
+                return {"ok": False, "code": CODE_CONFIG_DIGEST, "problems": ["config_digest_missing"]}
         else:
             content = staged_content_hash(self.config)
             if not content.get("ok"):
                 return {"ok": False, "code": content.get("code", CODE_STATIC_GATES_FAILED)}
             content_hash = content["digest"]
-            config_digest = content["digest"]
+            config_digest = _trusted_config_digest(content.get("digest"))
+            if config_digest is None:
+                return {"ok": False, "code": CODE_CONFIG_DIGEST, "problems": ["config_digest_missing"]}
         # Persistent unmeasured state BEFORE any server/role spawn (C1): only a
         # measured passed verdict or a measured failure receipts clears it.
         if self.config.require_certificate and prepared.get("open_record") is not None:
@@ -1956,6 +1991,8 @@ class MatchSupervisor:
             )
         if not baseline.get("ok"):
             return baseline
+        if not _is_content_id(baseline.get("backup_id")):
+            return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "problems": ["backup_id_missing"]}
         try:
             prepared = _call_prepare_session(
                 api,
@@ -1964,7 +2001,10 @@ class MatchSupervisor:
                 session_id=self.session_id,
                 port=self.match_port,
                 backup_id=baseline.get("backup_id"),
-                backup_verify=lambda: baseline.get("verify") or _verify_fresh_backup(self.config, live_map),
+                # Re-run the real verifier so the certificate re-reads the current
+                # backup/live files itself (identity + full roots evidence), rather
+                # than binding a cached baseline verdict.
+                backup_verify=lambda: _verify_fresh_backup(self.config, live_map),
                 enumerator=self._enumerator,
             )
         except Exception:  # noqa: BLE001
@@ -1973,7 +2013,12 @@ class MatchSupervisor:
             result = dict(prepared)
             result["code"] = CODE_CERTIFICATE_REQUIRED
             return result
-        prepared["backup_id"] = baseline.get("backup_id")
+        # The certificate's own evidence id is authoritative: never overwrite it with
+        # a runner label, and require it to agree with the verifier-derived baseline
+        # identity. The label stays display/directory metadata on the open record.
+        returned_id = prepared.get("backup_id")
+        if not _is_content_id(returned_id) or returned_id != baseline.get("backup_id"):
+            return {"ok": False, "code": CODE_CERTIFICATE_REQUIRED, "problems": ["prepared_backup_id_mismatch"]}
         self._open_record = prepared.get("open_record")
         if prepared.get("record") is not None:
             self._open_session_record = prepared.get("record")
@@ -1989,10 +2034,16 @@ class MatchSupervisor:
         self.match_port = int(match_port)
         self.certificate_id = self._gates.get("certificate_id")
         self.backup_id = self._gates.get("backup_id")
-        self.config_digest = self._gates.get("config_digest")
         nonce = self._gates.get("nonce")
         if not isinstance(nonce, str) or not nonce:
             return self._fail(CODE_INTERNAL)
+        # The required Major League config digest is never allowed to fall back to the
+        # role-parity content hash: a missing or malformed digest fails closed before
+        # the control service starts or any role spawns (regression: no service start
+        # or spawn without a real source-derived digest).
+        self.config_digest = _trusted_config_digest(self._gates.get("config_digest"))
+        if self.config_digest is None:
+            return self._fail(CODE_CONFIG_DIGEST, problems=["config_digest_missing"])
         ruleset = self._gates.get("ruleset") or {}
         self.admin_port = pick_free_port()
         service_config = practice_service.ServiceConfig(
@@ -2003,7 +2054,7 @@ class MatchSupervisor:
             match_port=int(self.match_port),
             log_root=self.workspace.log_dir,
             content_hash=str(content_hash),
-            expected_config_digest=str(self.config_digest or content_hash),
+            expected_config_digest=str(self.config_digest),
             gauntlet=self.request.get("gauntlet"),
             ruleset_id=str(ruleset.get("ruleset_id") or practice_service.MAJOR_LEAGUE_RULESET_ID),
             gamemode=ruleset.get("gamemode"),

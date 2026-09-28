@@ -150,12 +150,22 @@ checker is injectable (`runtime_checker=`) so fixtures never depend on `lupa`.
    `practice_live_exit_timeout` and leaves the live process running. If identity
    cannot be confirmed it fails closed (`practice_live_exit_unverified`).
 2. **Re-run every fail-closed gate** (§6). Any failure aborts before a launch.
-3. **Open the persistent unmeasured record.** The certificate's
-   `prepare_session(...)` is called with the real enumerator `closed_check`, the
-   fresh backup id and a `backup_verify` callable; it mints the single session
-   nonce and stores the before-snapshot in an exclusive open record. Immediately
-   after, and before *any* spawn, a persistent `session_unmeasured` host lockout is
-   written. A prior unclosed record refuses the session (`practice_session_open_unmeasured`).
+3. **Open the persistent unmeasured record.** The host first runs quiescence, a
+   fresh full byte backup, and the real `check_backup_evidence(backup_root, sources)`
+   verifier (`prepare_live_baseline`). The only accepted `backup_id` is that
+   verifier's **content-derived identity** (the manifest sha256 bound over every
+   verified per-root `files_digest`); a runner label, `digest` alias or `id` is
+   display/directory metadata and can never stand in for it, and the complete
+   per-root evidence is preserved. The certificate's `prepare_session(...)` is then
+   called with the real enumerator `closed_check`, that content identity and a
+   `backup_verify` callable that **re-runs the real verifier** (fresh identity plus
+   full `roots` evidence); it mints the single session nonce, binds its own
+   before-snapshot to those root digests, and stores everything in an exclusive
+   open record. The host requires the certificate's *returned* identity to equal
+   the verifier identity and never overwrites it. Immediately after, and before *any* spawn, a
+   persistent `session_unmeasured` host lockout is written. A prior unclosed
+   record refuses the session (`practice_session_open_unmeasured`), and live drift
+   or a missing root map is refused by the real verifier before preparation.
 4. **Verified server before roles.** The server adaptation is verified, the server
    is spawned and its owning-PID loopback listener proven **before** the roles
    spawn (H3), so the MP client never starts against a missing server.
@@ -184,9 +194,9 @@ checker is injectable (`runtime_checker=`) so fixtures never depend on `lupa`.
 | staged roles verified | `staging.verify_staged_role` | `practice_static_gates_failed` |
 | Steam guard measured | `staging.check_steam_guard` | `practice_static_gates_failed` |
 | **immutable two-layer certificate** | `isolation_certificate.check_certificate` | `practice_requires_isolation_certificate` |
-| **quiescent fresh verified backup + exclusive open record** | `isolation_certificate.prepare_session` (+ real `closed_check`) | `practice_requires_isolation_certificate` |
+| **quiescent fresh verified backup + exclusive open record** | `check_backup_evidence` (content `backup_id` + per-root `files_digest`) then `isolation_certificate.prepare_session` (+ real `closed_check`, `backup_verify`) | `practice_requires_fresh_backup_baseline` / `practice_requires_isolation_certificate` |
 | **role-normalized Mods parity hash** | `certificate_content_hash` (`collect_layer_m`/`current mods role_parity_digest`) | `practice_requires_isolation_certificate` |
-| **Major League config digest** | `ruleset_contract.expected_ruleset` | `practice_major_league_config_unproven` |
+| **Major League config digest (derived only, no content-hash fallback)** | `ruleset_contract.expected_ruleset` / source-derived staged content digest | `practice_major_league_config_unproven` |
 | server adaptation pin/hashes/lock/deps/node/built patch | `verify_server_adaptation` | `practice_server_adaptation_unproven` |
 | fixed validated match port | `choose_match_port` | `practice_match_port_unavailable` / `..._unconfigured` |
 | staged endpoints on that port | `staging.verify_staged_endpoints` | `practice_staged_endpoints_unproven` |
@@ -250,9 +260,13 @@ the registry ruleset id and forced gamemode, and computes the expected digest wi
 the shared `practice_service.major_league_digest` (FNV1a-32 per
 `docs/MAJOR_LEAGUE_DIGEST.md`). The digest, ruleset id, gamemode and forced-option
 mapping are passed into `ServiceConfig`; the service requires that exact
-`expected_config_digest` before `mark_attested`. The descriptors' `content_hash`
-is the certificate's role-normalized Mods parity digest, not a locally hashed
-tree.
+`expected_config_digest` before `mark_attested`. That digest is mandatory and
+fail-closed: `_evaluate_gates` refuses a missing/malformed value
+(`practice_major_league_config_unproven`) and `_launch_and_supervise` validates it
+again **before** the control service starts or any role spawns. It is **never**
+permitted to fall back to the role-parity `content_hash` (a different quantity).
+The descriptors' `content_hash` is the certificate's role-normalized Mods parity
+digest, not a locally hashed tree.
 
 ## 7. Server, service and roles
 
@@ -434,7 +448,17 @@ manifest binding with an injected git provider and builder (no real git/node/npm
 - certificate reuse/lockout/missing-api, the absence of any rebase/record-proof
   path and any unchecked host attestation writer (the host delegates to the
   certificate writer with separate `control_port`/`port`), quiescence, the real
-  backup-id requirement and two-role nonce attestation;
+  backup content-identity requirement and two-role nonce attestation;
+- the backup contract through the **real** `check_backup_evidence` on synthetic
+  backup trees (created with the real `create_live_backup`): the baseline id is the
+  verifier content identity (never the runner label), the verified per-root
+  evidence is preserved, live drift and a missing root map are refused before any
+  preparation, and the **real** `prepare_session` binds its open record to that
+  identity and root digests while keeping the label as display metadata only (the
+  supervisor never overwrites the certificate's returned identity);
+- the required Major League `config_digest` is fail-closed: a missing/malformed
+  digest refuses before the control service starts or any role spawns, with no
+  content-hash fallback;
 - server adaptation pin/hash/bind/admin, package-lock and runtime-dependency
   binding, the full `runtime_files` dependency manifest, `dependency_hashes` and the
   declared `native_files` set, the built `dist/main.js` patch and `built_files`
@@ -500,13 +524,23 @@ any method is absent. The exact surface it calls:
 
 - `isolation_certificate.check_certificate(staging_root, live=, port=)` and
   `lockout(staging_root)` / `acknowledge_lockout(staging_root, operator=, reason=)`;
+- `launch_practice.check_backup_evidence(backup_root, sources=)` (owned by the
+  launcher/backup worker): returns `ok`, `backup_id` (content-derived, 64-hex),
+  `backup_label` (display only), `manifest_sha256` and
+  `roots[key] = {source_root, files_digest, entry_manifest_sha256, file_count}`.
+  The host treats `backup_id` as the only backup identity, preserves the full
+  `roots` evidence, and passes both to `prepare_session`; it never substitutes a
+  runner label, `digest` alias or `id`;
 - `isolation_certificate.prepare_session(staging_root, live=, session_id=, port=,
   closed_check=, backup_id=, backup_verify=, phase=MATCH)` — returns `nonce`,
-  `certificate_id`, `backup_id`, `open_record` **and the open record mapping**
-  (`record`). The host passes that mapping to `execute_launch(open_session=...)`. If
-  the worker adds a `backup_root` keyword the host passes `config.backup_root`
-  automatically (signature-detected); otherwise `backup_verify` (a callable
-  re-running the fresh-backup check) is always passed;
+  `certificate_id`, `backup_id` (the evidence id it authenticated), `backup_label`,
+  `open_record` **and the open record mapping** (`record`). The host passes the
+  verifier content id and a `backup_verify` that re-runs the real verifier (fresh
+  identity plus `roots` evidence), requires the returned `backup_id` to equal that
+  verifier identity and never overwrites it. If the worker adds a `backup_root`
+  keyword the host passes `config.backup_root` automatically (signature-detected);
+  `backup_verify` is always passed; and the returned `record` mapping is what the
+  host forwards to `execute_launch(open_session=...)`;
 - `isolation_certificate.list_open_records(staging_root)`,
   `bind_open_session(staging_root, session_id, pids=, spawn_time=)`,
   `record_session_verdict(staging_root, session_id=, live=, **session=<retained
@@ -563,3 +597,15 @@ Remaining dependencies / honest gaps:
    produces files consumed by the Lua companion reader for both roles and both
    runtimes. Matching records pass; changed nonces fail (eight checks). These
    are synthetic certificate fixtures, not native Balatro attestation evidence.
+6. **The backup/session identity contract is owned by the isolation/launcher
+   worker.** This host consumes `check_backup_evidence` → `backup_id`
+   (content-derived), `backup_label`, `manifest_sha256` and
+   `roots[key] = {source_root, files_digest, entry_manifest_sha256, file_count}`,
+   and relies on `prepare_session` binding its before-snapshot to those root
+   digests and returning the authenticated `backup_id`. At the time of this
+   repair, root's `tests/astra_backup_session_contracts.py` was failing on an
+   in-progress `staging._digest` reference inside that worker; it now passes
+   against the landed API (verified independently by this worker). If those
+   fields are renamed or reshaped, the host fails closed
+   (`practice_requires_fresh_backup_baseline`) rather than substituting a label or
+   `digest` alias; it never edits the isolation-owned files.
