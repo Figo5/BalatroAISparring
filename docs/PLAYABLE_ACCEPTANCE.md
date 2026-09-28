@@ -83,3 +83,5 @@ The earlier session-limit response was superseded by the completed after-reset r
 Raw logs, sources, dependencies, proprietary runtime files and staging remain ignored. No live Balatro files have been modified.
 
 Review availability at 9:02 a.m. Eastern: Claude returned a session-limit response during the final isolation re-review, with a reported noon Eastern reset on September 28. That run supplies no verdict. The final isolation and host repair reviews remain required; implementation and independent verification can finish without native Balatro actions.
+
+September 28 evening: host/service repair `4516e60` is accepted by Claude (`CLAUDE_HOST_FIFTH_REREVIEW.md`) and Astra after independent 87/87 host tests plus the failed-close negative. The one theoretical non-blocking Low is recorded, not expanded into more scope. Runtime/engine/policy, installer and host/service code-review gates have passed. Isolation F1–F4 source-measurement corrections remain in implementation and require verification/re-review before P2. No actual Balatro operation has occurred.
