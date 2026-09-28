@@ -10,8 +10,10 @@ and exercise the production launcher logic, never a forged evidence file.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -1361,6 +1363,286 @@ def test_cli_bootstrap_timeout_is_wired_to_the_measurement_run():
             )
         assert code == 0
         assert captured.get("timeout") == 4.25
+
+
+class _FakeListenSocket:
+    def __init__(self):
+        self.closed = False
+        self.bound = None
+
+    def setsockopt(self, *args):
+        pass
+
+    def bind(self, endpoint):
+        self.bound = endpoint
+
+    def listen(self, *args):
+        pass
+
+    def settimeout(self, value):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeSockets:
+    AF_INET = 2
+    SOCK_STREAM = 1
+    SOL_SOCKET = 1
+    SO_EXCLUSIVEADDRUSE = 4
+    SHUT_WR = 1
+
+    def __init__(self):
+        self.last = None
+
+    def socket(self, *args):
+        self.last = _FakeListenSocket()
+        return self.last
+
+
+class _NoThreads:
+    Event = threading.Event
+
+    class Thread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, *args, **kwargs):
+            pass
+
+
+class _FakeConn:
+    def __init__(self, recvs):
+        self._recvs = list(recvs)
+        self.calls = 0
+        self.closed = False
+        self.shutdowns = 0
+
+    def settimeout(self, *args):
+        pass
+
+    def recv(self, *args):
+        self.calls += 1
+        if self._recvs:
+            return self._recvs.pop(0)
+        raise TimeoutError("drain complete")
+
+    def shutdown(self, *args):
+        self.shutdowns += 1
+        raise OSError("shutdown did not succeed")
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeAcceptServer:
+    def __init__(self, conn, addr=("127.0.0.1", 49123)):
+        self._conn = conn
+        self._addr = addr
+        self.closed = False
+
+    def accept(self):
+        return self._conn, self._addr
+
+    def close(self):
+        self.closed = True
+
+
+PORT = 39123
+
+
+def _listener(mode="P2_CLOSE", inventory=None, owner_lookup=None, sockets=None):
+    return launch_practice.MeasurementListener(
+        PORT,
+        mode=mode,
+        inventory=inventory,
+        owner_lookup=owner_lookup or (lambda *args: None),
+        socket_mod=sockets or _FakeSockets(),
+        threading_mod=_NoThreads,
+    )
+
+
+def test_measurement_listener_requires_exact_owned_pid_and_complete_inventory():
+    other = os.getpid() + 100000
+    positive = _listener(
+        inventory=lambda port: {"ok": True, "code": "ok", "rows": [{"address": "127.0.0.1", "pid": os.getpid()}]}
+    )
+    assert positive.start()["ok"] is True, "the exact owning PID on loopback is positive proof"
+
+    # An empty table cannot positively prove ownership.
+    listener = _listener(inventory=lambda port: {"ok": True, "code": "ok", "rows": []})
+    result = listener.start()
+    assert result["ok"] is False and listener._socket.last.closed
+
+    # A failed/partial query is distinguished from an empty table and refused.
+    listener = _listener(inventory=lambda port: {"ok": False, "code": "inventory_unavailable", "rows": []})
+    result = listener.start()
+    assert result["ok"] is False and "inventory_unavailable" in result["problems"]
+    assert listener._socket.last.closed
+
+    # A listener on ::1 is foreign even when it shares our PID.
+    listener = _listener(
+        inventory=lambda port: {
+            "ok": True,
+            "code": "ok",
+            "rows": [{"address": "::1", "pid": os.getpid()}, {"address": "127.0.0.1", "pid": os.getpid()}],
+        }
+    )
+    assert listener.start()["ok"] is False and listener._socket.last.closed
+
+    # A second loopback owner refuses.
+    listener = _listener(
+        inventory=lambda port: {
+            "ok": True,
+            "code": "ok",
+            "rows": [{"address": "127.0.0.1", "pid": os.getpid()}, {"address": "127.0.0.1", "pid": other}],
+        }
+    )
+    assert listener.start()["ok"] is False and listener._socket.last.closed
+
+    # A malformed row fails closed.
+    listener = _listener(inventory=lambda port: {"ok": True, "code": "ok", "rows": [{"address": "127.0.0.1"}]})
+    result = listener.start()
+    assert result["ok"] is False and "listener_inventory_partial" in result["problems"]
+    assert listener._socket.last.closed
+
+
+def test_measurement_listener_silent_eof_does_not_busy_spin_or_extend_the_hold():
+    listener = _listener(mode="P2_SILENT", owner_lookup=lambda *args: 12345)
+    conn = _FakeConn([b""])
+    listener._server = _FakeAcceptServer(conn)
+    listener.arm([12345])
+    listener._serve()
+    state = listener._state
+    assert state["peer_eof"] is True and state["peer_is_owned_ai"] is True
+    assert state["open_until"] == state["eof_time"], "an honest EOF caps the hold"
+    assert conn.calls == 1, "a closed SILENT peer must not busy-spin"
+    assert listener._server is None
+
+
+def test_measurement_listener_wrong_peer_aborts_promptly_and_nothing_is_sent():
+    listener = _listener(mode="P2_SILENT", owner_lookup=lambda *args: os.getpid() + 1)
+    conn = _FakeConn([b"data"])
+    listener._server = _FakeAcceptServer(conn)
+    listener.arm([12345])
+    listener._serve()
+    assert listener._state["peer_is_owned_ai"] is False
+    assert conn.calls == 0 and conn.closed is True, "a wrong peer is never read or held"
+    assert listener._state["open_until"] is None
+
+    # A non-loopback observed endpoint is refused before any owner lookup.
+    listener = _listener(mode="P2_SILENT", owner_lookup=lambda *args: 12345)
+    conn = _FakeConn([b"data"])
+    listener._server = _FakeAcceptServer(conn, addr=("192.168.1.5", 49123))
+    listener.arm([12345])
+    listener._serve()
+    assert listener._state["peer_is_owned_ai"] is False
+    assert "listener_peer_endpoint_not_loopback" in listener._state["problems"]
+    assert conn.calls == 0 and conn.closed is True
+
+
+def test_measurement_listener_logs_bounded_actions_and_never_sends():
+    limit = int(staging.LISTENER_MAX_RECEIVED_BYTES)
+    listener = _listener(mode="P2_CLOSE", owner_lookup=lambda *args: 12345)
+    conn = _FakeConn([b'{"action":"keepAlive"}\n{"action":"keepAlive"}\n{"action":"join"}\n', b"z" * (limit + 32)])
+    listener._server = _FakeAcceptServer(conn)
+    listener.arm([12345])
+    listener._serve()
+    fields = listener.log_fields("nonce", "P2_CLOSE")
+    assert fields["sent_bytes"] == 0
+    assert fields["actions"] == "keepAlive,join"
+    assert fields["action_count"] == 2
+    assert fields["received_bytes"] == limit, "retention is bounded"
+    assert fields["fin"] is False, "a failed shutdown is never a successful FIN"
+
+
+def test_measurement_listener_silent_receive_timeout_is_not_a_peer_eof():
+    listener = _listener(mode="P2_SILENT", owner_lookup=lambda *args: 12345)
+
+    class _IdleConn:
+        def __init__(self, stop):
+            self._stop = stop
+            self.calls = 0
+
+        def settimeout(self, *args):
+            pass
+
+        def recv(self, *args):
+            self.calls += 1
+            self._stop.set()
+            raise TimeoutError("idle")
+
+        def shutdown(self, *args):
+            raise OSError("no")
+
+        def close(self):
+            pass
+
+    conn = _IdleConn(listener._stop)
+    listener._server = _FakeAcceptServer(conn)
+    listener.arm([12345])
+    listener._serve()
+    assert listener._state["peer_eof"] is False, "a recv timeout is not an EOF"
+    assert listener._state["open_until"] is not None
+    assert conn.calls == 1
+
+
+class _Completed:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_tcp_owner_queries_reverse_client_tuple_and_returns_peer_pid():
+    commands: list = []
+
+    def fake_run(args, **kwargs):
+        command = args[-1]
+        commands.append(command)
+        client_side = "-State Established" in command and "-LocalPort 49123" in command and "-RemotePort 39123" in command
+        return _Completed(stdout='{"OwningProcess": %d}' % (12345 if client_side else 54321))
+
+    with patched(launch_practice.subprocess, run=fake_run):
+        pid = launch_practice._default_tcp_owner(39123, 49123)
+    assert pid == 12345, f"queried the listener PID instead of the AI peer PID: {commands}"
+    assert "127.0.0.1" in commands[0] and "-State Established" in commands[0]
+
+
+def test_tcp_owner_refuses_nonzero_malformed_ambiguous_and_missing_owner():
+    cases = [
+        _Completed(returncode=1, stdout='{"OwningProcess": 12345}'),
+        _Completed(stdout="not json"),
+        _Completed(stdout=""),
+        _Completed(stdout='[{"OwningProcess": 12345}, {"OwningProcess": 54321}]'),
+        _Completed(stdout='[{"OwningProcess": 12345}, {"OwningProcess": 12345}]'),
+        _Completed(stdout='{"OwningProcess": null}'),
+        _Completed(stdout='{"OwningProcess": "not-a-pid"}'),
+        _Completed(stdout='{"LocalPort": 49123}'),
+    ]
+    for completed in cases:
+        with patched(launch_practice.subprocess, run=lambda *a, _c=completed, **k: _c):
+            assert launch_practice._default_tcp_owner(39123, 49123) is None, completed.stdout
+
+
+def test_tcp_listeners_refuse_nonzero_exit():
+    stdout = '{"ok": true, "rows": [{"address": "127.0.0.1", "pid": 1}]}'
+    with patched(launch_practice.subprocess, run=lambda *a, **k: _Completed(returncode=1, stdout=stdout)):
+        result = launch_practice._default_tcp_listeners(39123)
+    assert result["ok"] is False and result["code"] == "inventory_unavailable", result
+
+
+def test_owned_process_unreadable_handle_does_not_prove_exit():
+    class Unreadable:
+        def poll(self):
+            raise OSError("synthetic query failure")
+
+    owned = launch_practice.OwnedProcess("ai", Unreadable(), 12345, 1.0, "synthetic.exe")
+    assert owned.is_running() is True, "an unreadable retained handle cannot prove exit"
 
 
 def _run_all() -> int:

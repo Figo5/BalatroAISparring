@@ -41,7 +41,7 @@ def test_measurement_phase_requires_prerequisite_receipts():
         root = Path(tmp)
         staged = fixture._stage_all(root)
         with fixture.synthetic_tools(root):
-            for phase in ("P1B", "FULL_P1", "CRASH", "P2"):
+            for phase in ("P1B", "FULL_P1", "CRASH", "P2_INITIAL", "P2_CLOSE", "P2_SILENT"):
                 refused = ic.prepare_session(
                     staged["staging_root"],
                     live=staged["live_map"],

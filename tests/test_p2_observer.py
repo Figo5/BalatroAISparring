@@ -305,22 +305,71 @@ def test_observer_env_gate_off_is_inert_and_networking_unaffected():
         return
     patched = _thread_text()
     raw = _raw_thread_text()
-    scenario = dict(
-        connects=[1, None, None, None],
-        errors=[None, "connection refused", "connection refused", "connection refused"],
-        recvs=[None], recv_errors=["close"], sleep_limit=TRACE_SLEEP_LIMIT,
-    )
+    # N5: gate-off equivalence is checked for all three real scenarios (close-error
+    # reconnect, dead-port initial failure, keepalive expiry), not just one.
+    scenarios = {
+        "close_error": dict(
+            connects=[1, None, None, None],
+            errors=[None, "connection refused", "connection refused", "connection refused"],
+            recvs=[None], recv_errors=["close"], sleep_limit=TRACE_SLEEP_LIMIT,
+        ),
+        "dead_port": dict(
+            connects=[None], errors=["connection refused"],
+            recvs=[None], recv_errors=[None], sleep_limit=TRACE_SLEEP_LIMIT,
+        ),
+        "keepalive": dict(
+            connects=[1, None, None, None],
+            errors=[None, "connection refused", "connection refused", "connection refused"],
+            recvs=[None], recv_errors=[None], sleep_limit=KEEPALIVE_SLEEP_LIMIT,
+        ),
+    }
     for display, runtime in RUNTIMES:
-        off = _run(runtime, patched, env={"AISP_PROBE_NONCE": "off-nonce"}, **scenario)
-        plain = _run(runtime, raw, env={"AISP_PROBE_NONCE": "off-nonce"}, **scenario)
-        assert off["writes"] == [], (display, off["writes"])
-        assert off["connect_calls"] == plain["connect_calls"] == 4, display
-        # The patched thread with the gate off must be indistinguishable from the
-        # unpatched source across connects, receives, sleeps, sends and channel events.
-        assert off["trace"] == plain["trace"], (display, off["trace"], plain["trace"])
-        assert off["sleeps"] == plain["sleeps"], display
-        assert off["close_calls"] == plain["close_calls"], display
-        print(f"ok   {display} gate off is inert and networking trace is unchanged")
+        for label, scenario in scenarios.items():
+            off = _run(runtime, patched, env={"AISP_PROBE_NONCE": "off-nonce"}, **scenario)
+            plain = _run(runtime, raw, env={"AISP_PROBE_NONCE": "off-nonce"}, **scenario)
+            assert off["writes"] == [], (display, label, off["writes"])
+            # The patched thread with the gate off must be indistinguishable from the
+            # unpatched source across connects, receives, sleeps, sends and channel events.
+            assert off["trace"] == plain["trace"], (display, label)
+            assert off["sleeps"] == plain["sleeps"], (display, label)
+            assert off["close_calls"] == plain["close_calls"], (display, label)
+            assert off["connect_calls"] == plain["connect_calls"], (display, label)
+    print("ok   both runtimes: gate off is inert across close/dead-port/keepalive traces")
+
+
+def test_observer_closed_error_never_uses_the_close_branch_and_falls_back_to_keepalive():
+    """N5: branch-reachability check. LuaSocket's peer-close result is ``closed``,
+    not ``close``, so the pinned ``error == "close"`` branch does not run; the
+    keepalive path takes over and the classifier labels it ``keepalive_fallback``."""
+    if not staging.REFERENCE_MP_SOCKET.is_file():
+        print('skip test_observer_closed_error_never_uses_the_close_branch_and_falls_back_to_keepalive: pinned Multiplayer source unavailable')
+        return
+    body = _thread_text()
+    for display, runtime in RUNTIMES:
+        result = _run(
+            runtime, body,
+            env={"AISP_MEASURE_P2": "1", "AISP_PROBE_NONCE": "closed-nonce"},
+            connects=[1, None, None, None],
+            errors=[None, "connection refused", "connection refused", "connection refused"],
+            recvs=[None], recv_errors=["closed"],
+            sleep_limit=KEEPALIVE_SLEEP_LIMIT,
+        )
+        fields = _fields(result["writes"][-1]["data"])
+        # The literal close branch never fires for a "closed" receive error.
+        assert fields["closes"] == "0", (display, fields)
+        assert fields["keepalive_failures"] == "1", (display, fields)
+        assert fields["cycle1_cause"] == "keepalive", (display, fields)
+        assert fields["cycle1_outcome"] == "exhausted", (display, fields)
+        # The classifier must label this a keepalive fallback, never close_branch.
+        derived = ic._p2_derive(fields, PORT)
+        listener = ic._listener_view({
+            "accepted": "1", "peer_is_owned_ai": "true", "sent_bytes": "0",
+            "closed": "true", "fin": "true", "close_time": "100.0",
+        })
+        coverage = ic._p2_phase_coverage("P2_CLOSE", derived, listener)
+        assert "closure" in coverage["covered"], (display, coverage)
+        assert coverage["closure_path"] == "keepalive_fallback", (display, coverage)
+    print("ok   both runtimes: closed receive error uses the keepalive fallback path")
 
 
 def test_observer_observes_real_reconnect_branch():

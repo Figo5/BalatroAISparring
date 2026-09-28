@@ -3,8 +3,8 @@
 Status: **staging code with measured, nonce-bound evidence gates and a two-layer
 reusable isolation certificate. No native isolation is proven yet and nothing was
 launched.** The certificate stays **partial** and the launch gate stays closed
-until every required phase (P1a, P1b, full P1, crash/cleanup fixture, P2 dead-port)
-has real measured evidence. No staged process was started and no live file, save
+until every required phase (P1a, P1b, full P1, crash/cleanup fixture, P2 initial,
+P2 close, P2 silent) has real measured evidence. No staged process was started and no live file, save
 or Steam state was touched or copied.
 
 Owners: `tools/staging.py`, `tools/isolation_certificate.py`,
@@ -251,8 +251,8 @@ only, one generated Lovely patch, and no Multiplayer/SMODS/Handy. The run is:
 `measure_isolation_state` before/after plus `record_isolation_proof` writes the
 measured per-session `isolation_proof.json`, which requires zero live diff and
 unchanged staged immutables. The reusable certificate (Section 10) is built
-separately from explicit P1a/P1b/full-P1/crash/P2 evidence and stays partial until
-all of it is present.
+separately from explicit P1a/P1b/full-P1/crash/P2 (initial/close/silent) evidence
+and stays partial until all of it is present.
 
 ## 5. Gate status
 
@@ -261,8 +261,8 @@ all of it is present.
 | P0 | game closed, hash backups incl. all Steam userdata, staged-only, loopback `.env`, MP guard | code complete; **not run** |
 | P1.1 static | document save/profile/Mods/log/Steam resolution | **done** (Section 2) |
 | P1a bootstrap | staged no-MP run, nonce-bound probes, zero live diff, positive Steam isolation | **code complete, evidence absent → blocked** |
-| Certificate | two-layer N/M certificate over staged code, tools, evidence copies; partial without crash/P2 | **code complete, no real evidence → partial** |
-| P1b/P2–P5 | staged MP, dead-port, parity, observation/action, hygiene | untouched |
+| Certificate | two-layer N/M certificate over staged code, tools, evidence copies; partial without crash/P2 (initial/close/silent) | **code complete, no real evidence → partial** |
+| P1b/P2–P5 | staged MP, dead-port, close/silent listener, parity, observation/action, hygiene | untouched |
 
 ## 6. Unresolved questions (remaining)
 
@@ -341,7 +341,7 @@ All entry points below are also re-exported as thin wrappers on `staging`
 | `isolation_certificate.bound_tool_specs()` | the bound tool set: `staging`, `launcher`, `prepare_server`, `practice_service`, `practice_host`, `certificate_checker` |
 | `isolation_certificate.collect_layer_n(staging_root, live=None)` | measured native layer N |
 | `isolation_certificate.collect_layer_m(staging_root, live=None, server_bind=None)` | measured Mods layer M |
-| `isolation_certificate.build_certificate(staging_root, *, receipt_ids, live=None, port=None, server_bind=None, tools=None, extra=None)` | validate the tool-owned phase **receipt IDs** and publish an immutable generation; the legacy `phases=` dict is always refused; requires `tools` (if given) to equal `bound_tool_specs()` exactly (M3); returns `status: "partial"` while anything is missing, including pending P2 subgates |
+| `isolation_certificate.build_certificate(staging_root, *, receipt_ids, live=None, port=None, server_bind=None, tools=None, extra=None)` | validate the tool-owned phase **receipt IDs** and publish an immutable generation; the legacy `phases=` dict is always refused; requires `tools` (if given) to equal `bound_tool_specs()` exactly (M3); requires all seven phase receipts (including `P2_INITIAL`/`P2_CLOSE`/`P2_SILENT`) with distinct nonces; returns `status: "partial"` while anything is missing |
 | `isolation_certificate.check_certificate(staging_root, live=None, port=None)` | recompute N/M/tools/evidence/endpoint/live-roots; never compares live contents |
 | `staging.check_isolation_proof(staging_root, live=None, roles=...)` | host-facing wrapper the launcher/host already call |
 | `staging.check_steam_guard(staging_root, role, live=None, proof=None)` | static staged Steam guard (patch hash + marker/probes + absent natives); ignores `live`/`proof`, never reads the mutable proof |
@@ -349,7 +349,7 @@ All entry points below are also re-exported as thin wrappers on `staging`
 | `staging.check_lovely_evidence(staging_root, role, spawn_time, expected_mods=None, require_dump=True)` | exact staged `Mods` binding plus fresh `Mods/lovely/{log,dump}` artefacts |
 | `isolation_certificate.snapshot_live(live, *, label=None)` | full byte manifest of live install + AppData + every Steam `2379780` profile app dir (never the whole Steam install) |
 | `isolation_certificate.prepare_session(staging_root, *, live, session_id, port=None, closed_check=None, phase=MATCH, backup_id=None, backup_verify=None, measurement_setup=None)` | closed-game prep: certificate/prerequisite + not-locked-out + refuse a reused session id (L6) + a real `closed_check` + the verified backup evidence bound to the before snapshot (R1) + rotate stale probes/attestation (safe staging writes) + internally minted nonce (no caller override, L5) |
-| `isolation_certificate.record_phase_receipt(staging_root, *, phase, session_id, session, live, port=None, live_closed=None)` | tool-owned receipt: requires `live_closed` (R2), first binds the requested `phase`/`port` to the persisted prepared open record (refusing relabelling) and then derives CRASH/P2 from retained handles + tool setup (H3); copies probes, the Lovely dump and a hashed `measurement.json` (M2) |
+| `isolation_certificate.record_phase_receipt(staging_root, *, phase, session_id, session, live, port=None, live_closed=None)` | tool-owned receipt: requires `live_closed` (R2), first binds the requested `phase`/`port` to the persisted prepared open record (refusing relabelling) and then derives CRASH (fresh nonce-bound probes + tool end code) and each P2 phase (observer + listener log) from tool-owned evidence; copies probes, the required Lovely `main.lua`/`socket.lua` dumps, the listener log and a hashed `measurement.json` (M2/N8); refuses to close a P2 phase whose own coverage is incomplete |
 | `isolation_certificate.record_session_verdict(staging_root, *, session_id, live, backup_id=None, certificate_id=None, session=None, live_closed=None)` | append-only receipt; **computes** the after snapshot; live byte diff -> persistent lockout + revocation + stored raw before/after manifests |
 | `isolation_certificate.write_launcher_attestation(staging_root, *, session_id, nonce, control_port, port, spawn_time=None, live=None)` | re-verify **both** roles' probes, require phase `MATCH` and the current certificate id (L4), then write the fixed session-bound attestation to `<role save root>/aisparring-launcher-attestation.json` (outside Mods) |
 | `isolation_certificate.launcher_session_env_names()` | the exact session-descriptor env names derived from the real `launch_practice.SESSION_ENV_KEYS` (no speculative aliases) |
@@ -370,40 +370,58 @@ the launcher is unavailable the certificate is refused, not guessed. The host
 writes the session-bound attestation only after both roles' probes verify;
 `prepare_session` rotates any previous attestation inside staging before launch.
 
-Receipt phases are `P1A`, `P1B`, `FULL_P1`, `CRASH`, `P2`. Each receipt carries a
-session `nonce`, a `spawn_time`, `closure`, raw `before_files`/`after_files`, a
-`measured` mapping derived by the tool, copied probe/dump evidence and a hashed
-`measurement.json`. The requested `phase`/`port` must first equal the persisted
-prepared open record, so a receipt can never be relabelled. `P1A.measured` holds
-equal `bootstrap_install_digest` and `role_install_digests`; `P1B`/`FULL_P1` bind
-the role Mods digests, parity digest and port; `CRASH` binds the retained-handle
-exit codes, the env-gated stimulus (only when the prepared record actually held the
-CRASH setup) and cleanup. `P2` binds the tool's both-family listener absence +
-refused connect (the *port* proof only), the pinned loopback endpoint, and the
-attempt/failure/reconnect/keepalive fields emitted by the env-gated source observer
-that runs inside the real staged network thread (`networking/socket.lua`, injected
-after the exact `Networking.Client:connect(CONFIG_URL, CONFIG_PORT)` call). The
-observer emits one exact schema; `initial_failure` is covered only by an observed
-first connect return `~= 1` with a real failure count, `reconnect` only by a
-completed bounded retry cycle that failed, and `keepalive` only by the real
-keepalive-failure branch. The schema's `first_time`/`last_time` are observed
-wall-clock `socket.gettime` values, not a monotonic guarantee, and the pinned
-network timers are untouched. The patch, the emitted schema and the covered/pending
-mapping are regression-tested under both lupa runtimes (`tests/test_p2_observer.py`):
-the gate-off patched thread's whole connect/receive/sleep/send/channel-event trace
-must equal the unpatched source, and the real `tryReconnect` cycle (2/4/8-second
-delays) and keepalive-expiry branch are driven through the original timer loop with
-bounded fake time. A bare `started` marker, the tool's own refused probe or a
-caller-written flag never covers a subgate, and `build_certificate` stays
-**partial** while any P2 subgate (`initial_failure`/`reconnect`/`keepalive`) lacks a
-real branch outcome, so a single event is never stamped as a broad P2 pass. Because
-a dead port can only ever produce the initial-failure path, the reconnect and
-keepalive gates stay pending until further controlled local stimulus (a real
-listener that accepts then closes, and a connected listener that stops answering
-keepalive) is run; that stimulus is not yet in place, so no P2 full coverage is
-claimed. There is deliberately **no rebase API**: historical certificate evidence
-is immutable, and recovery requires a new P1 run that produces a new measured
-generation.
+Receipt phases are `P1A`, `P1B`, `FULL_P1`, `CRASH`, `P2_INITIAL`, `P2_CLOSE`,
+`P2_SILENT` (the reviewed three-phase P2 design in `docs/P2_MEASUREMENT_PROPOSAL.md`).
+Each receipt carries a session `nonce`, a `spawn_time`, `closure`, raw
+`before_files`/`after_files`, a `measured` mapping derived by the tool, copied
+probe/dump evidence and a hashed `measurement.json`. The requested `phase`/`port`
+must first equal the persisted prepared open record, so a receipt can never be
+relabelled. `P1A.measured` holds equal `bootstrap_install_digest` and
+`role_install_digests`; `P1B`/`FULL_P1` bind the role Mods digests, parity digest
+and port. `CRASH` binds the fresh nonce-bound crash probes written by the wrapper
+around the *active original* error handler, requires one for every role and requires
+every measured exit code to equal the tool-owned CRASH end code; a nonzero exit
+alone is never a crash. Each P2 phase is AI-only after `FULL_P1`, uses a distinct
+nonce and must prove exactly one section 4 coverage definition:
+
+* `P2_INITIAL` binds the tool's both-family listener absence + refused connect (the
+  *port* proof only) plus an observed first connect return `~= 1` with zero
+  successful connects and zero cycles (`initial_failure`).
+* `P2_CLOSE`/`P2_SILENT` bind the tool-owned exclusive `127.0.0.1` one-connection
+  listener log (accepted peer owned by the AI PID at the exact observed loopback
+  tuple, zero sent bytes, bounded received-byte retention plus the observed JSON
+  `action` names; FIN close for CLOSE, held open for SILENT) and the observer's
+  per-cycle evidence. `closure` is
+  covered only by a recorded peer FIN, a receive error after the close, and one
+  completed bounded exhausted retry cycle (attempts == failures == 3, 2/4/8-second
+  delays); `keepalive` only by the original keepalive path (five pushes ~20s then
+  ~5s, one exhausted cycle with cause `keepalive`) *and* a listener hold that
+  covers the exhausted cycle's completion (`open_until >= cycle end`). An honest
+  premature peer EOF caps `open_until` at the observed EOF and therefore fails the
+  gate; a cycle that recovered or was left unfinished never covers either gate.
+
+The observer runs inside the real staged network thread (`networking/socket.lua`)
+and every anchor is the exact full trimmed pinned line, so it applies under Lovely's
+whole-trimmed-line wildcard rule; the runtime MP guard requires all nine payload
+markers in the loaded thread string and `check_multiplayer_guard` requires each
+anchor to match exactly one line of the staged socket source. The observer emits one
+exact schema with per-cycle fields (`cycleN_cause`/`_outcome`/`_attempt*`) and
+records the first distinct non-`timeout` receive error verbatim and the keepalive
+push times; the `error == "close"` comparison, timeouts and retry counts are
+untouched. LuaSocket may return `closed` rather than `close`, in which case the
+close branch does not run and closure is reported as `closure_path =
+keepalive_fallback` (never `close_branch`). A bare `started` marker, the tool's own
+refused probe or a caller-written flag never covers a gate; a receipt whose phase
+coverage is incomplete fails closed and raises the global lockout. The patch, the
+emitted schema and the covered/pending mapping are regression-tested under both lupa
+runtimes (`tests/test_p2_observer.py`): the gate-off patched thread's whole
+connect/receive/sleep/send/channel-event trace must equal the unpatched source for
+all three scenarios, and the real `tryReconnect` cycle (2/4/8-second delays) and
+keepalive-expiry branch are driven through the original timer loop with bounded fake
+time. Every measurement run has a hard deadline and is ended by the tool with a
+distinct recorded end code once the required evidence has settled. There is
+deliberately **no rebase API**: historical certificate evidence is immutable, and
+recovery requires a new P1 run that produces a new measured generation.
 
 ## 11. Cross-owner host contract (current as of this repair)
 

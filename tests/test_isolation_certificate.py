@@ -147,7 +147,54 @@ def _live_map(root: Path, profiles=("390025789", "111111111")) -> dict:
     )
 
 
-def _write_probes(paths, nonce=NONCE, port=PORT):
+P2_INITIAL_ARTIFACT = (
+    "connect_attempts=1\nconnect_successes=0\nconnect_failures=1\n"
+    "first_result=none\nfirst_error=connection refused\nfirst_time=1.0\nfirst_success_time=0\n"
+    "last_result=none\nlast_error=connection refused\nlast_time=1.0\n"
+    "reconnect_attempts=0\nreconnect_failures=0\nreconnects=0\nkeepalive_failures=0\n"
+    "keepalive_pushes=0\ncloses=0\n"
+)
+
+P2_CLOSE_ARTIFACT = (
+    "connect_attempts=4\nconnect_successes=1\nconnect_failures=3\n"
+    "first_result=1\nfirst_error=nil\nfirst_time=100.0\nfirst_success_time=100.0\n"
+    "last_result=none\nlast_error=connection refused\nlast_time=115.0\n"
+    "reconnect_attempts=3\nreconnect_failures=3\nreconnects=1\nkeepalive_failures=0\n"
+    "keepalive_pushes=0\ncloses=1\n"
+    "cycle1_cause=close\ncycle1_start_time=101.0\ncycle1_outcome=exhausted\ncycle1_end_time=115.0\n"
+    "cycle1_attempt_count=3\n"
+    "cycle1_attempt1_time=103.0\ncycle1_attempt1_result=none\n"
+    "cycle1_attempt2_time=107.0\ncycle1_attempt2_result=none\n"
+    "cycle1_attempt3_time=115.0\ncycle1_attempt3_result=none\n"
+    "receive_error1_value=closed\nreceive_error1_time=100.5\n"
+)
+
+P2_SILENT_ARTIFACT = (
+    "connect_attempts=4\nconnect_successes=1\nconnect_failures=3\n"
+    "first_result=1\nfirst_error=nil\nfirst_time=100.0\nfirst_success_time=100.0\n"
+    "last_result=none\nlast_error=connection refused\nlast_time=140.0\n"
+    "reconnect_attempts=3\nreconnect_failures=3\nreconnects=1\nkeepalive_failures=1\n"
+    "keepalive_pushes=5\ncloses=0\n"
+    "cycle1_cause=keepalive\ncycle1_start_time=120.0\ncycle1_outcome=exhausted\ncycle1_end_time=134.0\n"
+    "cycle1_attempt_count=3\n"
+    "cycle1_attempt1_time=122.0\ncycle1_attempt1_result=none\n"
+    "cycle1_attempt2_time=126.0\ncycle1_attempt2_result=none\n"
+    "cycle1_attempt3_time=134.0\ncycle1_attempt3_result=none\n"
+    "keepalive_push1_time=120.0\nkeepalive_push2_time=125.0\nkeepalive_push3_time=130.0\n"
+    "keepalive_push4_time=135.0\nkeepalive_push5_time=140.0\n"
+)
+
+_P2_ARTIFACTS = {
+    "P2_INITIAL": P2_INITIAL_ARTIFACT,
+    "P2_CLOSE": P2_CLOSE_ARTIFACT,
+    "P2_SILENT": P2_SILENT_ARTIFACT,
+}
+_SOCKET_DUMP = "return [[\n" + "\n".join(
+    "-- " + marker for marker in staging.P2_PAYLOAD_MARKERS
+) + "\n]]\n"
+
+
+def _write_probes(paths, nonce=NONCE, port=PORT, phase=None):
     save = paths.data / "Balatro"
     save.mkdir(parents=True, exist_ok=True)
     (save / staging.PROBE_MAIN).write_text(
@@ -178,20 +225,34 @@ def _write_probes(paths, nonce=NONCE, port=PORT):
     (save / staging.PROBE_P2).write_text(
         f"probe=p2\nschema={staging.P2_OBSERVER_SCHEMA}\npatch={staging.PATCH_ID}\nnonce={nonce}\n"
         f"url=127.0.0.1\nport={port}\nmods={paths.mods}\nsave={save}\n"
-        "connect_attempts=1\nconnect_failures=1\nfirst_result=none\n"
-        "first_error=connection refused\nfirst_time=1.0\n"
-        "last_result=none\nlast_error=connection refused\nlast_time=1.0\n"
-        "reconnect_attempts=3\nreconnect_failures=3\nreconnects=1\n"
-        "keepalive_failures=1\ncloses=1\n",
+        + _P2_ARTIFACTS.get(phase, P2_INITIAL_ARTIFACT),
         encoding="utf-8",
     )
-    # M2: a fresh Lovely log and the actual main.lua dump under the exact staged Mods.
+    (save / staging.PROBE_CRASH).write_text(
+        f"probe=crash\npatch={staging.PATCH_ID}\nnonce={nonce}\nsave={save}\nmsg=staged crash\n",
+        encoding="utf-8",
+    )
+    (save / staging.PROBE_LISTENER).write_text(
+        f"probe=listener\nschema={staging.LISTENER_SCHEMA}\npatch={staging.PATCH_ID}\nnonce={nonce}\n"
+        f"phase={phase or 'P2_CLOSE'}\nport={port}\nfamilies=ipv4\nexclusive=true\nlistener_pid=1\n"
+        "accepted=1\npeer_pid=100\npeer_is_owned_ai=true\nsent_bytes=0\nreceived_bytes=8\n"
+        "received_sha256=" + "0" * 64 + "\nclosed=true\nfin=true\nclose_time=100.0\n"
+        + ("open_until=150.0\n" if phase == "P2_SILENT" else "open_until=100.0\n")
+        + f"save={save}\n",
+        encoding="utf-8",
+    )
+    # M2: a fresh Lovely log and the actual main.lua/socket dumps under the exact staged Mods.
     for sub in ("log", "dump"):
         directory = paths.mods / staging.LOVELY_DIR_NAME / sub
         directory.mkdir(parents=True, exist_ok=True)
         (directory / ("main.lua" if sub == "dump" else "lovely.log")).write_text(
             "-- lovely %s evidence\n" % sub, encoding="utf-8"
         )
+    # Official Lovely writes patched output under lovely/dump/<pretty_name>; the
+    # socket evidence must be the exact SMODS/Multiplayer pretty path (not game-dump).
+    socket_dump = paths.mods / staging.lovely_patched_dump_rel(staging.MP_SOCKET_DUMP_REL)
+    socket_dump.parent.mkdir(parents=True, exist_ok=True)
+    socket_dump.write_text(_SOCKET_DUMP, encoding="utf-8")
     return {
         "main": save / staging.PROBE_MAIN,
         "guard": save / staging.PROBE_GUARD,
@@ -200,6 +261,8 @@ def _write_probes(paths, nonce=NONCE, port=PORT):
         "steam_marker": save / ic.PROBE_STEAM_MARKER,
         "steam_post": save / ic.PROBE_STEAM_POST,
         "p2": save / staging.PROBE_P2,
+        "crash": save / staging.PROBE_CRASH,
+        "listener": save / staging.PROBE_LISTENER,
     }
 
 
@@ -341,12 +404,15 @@ class _FakeOwned:
 class _FakeSession:
     """Exited synthetic LaunchSession: records + owned handles already stopped."""
 
-    def __init__(self, session_id, staging_root, nonce, spawn_time, roles, exit_codes=None):
+    def __init__(self, session_id, staging_root, nonce, spawn_time, roles, exit_codes=None, end_mode=None, end_code=None):
         self.session_id = session_id
         self.staging_root = Path(staging_root)
         self.nonce = nonce
         self.spawn_time = spawn_time
         self.code = "launched"
+        self.end_mode = end_mode
+        self.end_code = end_code
+        self.ended_unix = int(time.time())
         exit_codes = exit_codes or {}
         self.records = [
             launch_practice.ProcessRecord(
@@ -377,7 +443,8 @@ class _FakeSession:
         return None
 
 
-_CRASH_EXITS = {"human": 1, "ai": 1}
+_CRASH_EXITS = {"human": staging.MEASUREMENT_END_CODES["CRASH"], "ai": staging.MEASUREMENT_END_CODES["CRASH"]}
+_CRASH_END = (staging.MEASUREMENT_END_MODE, staging.MEASUREMENT_END_CODES["CRASH"])
 
 
 def _fake_dead_port_setup(port=PORT):
@@ -392,6 +459,14 @@ def _fake_dead_port_setup(port=PORT):
         "timings": [0.001, 0.001, 0.001],
         "measured_unix": int(time.time()),
     }
+
+
+def _end_kwargs(phase):
+    if phase == "CRASH":
+        return {"end_mode": _CRASH_END[0], "end_code": _CRASH_END[1]}
+    if phase in ("P1B", "FULL_P1", "P2_INITIAL", "P2_CLOSE", "P2_SILENT"):
+        return {"end_mode": staging.MEASUREMENT_END_MODE, "end_code": staging.MEASUREMENT_END_CODES[phase]}
+    return {}
 
 
 def _synthetic_server_binding(staging_root=None, *, config=None):
@@ -461,10 +536,13 @@ def _record_phase(fixture, phase, exit_codes=None, prepared=None, session_id=Non
     nonce = prepared["nonce"]
     spawn_time = time.time() - 1
     ic.bind_open_session(staging_root, session_id, pids={"bootstrap": [1]}, spawn_time=spawn_time)
-    _write_probes(staging.bootstrap_paths(staging_root), nonce=nonce)
+    _write_probes(staging.bootstrap_paths(staging_root), nonce=nonce, phase=phase)
     for role in staging.ROLES:
-        _write_probes(staging.role_paths(staging_root, role), nonce=nonce)
-    session = _FakeSession(session_id, staging_root, nonce, spawn_time, ic.PHASE_ROLES[phase], exit_codes=exit_codes)
+        _write_probes(staging.role_paths(staging_root, role), nonce=nonce, phase=phase)
+    session = _FakeSession(
+        session_id, staging_root, nonce, spawn_time, ic.PHASE_ROLES[phase],
+        exit_codes=exit_codes, **_end_kwargs(phase),
+    )
     return ic.record_phase_receipt(
         staging_root,
         phase=phase,
@@ -563,13 +641,15 @@ def test_certificate_partial_without_crash_and_p2():
         with synthetic_tools(root):
             receipt_ids = _receipt_ids(fixture)
             receipt_ids.pop("CRASH")
-            receipt_ids.pop("P2")
+            receipt_ids.pop("P2_CLOSE")
+            receipt_ids.pop("P2_SILENT")
             verdict = ic.build_certificate(
                 fixture["staging_root"], receipt_ids=receipt_ids, live=fixture["live_map"], port=PORT
             )
         assert not verdict["ok"] and verdict["status"] == "partial"
         assert "phase_crash_missing" in verdict["problems"]
-        assert "phase_p2_missing" in verdict["problems"]
+        assert "phase_p2_close_missing" in verdict["problems"]
+        assert "phase_p2_silent_missing" in verdict["problems"]
         assert verdict["certificate_id"] is None
 
 
@@ -1233,10 +1313,12 @@ def test_record_receipt_failure_raises_global_lockout():
 
 def _phase_setup(phase):
     """The tool-owned pre-spawn setup the launcher persists for a measurement phase."""
-    if phase == "P2":
+    if phase == "P2_INITIAL":
         return _fake_dead_port_setup()
+    if phase in ("P2_CLOSE", "P2_SILENT"):
+        return {"kind": "listener", "port": PORT, "mode": phase}
     if phase == "CRASH":
-        return {"kind": "crash", "stimulus": "env_gated_guard_error"}
+        return {"kind": "crash", "stimulus": staging.MEASUREMENT_CRASH_STIMULUS}
     return None
 
 
@@ -1256,9 +1338,9 @@ def _prepare_and_probes(fixture, phase, session_id, **kwargs):
     assert prepared["ok"], prepared
     bind = time.time() - 1
     ic.bind_open_session(fixture["staging_root"], session_id, pids={"bootstrap": [1]}, spawn_time=bind)
-    _write_probes(staging.bootstrap_paths(fixture["staging_root"]), nonce=prepared["nonce"])
+    _write_probes(staging.bootstrap_paths(fixture["staging_root"]), nonce=prepared["nonce"], phase=phase)
     for role in staging.ROLES:
-        _write_probes(staging.role_paths(fixture["staging_root"], role), nonce=prepared["nonce"])
+        _write_probes(staging.role_paths(fixture["staging_root"], role), nonce=prepared["nonce"], phase=phase)
     return prepared, bind
 
 
@@ -1416,10 +1498,12 @@ def test_receipt_binds_requested_phase_and_port_to_prepared_record():
         with synthetic_tools(root):
             for phase in ("P1A", "P1B", "FULL_P1"):
                 assert _record_phase(fixture, phase)["ok"]
-        prepared, bind = _prepare_and_probes(fixture, "P2", "bind-port")
-        session = _FakeSession("bind-port", fixture["staging_root"], prepared["nonce"], bind, ("ai",))
+        prepared, bind = _prepare_and_probes(fixture, "P2_INITIAL", "bind-port")
+        session = _FakeSession(
+            "bind-port", fixture["staging_root"], prepared["nonce"], bind, ("ai",), **_end_kwargs("P2_INITIAL")
+        )
         wrong_port = ic.record_phase_receipt(
-            fixture["staging_root"], phase="P2", session_id="bind-port", session=session,
+            fixture["staging_root"], phase="P2_INITIAL", session_id="bind-port", session=session,
             live=fixture["live_map"], port=PORT + 1, live_closed=lambda: True,
         )
         assert not wrong_port["ok"] and "prepared_port_mismatch" in wrong_port["problems"]
@@ -1432,25 +1516,26 @@ def test_p2_classifier_ignores_foreign_flags_and_start_marker():
         with synthetic_tools(root):
             for phase in ("P1A", "P1B", "FULL_P1"):
                 assert _record_phase(fixture, phase)["ok"]
-        prepared, bind = _prepare_and_probes(fixture, "P2", "p2-foreign")
+        prepared, bind = _prepare_and_probes(fixture, "P2_INITIAL", "p2-foreign")
         role = staging.role_paths(fixture["staging_root"], "ai")
         artifact = role.data / "Balatro" / staging.PROBE_P2
+        # No schema and only foreign flags: the classifier never infers a covered
+        # subgate from a start marker or an invented flag, so the P2 phase refuses.
         artifact.write_text(
             f"probe=p2\npatch={staging.PATCH_ID}\nnonce={prepared['nonce']}\nurl=127.0.0.1\nport={PORT}\n"
             f"mods={role.mods}\nsave={role.data / 'Balatro'}\nattempts=1\nstarted=1\n"
             "connect_refused=true\nconnect_failed=true\nfailure=true\nreconnect=3\nkeepalive=true\n",
             encoding="utf-8",
         )
-        session = _FakeSession("p2-foreign", fixture["staging_root"], prepared["nonce"], bind, ("ai",))
+        session = _FakeSession(
+            "p2-foreign", fixture["staging_root"], prepared["nonce"], bind, ("ai",), **_end_kwargs("P2_INITIAL")
+        )
         result = ic.record_phase_receipt(
-            fixture["staging_root"], phase="P2", session_id="p2-foreign", session=session,
+            fixture["staging_root"], phase="P2_INITIAL", session_id="p2-foreign", session=session,
             live=fixture["live_map"], port=PORT, live_closed=lambda: True,
         )
-        assert result["ok"], result
-        receipt = ic.load_phase_receipt(fixture["staging_root"], result["receipt_id"])
-        assert receipt["measured"]["artifact_schema_ok"] is False
-        assert "initial_failure" not in receipt["measured"]["covered_subgates"]
-        assert "initial_failure" in receipt["measured"]["pending_subgates"]
+        assert not result["ok"]
+        assert any(problem.startswith("P2_coverage_incomplete") for problem in result["problems"]), result
 
 
 def test_p2_receipt_coverage_is_rederived_from_copied_artifact():
@@ -1459,22 +1544,20 @@ def test_p2_receipt_coverage_is_rederived_from_copied_artifact():
         fixture = _stage_all(root)
         with synthetic_tools(root):
             receipt_ids = _receipt_ids(fixture)
-            old_id = receipt_ids["P2"]
+            old_id = receipt_ids["P2_INITIAL"]
             path = ic._receipt_path(fixture["staging_root"], old_id)
             body = json.loads(path.read_text(encoding="utf-8"))
             # A forged receipt under-claims what its own copied artifact observed.
-            body["measured"]["covered_subgates"] = ["initial_failure"]
-            body["measured"]["pending_subgates"] = ["reconnect", "keepalive"]
-            body["measured"]["reconnects"] = 0
-            body["measured"]["reconnect_failures"] = 0
-            body["measured"]["keepalive_failures"] = 0
+            body["measured"]["covered_subgates"] = []
+            body["measured"]["pending_subgates"] = ["initial_failure"]
+            body["measured"]["coverage_complete"] = False
             forged = {key: value for key, value in body.items() if key != "receipt_id"}
             new_id = ic._digest(forged)
             body["receipt_id"] = new_id
             ic._receipt_path(fixture["staging_root"], new_id).write_text(
                 json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
-            receipt_ids["P2"] = new_id
+            receipt_ids["P2_INITIAL"] = new_id
             verdict = ic.build_certificate(
                 fixture["staging_root"], receipt_ids=receipt_ids, live=fixture["live_map"], port=PORT
             )
@@ -1490,13 +1573,20 @@ def test_h3_crash_and_p2_derive_from_tool_evidence():
             ids = _receipt_ids(fixture)
         crash = ic.load_phase_receipt(fixture["staging_root"], ids["CRASH"])
         assert crash["measured"]["crash_exit_codes"] == _CRASH_EXITS
-        assert crash["measured"]["crash_stimulus"] == "env_gated_guard_error"
-        p2 = ic.load_phase_receipt(fixture["staging_root"], ids["P2"])
+        assert crash["measured"]["crash_stimulus"] == staging.MEASUREMENT_CRASH_STIMULUS
+        assert crash["measured"]["crash_end_mode"] == staging.MEASUREMENT_END_MODE
+        assert crash["measured"]["crash_observed"] is True
+        p2 = ic.load_phase_receipt(fixture["staging_root"], ids["P2_INITIAL"])
         assert p2["measured"]["dead_port"] == PORT
         assert p2["measured"]["pinned_endpoint"]["url"] == "127.0.0.1"
+        assert p2["measured"]["covered_subgates"] == ["initial_failure"]
         assert p2["measured"]["pending_subgates"] == []
         assert p2["probes"]["ai"]["p2"]["copy_sha256"]
         assert p2["measurement_artifact"]["copy_sha256"]
+        close = ic.load_phase_receipt(fixture["staging_root"], ids["P2_CLOSE"])
+        assert close["measured"]["closure_path"] == "close_branch"
+        silent = ic.load_phase_receipt(fixture["staging_root"], ids["P2_SILENT"])
+        assert silent["measured"]["covered_subgates"] == ["keepalive"]
 
 
 def test_h3_p2_pending_subgates_do_not_broad_pass():
@@ -1509,9 +1599,9 @@ def test_h3_p2_pending_subgates_do_not_broad_pass():
                 result = _record_phase(fixture, phase)
                 assert result["ok"], (phase, result)
                 ids[phase] = result["receipt_id"]
-            prepared, bind = _prepare_and_probes(fixture, "P2", "p2-pending")
+            prepared, bind = _prepare_and_probes(fixture, "P2_INITIAL", "p2-pending")
             # A real stage-start marker is NOT a measured connection failure: with no
-            # engine attempt/retry/keepalive evidence, every subgate stays pending.
+            # schema/attempt evidence, the P2 phase can never be recorded as passed.
             p2_path = staging.role_paths(fixture["staging_root"], "ai").data / "Balatro" / staging.PROBE_P2
             p2_path.write_text(
                 f"probe=p2\npatch={staging.PATCH_ID}\nnonce={prepared['nonce']}\nurl=127.0.0.1\n"
@@ -1519,19 +1609,118 @@ def test_h3_p2_pending_subgates_do_not_broad_pass():
                 f"save={staging.role_paths(fixture['staging_root'], 'ai').data / 'Balatro'}\nstarted=1\n",
                 encoding="utf-8",
             )
-            session = _FakeSession("p2-pending", fixture["staging_root"], prepared["nonce"], bind, ("ai",))
+            session = _FakeSession(
+                "p2-pending", fixture["staging_root"], prepared["nonce"], bind, ("ai",), **_end_kwargs("P2_INITIAL")
+            )
             result = ic.record_phase_receipt(
-                fixture["staging_root"], phase="P2", session_id="p2-pending", session=session,
+                fixture["staging_root"], phase="P2_INITIAL", session_id="p2-pending", session=session,
                 live=fixture["live_map"], port=PORT, live_closed=lambda: True,
             )
-            assert result["ok"], result
-            ids["P2"] = result["receipt_id"]
-            build = ic.build_certificate(
-                fixture["staging_root"], receipt_ids=ids, live=fixture["live_map"], port=PORT
-            )
-        assert not build["ok"] and "P2_pending:initial_failure" in build["problems"]
-        assert "P2_pending:reconnect" in build["problems"]
-        assert "P2_pending:keepalive" in build["problems"]
+            assert not result["ok"]
+            assert "P2_coverage_incomplete:initial_failure" in result["problems"], result
+        # A P2 phase that cannot prove its own coverage fails closed and locks out;
+        # it is never recorded as a passed receipt.
+        assert ic.lockout(fixture["staging_root"])["locked"] is True
+        assert ic.load_open_record(fixture["staging_root"], "p2-pending")["status"] == "failed"
+
+
+def _run_phase_with_listener_overrides(fixture, session_id, artifact, listener_overrides):
+    ai = staging.role_paths(fixture["staging_root"], "ai")
+    save = ai.data / "Balatro"
+    (save / staging.PROBE_P2).write_text(
+        f"probe=p2\nschema={staging.P2_OBSERVER_SCHEMA}\npatch={staging.PATCH_ID}\nnonce=<NONCE>\n"
+        f"url=127.0.0.1\nport={PORT}\nmods={ai.mods}\nsave={save}\n" + artifact,
+        encoding="utf-8",
+    )
+    listener = {
+        "accepted": "1", "peer_is_owned_ai": "true", "sent_bytes": "0",
+        "closed": "true", "fin": "true", "close_time": "100.0", "open_until": "100.0",
+    }
+    listener.update(listener_overrides)
+    (save / staging.PROBE_LISTENER).write_text(
+        f"probe=listener\nschema={staging.LISTENER_SCHEMA}\npatch={staging.PATCH_ID}\nnonce=<NONCE>\n"
+        f"phase={session_id}\nport={PORT}\nsave={save}\n"
+        + "\n".join(f"{key}={value}" for key, value in listener.items()) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _p2_close_refusal(fixture, session_id, listener_overrides, artifact=P2_CLOSE_ARTIFACT):
+    with synthetic_tools(fixture["root"]):
+        for phase in ("P1A", "P1B", "FULL_P1"):
+            assert _record_phase(fixture, phase)["ok"], phase
+    prepared, bind = _prepare_and_probes(fixture, "P2_CLOSE", session_id)
+    _run_phase_with_listener_overrides(fixture, session_id, artifact, listener_overrides)
+    # Rewrite the nonce placeholders to the real session nonce.
+    ai = staging.role_paths(fixture["staging_root"], "ai")
+    for name in (staging.PROBE_P2, staging.PROBE_LISTENER):
+        target = ai.data / "Balatro" / name
+        target.write_text(target.read_text(encoding="utf-8").replace("<NONCE>", prepared["nonce"]), encoding="utf-8")
+    session = _FakeSession(
+        session_id, fixture["staging_root"], prepared["nonce"], bind, ("ai",), **_end_kwargs("P2_CLOSE")
+    )
+    return ic.record_phase_receipt(
+        fixture["staging_root"], phase="P2_CLOSE", session_id=session_id, session=session,
+        live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+    )
+
+
+def test_p2_close_refuses_wrong_owner_and_sent_bytes():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        wrong_owner = _p2_close_refusal(fixture, "p2-wrong-owner", {"peer_is_owned_ai": "false"})
+        assert not wrong_owner["ok"]
+        assert "P2_coverage_incomplete:closure" in wrong_owner["problems"], wrong_owner
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        sent = _p2_close_refusal(fixture, "p2-sent-bytes", {"sent_bytes": "1"})
+        assert not sent["ok"]
+        assert "P2_coverage_incomplete:closure" in sent["problems"], sent
+
+
+def test_p2_reconnect_coverage_never_less_from_recovered_or_unfinished_cycles():
+    # N4: neither "failed once then recovered" nor "recovered then unfinished"
+    # proves a bounded exhausted retry cycle.
+    dead = PORT
+    base = {
+        "schema": staging.P2_OBSERVER_SCHEMA, "url": "127.0.0.1", "port": str(PORT),
+        "connect_attempts": "4", "connect_successes": "1", "connect_failures": "3",
+        "first_result": "1", "reconnects": "1", "reconnect_failures": "1",
+    }
+    # Case 1: a cycle that recovered (outcome recovered) is never a bounded failure.
+    recovered = dict(base)
+    recovered.update({
+        "cycle1_cause": "close", "cycle1_start_time": "100.0", "cycle1_outcome": "recovered",
+        "cycle1_end_time": "106.0", "cycle1_attempt_count": "2",
+        "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
+        "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "1",
+    })
+    assert "reconnect" not in ic._p2_derive(recovered, dead)["covered"]
+    # Case 2: a recovered cycle followed by an unfinished cycle with one failure.
+    overstate = dict(base)
+    overstate.update({
+        "cycle1_cause": "close", "cycle1_start_time": "100.0", "cycle1_outcome": "recovered",
+        "cycle1_end_time": "106.0", "cycle1_attempt_count": "2",
+        "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
+        "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "1",
+        "cycle2_cause": "close", "cycle2_start_time": "110.0", "cycle2_outcome": "unfinished",
+        "cycle2_end_time": "112.0", "cycle2_attempt_count": "1",
+        "cycle2_attempt1_time": "112.0", "cycle2_attempt1_result": "none",
+    })
+    assert "reconnect" not in ic._p2_derive(overstate, dead)["covered"]
+    # A genuinely completed, bounded, exhausted cycle does cover it.
+    exhausted = dict(base)
+    exhausted.update({
+        "cycle1_cause": "close", "cycle1_start_time": "100.0", "cycle1_outcome": "exhausted",
+        "cycle1_end_time": "114.0", "cycle1_attempt_count": "3",
+        "cycle1_attempt1_time": "102.0", "cycle1_attempt1_result": "none",
+        "cycle1_attempt2_time": "106.0", "cycle1_attempt2_result": "none",
+        "cycle1_attempt3_time": "114.0", "cycle1_attempt3_result": "none",
+    })
+    assert "reconnect" in ic._p2_derive(exhausted, dead)["covered"]
 
 
 # --- M2: strong probe/lovely checkers inside receipts -------------------------
@@ -1625,6 +1814,90 @@ def test_low_attestation_requires_match_phase():
             control_port=9000, port=PORT, spawn_time=bind, live=fixture["live_map"],
         )
         assert not refused["ok"] and "attestation_phase_not_match" in refused["problems"]
+
+
+def _expect_open_records_error(staging_root, expected_code):
+    try:
+        ic.list_open_records(staging_root)
+    except staging.StagingError as error:
+        assert error.code == expected_code, (error.code, expected_code)
+        return
+    raise AssertionError(f"expected StagingError {expected_code}")
+
+
+def test_list_open_records_fails_closed_on_corrupt_unknown_and_unenumerable():
+    with tempfile.TemporaryDirectory() as tmp:
+        staging_root = Path(tmp)
+        open_dir = ic._open_dir(staging_root)
+        open_dir.mkdir(parents=True, exist_ok=True)
+        for name, status in (
+            ("s-open", "open"),
+            ("s-pending", "failed_pending"),
+            ("s-passed", "passed"),
+            ("s-closed", "closed"),
+            ("s-failed", "failed"),
+        ):
+            (open_dir / f"{name}.json").write_text(
+                json.dumps({"session_id": name, "status": status}), encoding="utf-8"
+            )
+        # Only blocking statuses are returned; recognized closed records are skipped.
+        records = ic.list_open_records(staging_root)
+        assert sorted(record["session_id"] for record in records) == ["s-open", "s-pending"]
+        # Corrupt JSON is not "no session".
+        corrupt = open_dir / "corrupt.json"
+        corrupt.write_text("{not json", encoding="utf-8")
+        _expect_open_records_error(staging_root, "open_record_corrupt")
+        corrupt.unlink()
+        # A non-dict record is refused.
+        nondict = open_dir / "nondict.json"
+        nondict.write_text("[1, 2, 3]", encoding="utf-8")
+        _expect_open_records_error(staging_root, "open_record_invalid")
+        nondict.unlink()
+        # An unknown status is refused rather than silently dropped.
+        unknown = open_dir / "unknown.json"
+        unknown.write_text(json.dumps({"status": "teleported"}), encoding="utf-8")
+        _expect_open_records_error(staging_root, "open_record_unknown_status")
+        unknown.unlink()
+        # A missing open directory genuinely lists nothing.
+        assert ic.list_open_records(Path(tmp) / "absent") == []
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        open_dir = ic._open_dir(root)
+        open_dir.parent.mkdir(parents=True, exist_ok=True)
+        open_dir.write_text("not a directory", encoding="utf-8")
+        _expect_open_records_error(root, "open_records_unreadable")
+
+
+class _DumpPaths:
+    def __init__(self, mods):
+        self.mods = mods
+
+
+def test_select_dump_files_binds_only_the_exact_patched_pretty_paths():
+    with tempfile.TemporaryDirectory() as tmp:
+        mods = Path(tmp) / "Mods"
+        main_rel = staging.lovely_patched_dump_rel(staging.LOVELY_PATCHED_MAIN_REL)
+        socket_rel = staging.lovely_patched_dump_rel(staging.MP_SOCKET_DUMP_REL)
+        for rel in (main_rel, socket_rel):
+            target = mods / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("-- patched dump\n", encoding="utf-8")
+        paths = _DumpPaths(mods)
+        selected = ic._select_dump_files(paths, [main_rel, socket_rel], require_socket=True)
+        assert selected["lovely_dump"] == mods / main_rel
+        assert selected["socket_dump"] == mods / socket_rel
+        # The unpatched game-dump tree and any same-basename file are never evidence.
+        game_dump_rel = f"{staging.LOVELY_DIR_NAME}/game-dump/{staging.MP_SOCKET_DUMP_REL}"
+        game_dump = mods / game_dump_rel
+        game_dump.parent.mkdir(parents=True, exist_ok=True)
+        game_dump.write_text("-- unpatched\n", encoding="utf-8")
+        assert ic._select_dump_files(paths, [main_rel, game_dump_rel], require_socket=True) == {}
+        (mods / staging.LOVELY_DIR_NAME / staging.LOVELY_DUMP_DIR_NAME / "socket.lua").write_text(
+            "-- arbitrary basename\n", encoding="utf-8"
+        )
+        arbitrary = f"{staging.LOVELY_DIR_NAME}/{staging.LOVELY_DUMP_DIR_NAME}/socket.lua"
+        assert ic._select_dump_files(paths, [main_rel, arbitrary], require_socket=True) == {}
 
 
 def _run_all() -> int:

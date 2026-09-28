@@ -91,6 +91,23 @@ PROBE_STEAM_POST = "aisparring_probe_steam_post.txt"
 # the phase receipt. The tool never accepts a caller-supplied attempt count, and a
 # startup/``started`` marker is never a substitute for these observed fields.
 PROBE_P2 = "aisparring_probe_p2.txt"
+# N2: a nonce-bound crash probe written by the wrapper around the *active* original
+# error handler (``love.errorhandler`` or ``love.errhand``) before it chains to that
+# handler. A nonzero exit alone is never a crash; only this fresh probe is.
+PROBE_CRASH = "aisparring_probe_crash.txt"
+# Section 4: the tool-owned measurement listener log (immutable, hashed receipt
+# artifact). It is written by the tool before the phase receipt is recorded, in the
+# same key=value probe shape so it flows through the existing immutable evidence
+# pipeline and nonce binding.
+PROBE_LISTENER = "aisparring_probe_listener.txt"
+LISTENER_SCHEMA = "aisparring.measurement_listener.v1"
+# Bounded retention for the measurement listener: it never sends a byte and keeps at
+# most this many received bytes (anything past it is discarded, only the byte count
+# and digest of the retained prefix are recorded). Parsing of the JSON ``action``
+# names is likewise bounded so a hostile/garbage peer cannot exhaust memory.
+LISTENER_MAX_RECEIVED_BYTES = 65536
+LISTENER_MAX_ACTIONS = 64
+LISTENER_MAX_ACTION_NAME = 64
 # Exact artifact schema emitted by the env-gated source observer. The receipt
 # classifier binds to these exact fields; no hypothetical future flags are read.
 P2_OBSERVER_SCHEMA = "aisparring.p2_observer.v1"
@@ -98,17 +115,63 @@ P2_OBSERVER_SCHEMA = "aisparring.p2_observer.v1"
 # P2 phases only and can never change normal MATCH runtime behavior.
 MEASURE_CRASH_ENV = "AISP_MEASURE_CRASH"
 MEASURE_P2_ENV = "AISP_MEASURE_P2"
+# Tool-owned measurement end modes/codes (section 4; N2/N3). Each measurement run
+# is ended by the tool once its required evidence has settled, with a distinct code
+# that is never 0 (a clean self-exit) and never 1 (the TerminateJobObject default),
+# so a recorded end can never be confused with a crash or a natural exit.
+MEASUREMENT_END_MODE = "tool_owned_end"
+MEASUREMENT_END_CODES = {
+    "CRASH": 101,
+    "P1B": 102,
+    "FULL_P1": 103,
+    "P2_INITIAL": 104,
+    "P2_CLOSE": 105,
+    "P2_SILENT": 106,
+}
+MEASUREMENT_END_CODE_VALUES = frozenset(MEASUREMENT_END_CODES.values())
+MEASUREMENT_CRASH_STIMULUS = "env_gated_guard_error"
+# Hard deadline for any tool-owned measurement run: exceeding it is a failure and
+# raises the persistent lockout (never a silent success).
+MEASUREMENT_DEADLINE_SECONDS = 240.0
 # Pinned Multiplayer source the P2 observer binds to. ``MP.load_mp_file`` returns
 # the network-thread long string, so a pattern insertion after this exact call runs
 # inside the real thread (not the UI/main thread).
-MP_SOCKET_CONNECT_LITERAL = "Networking.Client:connect(CONFIG_URL, CONFIG_PORT)"
+#
+# N1: Lovely matches each *whole trimmed line* against the pattern with ``*``/``?``
+# wildcards. Every anchor below is therefore the exact full trimmed pinned line, so
+# it applies identically under a literal-substring or a Lovely wildcard rule (see
+# ``_lovely_line_match`` / ``apply_source_pattern_patch``). A fragment anchor is
+# refused by design.
+MP_SOCKET_CONNECT_LITERAL = (
+    "local connectionResult, errorMessage = Networking.Client:connect(CONFIG_URL, CONFIG_PORT)"
+    " -- Not sure if I want to make these values public yet"
+)
 MP_SOCKET_SOURCE_TARGET = '=[SMODS Multiplayer "networking/socket.lua"]'
+MP_SOCKET_SOURCE_REL = ("networking", "socket.lua")
 MP_SOCKET_REQUIRE_LITERAL = 'local socket = require("socket")'
 MP_RECONNECT_START_LITERAL = 'SEND_THREAD_DEBUG_MESSAGE("Connection lost, attempting automatic reconnection...")'
 MP_RECONNECT_OK_LITERAL = 'SEND_THREAD_DEBUG_MESSAGE("Reconnected successfully!")'
 MP_RECONNECT_FAIL_LITERAL = 'SEND_THREAD_DEBUG_MESSAGE("All reconnection attempts failed.")'
 MP_CLOSE_COMMENT_LITERAL = "-- Connection closed, attempt automatic reconnection"
 MP_KEEPALIVE_COMMENT_LITERAL = "-- Keepalive failed, attempt automatic reconnection"
+# Section 4 observer additions: the pinned receive and keepalive-push lines.
+MP_RECEIVE_LITERAL = "local data, error, partial = Networking.Client:receive()"
+MP_KEEPALIVE_PUSH_LITERAL = r'uiToNetworkChannel:push("{\"action\":\"keepAlive\"}")'
+# N1/section 4: one unique marker comment is emitted by each observer payload. The
+# runtime MP guard requires *all* of them in the loaded network-thread string, and
+# the receipt requires all of them in Lovely's patched socket dump, so a partially
+# applied observer can never pass.
+P2_PAYLOAD_MARKERS = (
+    "AISP_P2_STATE",
+    "AISP_P2_CONNECT",
+    "AISP_P2_RECONNECT_START",
+    "AISP_P2_RECONNECT_OK",
+    "AISP_P2_RECONNECT_FAIL",
+    "AISP_P2_CLOSE",
+    "AISP_P2_KEEPALIVE",
+    "AISP_P2_RECV",
+    "AISP_P2_KEEPALIVE_PUSH",
+)
 
 PROOF_SCHEMA = "aisparring.isolation_proof.v2"
 MEASURE_SCHEMA = "aisparring.isolation_measure.v1"
@@ -149,6 +212,18 @@ MODS_REL_PREFIX = "appdata/Roaming/Balatro/Mods"
 LOVELY_DIR_NAME = "lovely"
 LOVELY_LOG_DIR_NAME = "log"
 LOVELY_DUMP_DIR_NAME = "dump"
+# Official Lovely v0.10.0 (lib.rs:308-331) writes the *patched* buffer under
+# ``lovely/dump/<pretty_name>`` and the unpatched buffer under
+# ``lovely/game-dump/<pretty_name>``. ``=[SMODS Multiplayer "networking/socket.lua"]``
+# becomes the pretty name ``SMODS/Multiplayer/networking/socket.lua``. Evidence must
+# bind these exact patched relative paths, never any same-basename file.
+MP_SOCKET_DUMP_REL = "SMODS/Multiplayer/networking/socket.lua"
+LOVELY_PATCHED_MAIN_REL = "main.lua"
+
+
+def lovely_patched_dump_rel(pretty_name: str) -> str:
+    """The exact staged rel path of one Lovely *patched* dump (not game-dump)."""
+    return f"{LOVELY_DIR_NAME}/{LOVELY_DUMP_DIR_NAME}/{pretty_name.replace(chr(92), '/').lstrip('/')}"
 
 STEAM_NATIVE_FILES = frozenset(
     name.lower()
@@ -1401,14 +1476,27 @@ def bootstrap_exit_patch() -> dict:
 def measurement_crash_patch(patch_id: str = PATCH_ID) -> dict:
     """Measurement-only CRASH stimulus, gated by ``AISP_MEASURE_CRASH``.
 
-    It is placed after every probe patch and only fires when the tool sets the gate
-    env var for the CRASH phase, so a normal match can never abort here. The exit
-    code is read from the retained process handle by the tool; the game writes no
-    success flag.
+    N2: it is placed after every probe patch and only fires when the tool sets the
+    gate env var for the CRASH phase, so a normal match can never abort here. Before
+    raising, it wraps the *active original* error handler
+    (``love.errorhandler`` or ``love.errhand``) so the wrapper writes a fresh,
+    nonce-bound crash probe and then chains to the original handler. A nonzero exit
+    code alone is never accepted as a crash; only that fresh probe is (see
+    ``_validate_crash_observation``).
     """
     payload = (
         "do\n"
         "  if os.getenv('" + MEASURE_CRASH_ENV + "') == '1' then\n"
+        "    local ai_orig = love.errorhandler or love.errhand\n"
+        "    local ai_nonce = os.getenv('" + PROBE_NONCE_VAR + "') or ''\n"
+        "    local function ai_crash_handler(ai_msg)\n"
+        "      local ai_save = (love.filesystem.getSaveDirectory and love.filesystem.getSaveDirectory()) or ''\n"
+        "      if love.filesystem and love.filesystem.write then\n"
+        "        love.filesystem.write('" + PROBE_CRASH + "', 'probe=crash\\npatch=" + patch_id + "\\nnonce=' .. ai_nonce .. '\\nsave=' .. tostring(ai_save) .. '\\nmsg=' .. tostring(ai_msg))\n"
+        "      end\n"
+        "      if ai_orig then return ai_orig(ai_msg) end\n"
+        "    end\n"
+        "    if love.errorhandler ~= nil then love.errorhandler = ai_crash_handler else love.errhand = ai_crash_handler end\n"
         "    error('AISparring measurement: staged crash fixture (" + patch_id + ")', 0)\n"
         "  end\n"
         "end"
@@ -1456,7 +1544,16 @@ def mp_guard_payload(port: int, patch_id: str = PATCH_ID) -> str:
         "  local ai_save = (love.filesystem.getSaveDirectory and love.filesystem.getSaveDirectory()) or ''\n"
         "  love.filesystem.write('" + PROBE_MP + "', 'probe=mp\\npatch=' .. ai_patch .. '\\nnonce=' .. ai_nonce .. '\\nurl=' .. tostring(ai_url) .. '\\nport=' .. tostring(ai_port) .. '\\nmods=' .. ai_mods .. '\\nsave=' .. tostring(ai_save))\n"
         "  if os.getenv('" + MEASURE_P2_ENV + "') == '1' then\n"
-        "    if type(SOCKET) ~= 'string' or not string.find(SOCKET, 'AISP_P2_FLUSH', 1, true) then\n"
+        "    local ai_markers = { " + ", ".join("'" + marker + "'" for marker in P2_PAYLOAD_MARKERS) + " }\n"
+        "    if type(SOCKET) ~= 'string' then\n"
+        "      error('AISparring staging refused: P2 source observer not applied to the network thread', 0)\n"
+        "    end\n"
+        "    for ai_i = 1, #ai_markers do\n"
+        "      if not string.find(SOCKET, ai_markers[ai_i], 1, true) then\n"
+        "        error('AISparring staging refused: P2 observer payload ' .. ai_markers[ai_i] .. ' missing from the network thread', 0)\n"
+        "      end\n"
+        "    end\n"
+        "    if not string.find(SOCKET, 'AISP_P2_FLUSH', 1, true) then\n"
         "      error('AISparring staging refused: P2 source observer not applied to the network thread', 0)\n"
         "    end\n"
         "  end\n"
@@ -1473,15 +1570,22 @@ def _mp_p2_observer_state_payload(patch_id: str) -> str:
     artifact when ``AISP_MEASURE_P2`` is set; with the gate off it is inert.
     """
     return (
-        "local AISP_P2 = { attempts = 0, failures = 0, reconnect_attempts = 0, reconnect_failures = 0, reconnects = 0, keepalive_failures = 0, closes = 0 }\n"
+        "-- " + P2_PAYLOAD_MARKERS[0] + "\n"
+        "local AISP_P2 = {\n"
+        "  attempts = 0, successes = 0, failures = 0,\n"
+        "  reconnect_attempts = 0, reconnect_failures = 0, reconnects = 0,\n"
+        "  keepalive_failures = 0, closes = 0, keepalive_pushes = 0,\n"
+        "  receive_errors = {}, keepalive_push_times = {}, cycles = {}, current_cycle = nil,\n"
+        "}\n"
         "local AISP_P2_ON = (os.getenv('" + MEASURE_P2_ENV + "') == '1')\n"
+        "local function AISP_P2_NOW() return (socket.gettime and socket.gettime()) or os.clock() end\n"
         "local function AISP_P2_FLUSH()\n"
         "  if not AISP_P2_ON then return end\n"
         "  local ai_save = (love.filesystem.getSaveDirectory and love.filesystem.getSaveDirectory()) or ''\n"
         "  local ai_mods = os.getenv('LOVELY_MOD_DIR') or ''\n"
         "  local ai_nonce = os.getenv('AISP_PROBE_NONCE') or ''\n"
         "  local function ai_show(v) if v == nil then return 'none' end return tostring(v) end\n"
-        "  love.filesystem.write('" + PROBE_P2 + "', table.concat({\n"
+        "  local ai_lines = {\n"
         "    'probe=p2',\n"
         "    'schema=" + P2_OBSERVER_SCHEMA + "',\n"
         "    'patch=" + patch_id + "',\n"
@@ -1491,10 +1595,12 @@ def _mp_p2_observer_state_payload(patch_id: str) -> str:
         "    'mods=' .. ai_mods,\n"
         "    'save=' .. tostring(ai_save),\n"
         "    'connect_attempts=' .. tostring(AISP_P2.attempts),\n"
+        "    'connect_successes=' .. tostring(AISP_P2.successes),\n"
         "    'connect_failures=' .. tostring(AISP_P2.failures),\n"
         "    'first_result=' .. ai_show(AISP_P2.first_result),\n"
         "    'first_error=' .. tostring(AISP_P2.first_error or ''),\n"
         "    'first_time=' .. tostring(AISP_P2.first_time or 0),\n"
+        "    'first_success_time=' .. tostring(AISP_P2.first_success_time or 0),\n"
         "    'last_result=' .. ai_show(AISP_P2.last_result),\n"
         "    'last_error=' .. tostring(AISP_P2.last_error or ''),\n"
         "    'last_time=' .. tostring(AISP_P2.last_time or 0),\n"
@@ -1502,30 +1608,60 @@ def _mp_p2_observer_state_payload(patch_id: str) -> str:
         "    'reconnect_failures=' .. tostring(AISP_P2.reconnect_failures),\n"
         "    'reconnects=' .. tostring(AISP_P2.reconnects),\n"
         "    'keepalive_failures=' .. tostring(AISP_P2.keepalive_failures),\n"
+        "    'keepalive_pushes=' .. tostring(AISP_P2.keepalive_pushes),\n"
         "    'closes=' .. tostring(AISP_P2.closes),\n"
-        "  }, '\\n'))\n"
-        "end\n"
-        "local function AISP_P2_NOW() return (socket.gettime and socket.gettime()) or os.clock() end"
+        "  }\n"
+        "  for ai_i = 1, #AISP_P2.receive_errors do\n"
+        "    ai_lines[#ai_lines + 1] = 'receive_error' .. ai_i .. '_value=' .. tostring(AISP_P2.receive_errors[ai_i].value)\n"
+        "    ai_lines[#ai_lines + 1] = 'receive_error' .. ai_i .. '_time=' .. tostring(AISP_P2.receive_errors[ai_i].time)\n"
+        "  end\n"
+        "  for ai_i = 1, #AISP_P2.keepalive_push_times do\n"
+        "    ai_lines[#ai_lines + 1] = 'keepalive_push' .. ai_i .. '_time=' .. tostring(AISP_P2.keepalive_push_times[ai_i])\n"
+        "  end\n"
+        "  for ai_i = 1, #AISP_P2.cycles do\n"
+        "    local ai_c = AISP_P2.cycles[ai_i]\n"
+        "    ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_cause=' .. tostring(ai_c.cause or '')\n"
+        "    ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_start_time=' .. tostring(ai_c.start_time or 0)\n"
+        "    ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_outcome=' .. tostring(ai_c.outcome or '')\n"
+        "    ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_end_time=' .. tostring(ai_c.end_time or 0)\n"
+        "    local ai_attempts = ai_c.attempts or {}\n"
+        "    ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_attempt_count=' .. tostring(#ai_attempts)\n"
+        "    for ai_j = 1, #ai_attempts do\n"
+        "      ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_attempt' .. ai_j .. '_time=' .. tostring(ai_attempts[ai_j].time or 0)\n"
+        "      ai_lines[#ai_lines + 1] = 'cycle' .. ai_i .. '_attempt' .. ai_j .. '_result=' .. ai_show(ai_attempts[ai_j].result)\n"
+        "    end\n"
+        "  end\n"
+        "  love.filesystem.write('" + PROBE_P2 + "', table.concat(ai_lines, '\\n'))\n"
+        "end"
     )
 
 
 def _mp_p2_connect_observer_payload() -> str:
     """Injected immediately after the pinned ``connect`` call (inside the thread)."""
     return (
+        "-- " + P2_PAYLOAD_MARKERS[1] + "\n"
         "if AISP_P2_ON then\n"
         "  AISP_P2.attempts = AISP_P2.attempts + 1\n"
+        "  local ai_now = AISP_P2_NOW()\n"
         "  if AISP_P2.attempts == 1 then\n"
         "    AISP_P2.first_result = connectionResult\n"
         "    AISP_P2.first_error = tostring(errorMessage)\n"
-        "    AISP_P2.first_time = AISP_P2_NOW()\n"
+        "    AISP_P2.first_time = ai_now\n"
         "  end\n"
         "  AISP_P2.last_result = connectionResult\n"
         "  AISP_P2.last_error = tostring(errorMessage)\n"
-        "  AISP_P2.last_time = AISP_P2_NOW()\n"
-        "  if AISP_P2.reconnect_active then AISP_P2.reconnect_attempts = AISP_P2.reconnect_attempts + 1 end\n"
-        "  if connectionResult ~= 1 then\n"
+        "  AISP_P2.last_time = ai_now\n"
+        "  if AISP_P2.current_cycle then\n"
+        "    AISP_P2.reconnect_attempts = AISP_P2.reconnect_attempts + 1\n"
+        "    local ai_attempts = AISP_P2.current_cycle.attempts\n"
+        "    ai_attempts[#ai_attempts + 1] = { time = ai_now, result = connectionResult }\n"
+        "  end\n"
+        "  if connectionResult == 1 then\n"
+        "    AISP_P2.successes = AISP_P2.successes + 1\n"
+        "    if not AISP_P2.first_success_time then AISP_P2.first_success_time = ai_now end\n"
+        "  else\n"
         "    AISP_P2.failures = AISP_P2.failures + 1\n"
-        "    if AISP_P2.reconnect_active then AISP_P2.reconnect_failures = AISP_P2.reconnect_failures + 1 end\n"
+        "    if AISP_P2.current_cycle then AISP_P2.reconnect_failures = AISP_P2.reconnect_failures + 1 end\n"
         "  end\n"
         "  AISP_P2_FLUSH()\n"
         "end"
@@ -1569,7 +1705,10 @@ def mp_p2_observer_patches(port: int, patch_id: str = PATCH_ID) -> list:
             "target": MP_SOCKET_SOURCE_TARGET,
             "pattern": MP_RECONNECT_START_LITERAL,
             "position": "after",
-            "payload": "if AISP_P2_ON then AISP_P2.reconnect_active = true end",
+            "payload": (
+                "-- " + P2_PAYLOAD_MARKERS[2] + "\n"
+                "if AISP_P2_ON then AISP_P2.reconnect_active = true end"
+            ),
             "match_indent": False,
             "times": 1,
         },
@@ -1579,8 +1718,18 @@ def mp_p2_observer_patches(port: int, patch_id: str = PATCH_ID) -> list:
             "pattern": MP_RECONNECT_OK_LITERAL,
             "position": "after",
             "payload": (
-                "if AISP_P2_ON then AISP_P2.reconnects = AISP_P2.reconnects + 1; "
-                "AISP_P2.reconnect_active = false; AISP_P2_FLUSH() end"
+                "-- " + P2_PAYLOAD_MARKERS[3] + "\n"
+                "if AISP_P2_ON then\n"
+                "  AISP_P2.reconnects = AISP_P2.reconnects + 1\n"
+                "  AISP_P2.reconnect_active = false\n"
+                "  if AISP_P2.current_cycle then\n"
+                "    AISP_P2.current_cycle.outcome = 'recovered'\n"
+                "    AISP_P2.current_cycle.end_time = AISP_P2_NOW()\n"
+                "    AISP_P2.cycles[#AISP_P2.cycles + 1] = AISP_P2.current_cycle\n"
+                "    AISP_P2.current_cycle = nil\n"
+                "  end\n"
+                "  AISP_P2_FLUSH()\n"
+                "end"
             ),
             "match_indent": False,
             "times": 1,
@@ -1591,8 +1740,18 @@ def mp_p2_observer_patches(port: int, patch_id: str = PATCH_ID) -> list:
             "pattern": MP_RECONNECT_FAIL_LITERAL,
             "position": "before",
             "payload": (
-                "if AISP_P2_ON then AISP_P2.reconnects = AISP_P2.reconnects + 1; "
-                "AISP_P2.reconnect_active = false; AISP_P2_FLUSH() end"
+                "-- " + P2_PAYLOAD_MARKERS[4] + "\n"
+                "if AISP_P2_ON then\n"
+                "  AISP_P2.reconnects = AISP_P2.reconnects + 1\n"
+                "  AISP_P2.reconnect_active = false\n"
+                "  if AISP_P2.current_cycle then\n"
+                "    AISP_P2.current_cycle.outcome = 'exhausted'\n"
+                "    AISP_P2.current_cycle.end_time = AISP_P2_NOW()\n"
+                "    AISP_P2.cycles[#AISP_P2.cycles + 1] = AISP_P2.current_cycle\n"
+                "    AISP_P2.current_cycle = nil\n"
+                "  end\n"
+                "  AISP_P2_FLUSH()\n"
+                "end"
             ),
             "match_indent": False,
             "times": 1,
@@ -1602,7 +1761,14 @@ def mp_p2_observer_patches(port: int, patch_id: str = PATCH_ID) -> list:
             "target": MP_SOCKET_SOURCE_TARGET,
             "pattern": MP_CLOSE_COMMENT_LITERAL,
             "position": "after",
-            "payload": "if AISP_P2_ON then AISP_P2.closes = AISP_P2.closes + 1 end",
+            "payload": (
+                "-- " + P2_PAYLOAD_MARKERS[5] + "\n"
+                "if AISP_P2_ON then\n"
+                "  AISP_P2.closes = AISP_P2.closes + 1\n"
+                "  AISP_P2.current_cycle = { cause = 'close', start_time = AISP_P2_NOW(), attempts = {} }\n"
+                "  AISP_P2_FLUSH()\n"
+                "end"
+            ),
             "match_indent": False,
             "times": 1,
         },
@@ -1612,8 +1778,49 @@ def mp_p2_observer_patches(port: int, patch_id: str = PATCH_ID) -> list:
             "pattern": MP_KEEPALIVE_COMMENT_LITERAL,
             "position": "after",
             "payload": (
-                "if AISP_P2_ON then AISP_P2.keepalive_failures = AISP_P2.keepalive_failures + 1; "
-                "AISP_P2_FLUSH() end"
+                "-- " + P2_PAYLOAD_MARKERS[6] + "\n"
+                "if AISP_P2_ON then\n"
+                "  AISP_P2.keepalive_failures = AISP_P2.keepalive_failures + 1\n"
+                "  AISP_P2.current_cycle = { cause = 'keepalive', start_time = AISP_P2_NOW(), attempts = {} }\n"
+                "  AISP_P2_FLUSH()\n"
+                "end"
+            ),
+            "match_indent": False,
+            "times": 1,
+        },
+        {
+            "kind": "pattern",
+            "target": MP_SOCKET_SOURCE_TARGET,
+            "pattern": MP_RECEIVE_LITERAL,
+            "position": "after",
+            "payload": (
+                "-- " + P2_PAYLOAD_MARKERS[7] + "\n"
+                "if AISP_P2_ON and error ~= nil and error ~= 'timeout' then\n"
+                "  local ai_seen = false\n"
+                "  for ai_i = 1, #AISP_P2.receive_errors do\n"
+                "    if AISP_P2.receive_errors[ai_i].value == tostring(error) then ai_seen = true end\n"
+                "  end\n"
+                "  if not ai_seen then\n"
+                "    AISP_P2.receive_errors[#AISP_P2.receive_errors + 1] = { value = tostring(error), time = AISP_P2_NOW() }\n"
+                "    AISP_P2_FLUSH()\n"
+                "  end\n"
+                "end"
+            ),
+            "match_indent": False,
+            "times": 1,
+        },
+        {
+            "kind": "pattern",
+            "target": MP_SOCKET_SOURCE_TARGET,
+            "pattern": MP_KEEPALIVE_PUSH_LITERAL,
+            "position": "after",
+            "payload": (
+                "-- " + P2_PAYLOAD_MARKERS[8] + "\n"
+                "if AISP_P2_ON then\n"
+                "  AISP_P2.keepalive_pushes = AISP_P2.keepalive_pushes + 1\n"
+                "  AISP_P2.keepalive_push_times[#AISP_P2.keepalive_push_times + 1] = AISP_P2_NOW()\n"
+                "  AISP_P2_FLUSH()\n"
+                "end"
             ),
             "match_indent": False,
             "times": 1,
@@ -1633,32 +1840,73 @@ def multiplayer_guard_patch(port: int) -> dict:
     }
 
 
+def _lovely_line_match(line: str, pattern: str) -> bool:
+    """N1: match one whole trimmed line against a Lovely pattern.
+
+    Lovely pattern patches compare the *trimmed* source line to the pattern, where
+    ``*`` matches any run of characters and ``?`` matches a single character; every
+    other character is literal. This mirrors that rule exactly (a full-line anchor
+    with no wildcards therefore matches one and only one identical line).
+    """
+    trimmed = line.strip()
+    pattern = pattern.strip()
+    regex = "".join(
+        ".*" if char == "*" else "." if char == "?" else re.escape(char)
+        for char in pattern
+    )
+    return re.fullmatch(regex, trimmed) is not None
+
+
+def matching_source_lines(text: str, pattern: str) -> list:
+    """N1: the 1-based line numbers of every line that matches ``pattern``."""
+    return [
+        number
+        for number, line in enumerate(text.splitlines(), start=1)
+        if _lovely_line_match(line, pattern)
+    ]
+
+
 def apply_source_pattern_patch(text: str, patch: Mapping) -> str:
     """Apply one generated ``pattern`` patch to source text exactly like Lovely.
 
-    Used by the source-observer tests to prove the real generated patch applies to
-    the pinned Multiplayer thread source. It performs a single literal insertion
-    before/after the line containing the pattern (``times`` is honoured as a cap).
+    N1: each trimmed line is matched against the wildcard pattern and the patch is
+    applied only when the match count equals ``times`` (fail closed otherwise), so
+    the tests exercise the same full-line rule the real Lovely runtime uses instead
+    of a looser substring search.
     """
     pattern = str(patch["pattern"])
     position = str(patch.get("position", "after"))
     payload = str(patch["payload"])
     limit = int(patch.get("times", 1))
+    spans: list = []
+    offset = 0
+    for raw in text.splitlines(keepends=True):
+        spans.append((offset, offset + len(raw)))
+        offset += len(raw)
+    insertions: list = []
+    for start, end in spans:
+        if _lovely_line_match(text[start:end], pattern):
+            insertions.append(start if position == "before" else end)
+    if len(insertions) != limit:
+        raise StagingError(
+            "source_pattern_match_count",
+            f"{pattern!r} matched {len(insertions)} line(s), expected {limit}",
+        )
     out = text
-    applied = 0
-    while applied < limit:
-        index = out.find(pattern)
-        if index < 0:
-            break
-        if position == "before":
-            line_start = out.rfind("\n", 0, index) + 1
-            insert_at = line_start
-        else:
-            line_end = out.find("\n", index)
-            insert_at = len(out) if line_end < 0 else line_end + 1
-        out = out[:insert_at] + payload + "\n" + out[insert_at:]
-        applied += 1
+    for insert_at in sorted(set(insertions), reverse=True):
+        prefix = "" if (insert_at == 0 or out[insert_at - 1] == "\n") else "\n"
+        out = out[:insert_at] + prefix + payload + "\n" + out[insert_at:]
     return out
+
+
+def p2_observer_anchor_problems(source_text: str, port: int = 1) -> list:
+    """N1: every observer anchor must match exactly one full line of the socket source."""
+    problems: list = []
+    for patch in mp_p2_observer_patches(port):
+        matches = matching_source_lines(source_text, str(patch["pattern"]))
+        if len(matches) != 1:
+            problems.append(f"mp_p2_anchor_not_unique:{patch['pattern']}")
+    return problems
 
 
 def staging_patches(expected_save_dir, expected_mods_dir, bootstrap: bool = False, mp_guard=None) -> list:
@@ -2056,6 +2304,23 @@ def check_multiplayer_guard(staging_root, role: str, manifest: Optional[Mapping]
             problems.append("mp_p2_observer_schema_missing")
         if MEASURE_P2_ENV not in text:
             problems.append("mp_p2_observer_gate_missing")
+        for marker in P2_PAYLOAD_MARKERS:
+            if marker not in text:
+                problems.append(f"mp_p2_payload_marker_missing:{marker}")
+        # N1: the observer anchors are only applied if they match the staged
+        # Multiplayer socket source exactly (one whole trimmed line each). A loose
+        # fragment anchor that would silently never match is refused here.
+        if mod_dir is not None:
+            socket_source = mod_dir.joinpath(*MP_SOCKET_SOURCE_REL)
+            if not socket_source.is_file():
+                problems.append("mp_socket_source_missing")
+            else:
+                problems.extend(
+                    p2_observer_anchor_problems(
+                        socket_source.read_text(encoding="utf-8", errors="replace"),
+                        port if port is not None else 1,
+                    )
+                )
         if manifest is not None:
             recorded = (manifest.get("steam_guard") or {}).get("patch_sha256")
             if recorded and recorded != sha256_file(patch_path):

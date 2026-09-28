@@ -71,6 +71,59 @@ SMODS_HTTPS_LUA = (
     "return M\n"
 )
 
+# N1: a minimal staged Multiplayer network thread carrying the exact full pinned
+# anchor lines, so the static guard can prove every observer anchor matches exactly
+# one whole line of the staged ``networking/socket.lua``.
+MP_SOCKET_LUA = (
+    "return [[\n"
+    "local CONFIG_URL, CONFIG_PORT = ...\n"
+    'local socket = require("socket")\n'
+    "local isSocketClosed = true\n"
+    "local maxReconnectAttempts = 3\n"
+    "function Networking.connect()\n"
+    "\tNetworking.Client = socket.tcp()\n"
+    "\tNetworking.Client:settimeout(10)\n"
+    "\tlocal connectionResult, errorMessage = Networking.Client:connect(CONFIG_URL, CONFIG_PORT) -- Not sure if I want to make these values public yet\n"
+    "\tif connectionResult ~= 1 then\n"
+    "\t\treturn false\n"
+    "\tend\n"
+    "\treturn true\n"
+    "end\n"
+    "function Networking.tryReconnect()\n"
+    '\tSEND_THREAD_DEBUG_MESSAGE("Connection lost, attempting automatic reconnection...")\n'
+    "\tfor attempt = 1, maxReconnectAttempts do\n"
+    "\t\tsocket.sleep(2)\n"
+    "\t\tif Networking.connect() then\n"
+    '\t\t\tSEND_THREAD_DEBUG_MESSAGE("Reconnected successfully!")\n'
+    "\t\t\treturn true\n"
+    "\t\tend\n"
+    "\tend\n"
+    '\tSEND_THREAD_DEBUG_MESSAGE("All reconnection attempts failed.")\n'
+    "\treturn false\n"
+    "end\n"
+    "local networkPacketQueue = function()\n"
+    "\tlocal data, error, partial = Networking.Client:receive()\n"
+    "\tif data then\n"
+    "\t\tnetworkToUiChannel:push(data)\n"
+    '\telseif error == "close" then\n'
+    "\t\t-- Connection closed, attempt automatic reconnection\n"
+    "\t\tisSocketClosed = true\n"
+    "\tend\n"
+    "end\n"
+    "while true do\n"
+    "\tif retryCount > keepAliveRetryCount then\n"
+    "\t\tNetworking.Client:close()\n"
+    "\t\t-- Keepalive failed, attempt automatic reconnection\n"
+    "\t\tisSocketClosed = true\n"
+    "\tend\n"
+    "\tif isRetry then\n"
+    "\t\tretryCount = retryCount + 1\n"
+    "\t\tuiToNetworkChannel:push(\"{\\\"action\\\":\\\"keepAlive\\\"}\")\n"
+    "\tend\n"
+    "end\n"
+    "]]\n"
+)
+
 SMODS_LOGGING_LUA = (
     "function initializeSocketConnection()\n"
     '\tlocal socket = require("socket")\n'
@@ -115,6 +168,9 @@ def _make_mods(root: Path) -> Path:
     (mp / "core.lua").write_text(MP_CORE_LUA, encoding="utf-8")
     (mp / "config.lua").write_text(MP_CONFIG_LUA, encoding="utf-8")
     (mp / ".env").write_text("server_url=balatro.virtualized.dev\n", encoding="utf-8")
+    networking = mp / "networking"
+    networking.mkdir(parents=True, exist_ok=True)
+    (networking / "socket.lua").write_text(MP_SOCKET_LUA, encoding="utf-8")
     smods = mods / "Steamodded" / "libs"
     (smods / "https").mkdir(parents=True)
     (smods / "https" / "smods-https.lua").write_text(SMODS_HTTPS_LUA, encoding="utf-8")
@@ -1069,6 +1125,50 @@ def test_write_helpers_use_safe_writes():
             assert error.code == "path_escape"
         else:
             raise AssertionError("expected path_escape")
+
+
+def test_apply_source_pattern_patch_is_lovely_faithful_and_fails_closed():
+    # N1: a whole-line anchor matches one trimmed line; the wildcard helper honours
+    # Lovely's ``*``/``?`` rule, and a wrong match count fails closed instead of
+    # silently doing nothing.
+    text = "line one\nlocal socket = require(\"socket\")\nline two\n"
+    patch = {
+        "kind": "pattern", "target": "x", "pattern": 'local socket = require("socket")',
+        "position": "after", "payload": "-- MARK", "match_indent": False, "times": 1,
+    }
+    patched = staging.apply_source_pattern_patch(text, patch)
+    assert "-- MARK" in patched and patched.index("-- MARK") > patched.index("require")
+    anchor = staging.matching_source_lines(text, 'local socket = require("socket")')
+    assert anchor == [2]
+    # A wildcard pattern matches by whole trimmed line, like Lovely.
+    assert staging.matching_source_lines(text, "line *") == [1, 3]
+    for bad in (
+        {**patch, "pattern": "does not exist"},
+        {**patch, "pattern": "line *"},  # matches two lines but times is 1
+        {**patch, "pattern": 'local socket = require("socket")', "times": 2},
+    ):
+        try:
+            staging.apply_source_pattern_patch(text, bad)
+        except staging.StagingError as error:
+            assert error.code == "source_pattern_match_count"
+        else:
+            raise AssertionError("a wrong match count must fail closed")
+
+
+def test_p2_observer_anchor_problems_fail_closed_on_missing_or_duplicate_lines():
+    good = "\n".join(
+        [staging.MP_SOCKET_REQUIRE_LITERAL, staging.MP_SOCKET_CONNECT_LITERAL,
+         staging.MP_RECONNECT_START_LITERAL, staging.MP_RECONNECT_OK_LITERAL,
+         staging.MP_RECONNECT_FAIL_LITERAL, staging.MP_CLOSE_COMMENT_LITERAL,
+         staging.MP_KEEPALIVE_COMMENT_LITERAL, staging.MP_RECEIVE_LITERAL,
+         staging.MP_KEEPALIVE_PUSH_LITERAL]
+    )
+    assert staging.p2_observer_anchor_problems(good, 8788) == []
+    duplicated = good + "\n" + staging.MP_SOCKET_CONNECT_LITERAL
+    problems = staging.p2_observer_anchor_problems(duplicated, 8788)
+    assert any(problem.startswith("mp_p2_anchor_not_unique") for problem in problems)
+    missing = good.replace(staging.MP_RECEIVE_LITERAL, "-- removed")
+    assert any("mp_p2_anchor_not_unique" in problem for problem in staging.p2_observer_anchor_problems(missing, 8788))
 
 
 def _run_all() -> int:

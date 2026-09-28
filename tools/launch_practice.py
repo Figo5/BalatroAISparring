@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -534,12 +535,12 @@ class JobObject:
             self.assigned += 1
         return ok
 
-    def terminate(self) -> bool:
+    def terminate(self, exit_code: int = 1) -> bool:
         kernel32 = _win_kernel32()
         if kernel32 is None or not self._handle:
             return False
         try:
-            return bool(kernel32.TerminateJobObject(self._handle, 1))
+            return bool(kernel32.TerminateJobObject(self._handle, int(exit_code)))
         except Exception:
             return False
 
@@ -566,8 +567,11 @@ class OwnedProcess:
     def is_running(self) -> bool:
         try:
             return self.handle.poll() is None
-        except Exception:
-            return False
+        except Exception:  # noqa: BLE001
+            # A failed retained-handle query is uncertainty, not proof of exit.
+            # Claiming "exited" here would let a live owned process be treated as
+            # gone; fail closed by treating an unreadable handle as still running.
+            return True
 
     def _wait(self, timeout: float) -> None:
         try:
@@ -575,9 +579,11 @@ class OwnedProcess:
         except Exception:
             pass
 
-    def terminate(self, timeout: float = 10.0) -> dict:
+    def terminate(self, timeout: float = 10.0, exit_code: int = 1) -> dict:
         if self.job is not None:
             try:
+                self.job.terminate(exit_code)
+            except TypeError:
                 self.job.terminate()
             except Exception:
                 pass
@@ -598,11 +604,16 @@ class OwnedProcess:
         return {"role": self.role, "pid": self.pid, "terminated": terminated}
 
 
-def _terminate_owned_handles(owned: Sequence[OwnedProcess], on_terminate=None) -> list:
-    """Terminate only launcher-owned handles. Never a bare, unverified PID."""
+def _terminate_owned_handles(owned: Sequence[OwnedProcess], on_terminate=None, exit_code: int = 1) -> list:
+    """Terminate only launcher-owned handles. Never a bare, unverified PID.
+
+    ``exit_code`` is the tool-owned end code written through the Job Object, so the
+    measured exit code is a deliberate tool decision (N2/N3), never the ambiguous
+    TerminateJobObject default.
+    """
     actions: list = []
     for process in reversed(list(owned)):
-        action = process.terminate()
+        action = process.terminate(exit_code=exit_code)
         if on_terminate is not None:
             try:
                 on_terminate(process)
@@ -646,6 +657,11 @@ class LaunchSession:
         self.blocked = list(blocked or ())
         self.rollback = dict(rollback) if rollback else None
         self.extra = dict(extra) if extra else {}
+        # Tool-owned end (N2/N3): set by ``supervise_session`` when it ends a run
+        # after the required evidence has settled. Never inferred from an exit code.
+        self.end_mode = None
+        self.end_code = None
+        self.ended_unix = None
 
     @property
     def ok(self) -> bool:
@@ -661,8 +677,8 @@ class LaunchSession:
     def poll(self) -> list:
         return self.is_running()
 
-    def terminate(self, timeout: float = 10.0) -> list:
-        return _terminate_owned_handles(self.owned, None)
+    def terminate(self, timeout: float = 10.0, exit_code: int = 1) -> list:
+        return _terminate_owned_handles(self.owned, None, exit_code=exit_code)
 
     def close(self) -> None:
         for item in self.owned:
@@ -711,14 +727,20 @@ def supervise_session(
     poll_interval: float = 1.0,
     on_tick: Optional[Callable[[list], None]] = None,
     unexpected_check: Optional[Callable[[list], dict]] = None,
+    settle: Optional[Callable[[list], bool]] = None,
+    end_mode: Optional[str] = None,
+    end_code: Optional[int] = None,
 ) -> dict:
-    """Block while retaining the exact handles until owned processes exit.
+    """Block while retaining the exact handles until owned processes exit or settle.
 
-    Keeps the Job Objects and Popen handles alive for the whole run. On timeout it
-    terminates only the owned staged handles (never the parent game) and reports
-    ``supervision_timeout``. R2: an ``unexpected_check`` callback is polled on every
-    tick; if it reports a live/foreign Balatro, only the owned staged handles are
-    terminated and the run is voided with ``unexpected_balatro_running``.
+    Keeps the Job Objects and Popen handles alive for the whole run. N2/N3: when a
+    ``settle`` callback reports that the required evidence has settled, the tool ends
+    the run itself with a distinct ``end_code`` (never 0, never the default 1) and
+    records the end mode and time on the session. On timeout it terminates only the
+    owned staged handles (never the parent game) and reports ``supervision_timeout``.
+    R2: an ``unexpected_check`` callback is polled on every tick; if it reports a
+    live/foreign Balatro, only the owned staged handles are terminated and the run is
+    voided with ``unexpected_balatro_running``.
     """
     if not isinstance(session, LaunchSession) or not session.ok:
         return {"ok": False, "code": "not_a_live_session"}
@@ -741,6 +763,25 @@ def supervise_session(
                     "statuses": statuses,
                     "conflict": dict(verdict),
                     "termination": session.terminate(),
+                }
+        if settle is not None:
+            try:
+                settled = bool(settle(statuses))
+            except Exception:  # noqa: BLE001
+                settled = False
+            if settled and any(item["running"] for item in statuses):
+                # The tool owns the end: terminate the Job with the phase's code.
+                actions = session.terminate(exit_code=end_code if isinstance(end_code, int) else 1)
+                session.end_mode = end_mode
+                session.end_code = end_code
+                session.ended_unix = int(time.time())
+                return {
+                    "ok": True,
+                    "code": "supervision_ended",
+                    "end_mode": end_mode,
+                    "end_code": end_code,
+                    "statuses": statuses,
+                    "termination": actions,
                 }
         if not any(item["running"] for item in statuses):
             return {"ok": True, "code": "supervision_exited", "statuses": statuses}
@@ -1753,7 +1794,7 @@ def execute_launch(
     allowed = (
         (isolation_certificate.MATCH,)
         if require_certificate
-        else ("P1B", "FULL_P1", "CRASH", "P2")
+        else ("P1B", "FULL_P1", "CRASH") + tuple(isolation_certificate.P2_PHASES)
     )
     record, record_problems = _resolved_open_session(
         staging_root, open_session, allowed_phases=allowed
@@ -1764,6 +1805,11 @@ def execute_launch(
             code=record_problems[0], blocked=sorted(set(record_problems)),
         )
     nonce = record.get("nonce")
+    # N7: the CRASH/P2 measurement gates are derived from the *prepared* phase, so a
+    # normal MATCH session can never switch them on.
+    phase = record.get("phase")
+    measure_crash = phase == "CRASH"
+    measure_p2 = phase in getattr(isolation_certificate, "P2_PHASES", ())
     fresh = build_launch_plan(
         staging_root=staging_root,
         port=port,
@@ -2304,7 +2350,568 @@ def measure_dead_port(port=None, *, prober=None, chooser=None, attempts: int = 3
     }
 
 
-PHASE_LAUNCH_ORDER = ("P1A", "P1B", "FULL_P1", "CRASH", "P2")
+def _default_tcp_listeners(port: int) -> dict:
+    """Native *both-family* listener inventory for one loopback port (Windows).
+
+    One ``Get-NetTCPConnection`` query returns rows for every family, so a single
+    successful query is a complete inventory. The result distinguishes a failed or
+    partial query (``ok`` False) from a genuinely empty table (``ok`` True with no
+    rows): the caller must fail closed on the former and never prove ownership from
+    the latter. ``-ErrorAction Stop`` with the CIM "No matching" error mapped to an
+    empty table keeps a real query failure distinct from "nothing is listening".
+    """
+    command = (
+        "$ok = $true; $rows = @(); "
+        "try { $rows = @(Get-NetTCPConnection -State Listen -LocalPort %d -ErrorAction Stop) } "
+        "catch { if ($_.Exception.Message -match 'No matching') { $rows = @() } else { $ok = $false } }; "
+        "$out = @(); if ($ok) { $out = @($rows | ForEach-Object { @{ address = [string]$_.LocalAddress; pid = [int]$_.OwningProcess } }) }; "
+        "ConvertTo-Json -InputObject @{ ok = $ok; rows = $out } -Compress -Depth 4"
+        % int(port)
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "code": "inventory_unavailable", "rows": []}
+    if completed.returncode != 0:
+        return {"ok": False, "code": "inventory_unavailable", "rows": []}
+    text = (completed.stdout or "").strip()
+    if not text:
+        return {"ok": False, "code": "inventory_unavailable", "rows": []}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return {"ok": False, "code": "inventory_unavailable", "rows": []}
+    if not isinstance(parsed, Mapping) or parsed.get("ok") is not True:
+        return {"ok": False, "code": "inventory_unavailable", "rows": []}
+    rows = parsed.get("rows")
+    if isinstance(rows, Mapping):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return {"ok": False, "code": "inventory_unavailable", "rows": []}
+    normalized: list = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            return {"ok": False, "code": "inventory_partial", "rows": []}
+        try:
+            normalized.append({"address": str(row.get("address")), "pid": int(row.get("pid"))})
+        except (TypeError, ValueError):
+            return {"ok": False, "code": "inventory_partial", "rows": []}
+    return {"ok": True, "code": "ok", "rows": normalized}
+
+
+def _classify_listener_inventory(raw, port: int):
+    """Return ``(own, foreign, problems)`` from an inventory result.
+
+    Accepts the production structured result or the legacy injected list used by
+    fixtures. Any malformed/unknown/partial shape fails closed.
+    """
+    own: list = []
+    foreign: list = []
+    problems: list = []
+    if raw is None:
+        return own, foreign, ["listener_inventory_unavailable"]
+    if isinstance(raw, Mapping):
+        if raw.get("ok") is not True:
+            problems.append(str(raw.get("code") or "listener_inventory_unavailable"))
+        rows = raw.get("rows")
+        if isinstance(rows, Mapping):
+            rows = [rows]
+        if not isinstance(rows, list):
+            problems.append("listener_inventory_unavailable")
+            rows = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                problems.append("listener_inventory_partial")
+                continue
+            try:
+                pid = int(row.get("pid"))
+            except (TypeError, ValueError):
+                problems.append("listener_inventory_partial")
+                continue
+            entry = {"pid": pid, "address": str(row.get("address"))}
+            address = entry["address"]
+            if address == "127.0.0.1" and pid == os.getpid():
+                own.append(entry)
+            else:
+                foreign.append(entry)
+        return own, foreign, problems
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if not isinstance(item, Mapping):
+                problems.append("listener_inventory_partial")
+                continue
+            try:
+                pid = int(item.get("pid"))
+            except (TypeError, ValueError):
+                problems.append("listener_inventory_partial")
+                continue
+            (own if pid == os.getpid() else foreign).append({"pid": pid})
+        return own, foreign, problems
+    return own, foreign, ["listener_inventory_unavailable"]
+
+
+def _default_tcp_owner(port: int, peer_port: int):
+    """Owning PID of the exact loopback peer tuple, else ``None`` (fail closed).
+
+    The listener is the *server* end (``127.0.0.1:port``) and the AI peer is the
+    *client* end (``127.0.0.1:peer_port``). The peer's PID comes from the peer's own
+    established (client-side) endpoint row - local ``127.0.0.1:peer_port``, remote
+    ``127.0.0.1:port`` - not from the server-side row, which would only ever name
+    this process. A successful query that yields exactly one valid row/PID is
+    required: a nonzero exit, malformed output, zero or multiple rows, an ambiguous
+    PID set or a missing/non-numeric owner all return ``None`` so the caller aborts
+    the run. No partial result is ever returned on a query failure.
+    """
+    command = (
+        "Get-NetTCPConnection -State Established -LocalPort %d -RemotePort %d -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.RemoteAddress -eq '127.0.0.1' -and $_.LocalAddress -eq '127.0.0.1' } | "
+        "Select-Object -Property OwningProcess | ConvertTo-Json -Compress"
+        % (int(peer_port), int(port))
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if completed.returncode != 0:
+        return None
+    text = (completed.stdout or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return None
+    rows = parsed if isinstance(parsed, list) else [parsed]
+    if len(rows) != 1:
+        return None
+    row = rows[0]
+    if not isinstance(row, Mapping):
+        return None
+    pid = row.get("OwningProcess")
+    if pid is None:
+        return None
+    try:
+        return int(pid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _listener_action_names(data: bytes) -> list:
+    """Bounded JSON ``action`` names observed in the received bytes (never sent)."""
+    names: list = []
+    seen: set = set()
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        action = payload.get("action")
+        if not isinstance(action, str):
+            continue
+        action = action[: staging.LISTENER_MAX_ACTION_NAME]
+        if action not in seen:
+            seen.add(action)
+            names.append(action)
+        if len(names) >= staging.LISTENER_MAX_ACTIONS:
+            break
+    return names
+
+
+class MeasurementListener:
+    """Exclusive 127.0.0.1 one-connection measurement listener (section 4).
+
+    Production binds a real loopback socket with exclusive address use and never a
+    wildcard, ``::1`` or the admin port; it accepts exactly one connection, proves
+    the peer is the owned AI PID through the native TCP table, sends zero bytes and
+    closes the listening socket immediately after accepting so every reconnect is
+    refused. ``SyntheticListener`` fixtures replace it in tests; the tool never
+    accepts a caller-supplied log.
+    """
+
+    def __init__(
+        self,
+        port,
+        *,
+        mode,
+        inventory=None,
+        owner_lookup=None,
+        now=None,
+        socket_mod=None,
+        threading_mod=None,
+    ) -> None:
+        import socket as _socket_mod
+        import threading as _threading_mod
+
+        self.port = int(port)
+        self.mode = mode
+        self._inventory = inventory or _default_tcp_listeners
+        self._owner_lookup = owner_lookup or _default_tcp_owner
+        self._now = now or time.time
+        self._socket = socket_mod or _socket_mod
+        self._threading = threading_mod or _threading_mod
+        self._server = None
+        self._conn = None
+        self._thread = None
+        self._armed = self._threading.Event()
+        self._stop = self._threading.Event()
+        self._done = self._threading.Event()
+        self._ai_pids: set = set()
+        self._received = bytearray()
+        self._state = {
+            "accepted": 0,
+            "peer_pid": None,
+            "peer_is_owned_ai": None,
+            "peer_host": None,
+            "peer_port": None,
+            "sent_bytes": 0,
+            "closed": False,
+            "fin": False,
+            "close_time": None,
+            "open_until": None,
+            "peer_eof": False,
+            "eof_time": None,
+            "problems": [],
+        }
+
+    def start(self) -> dict:
+        server = self._socket.socket(self._socket.AF_INET, self._socket.SOCK_STREAM)
+        try:
+            if hasattr(self._socket, "SO_EXCLUSIVEADDRUSE"):
+                server.setsockopt(self._socket.SOL_SOCKET, self._socket.SO_EXCLUSIVEADDRUSE, 1)
+            server.bind(("127.0.0.1", self.port))
+            server.listen(1)
+            try:
+                server.settimeout(staging.MEASUREMENT_DEADLINE_SECONDS)
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            self._close_server(server)
+            return {"ok": False, "code": "listener_bind_failed"}
+        try:
+            raw = self._inventory(self.port)
+        except Exception:  # noqa: BLE001
+            raw = None
+        own, foreign, problems = _classify_listener_inventory(raw, self.port)
+        # Fail closed unless the native inventory positively proves this exact
+        # process owns the loopback listen socket and nothing else does.
+        if not own or foreign or problems:
+            self._close_server(server)
+            return {
+                "ok": False,
+                "code": "listener_ownership_unproven",
+                "own": own,
+                "foreign": foreign,
+                "problems": problems,
+            }
+        self._server = server
+        self._thread = self._threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+        return {"ok": True, "code": "listener_started"}
+
+    def arm(self, ai_pids) -> None:
+        self._ai_pids = {int(pid) for pid in (ai_pids or [])}
+        self._armed.set()
+
+    def _close_server(self, server=None) -> None:
+        target = self._server if server is None else server
+        if target is None:
+            return
+        self._server = None
+        try:
+            target.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _close_conn(self) -> None:
+        conn = self._conn
+        self._conn = None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _retain(self, data: bytes) -> None:
+        remaining = staging.LISTENER_MAX_RECEIVED_BYTES - len(self._received)
+        if remaining > 0:
+            self._received.extend(data[:remaining])
+
+    def _serve(self) -> None:
+        try:
+            if not self._armed.wait(staging.MEASUREMENT_DEADLINE_SECONDS):
+                self._done.set()
+                return
+            conn, addr = self._server.accept()
+        except Exception:  # noqa: BLE001
+            self._close_server()
+            self._done.set()
+            return
+        self._state["accepted"] = 1
+        self._conn = conn
+        # Bind the exact observed endpoint tuple, never a guessed one.
+        try:
+            self._state["peer_host"] = str(addr[0])
+            self._state["peer_port"] = int(addr[1])
+        except (TypeError, ValueError, IndexError):
+            self._state["peer_host"] = None
+            self._state["peer_port"] = None
+        owned = False
+        if self._state["peer_host"] != "127.0.0.1" or self._state["peer_port"] is None:
+            self._state["problems"].append("listener_peer_endpoint_not_loopback")
+        else:
+            try:
+                self._state["peer_pid"] = self._owner_lookup(self.port, self._state["peer_port"])
+            except Exception:  # noqa: BLE001
+                self._state["peer_pid"] = None
+            owned = self._state["peer_pid"] is not None and self._state["peer_pid"] in self._ai_pids
+            if not owned:
+                self._state["problems"].append("listener_peer_not_owned_ai")
+        self._state["peer_is_owned_ai"] = bool(owned)
+        # Close the listening socket immediately after accepting so every reconnect
+        # is refused, then abort promptly on a wrong peer (never read or hold).
+        self._close_server()
+        if not owned:
+            self._close_conn()
+            self._done.set()
+            return
+        try:
+            conn.settimeout(0.25)
+        except Exception:  # noqa: BLE001
+            pass
+        while not self._stop.is_set():
+            try:
+                data = conn.recv(4096)
+            except TimeoutError:
+                # A receive timeout is not an EOF. P2_CLOSE treats the quiet period
+                # as "drained"; SILENT keeps holding and waiting for real data/stop.
+                if self.mode == "P2_CLOSE":
+                    break
+                continue
+            except Exception:  # noqa: BLE001
+                # A reset/error is an honest end of the hold, recorded as such.
+                self._state["problems"].append("listener_receive_error")
+                self._state["peer_eof"] = True
+                self._state["eof_time"] = round(self._now(), 6)
+                self._state["open_until"] = self._state["eof_time"]
+                break
+            if data:
+                self._retain(data)
+                continue
+            # An empty read is the peer's EOF.
+            if self.mode == "P2_CLOSE":
+                break
+            # SILENT: an honest peer EOF ends the hold. Record the true EOF time and
+            # stop instead of busy-spinning on a dead socket; the hold is never
+            # extended past the observed EOF.
+            self._state["peer_eof"] = True
+            self._state["eof_time"] = round(self._now(), 6)
+            self._state["open_until"] = self._state["eof_time"]
+            break
+        if self.mode == "P2_CLOSE":
+            # A graceful FIN is claimed only when ``shutdown`` actually succeeds; a
+            # failed shutdown is never recorded as a successful FIN.
+            fin_ok = False
+            try:
+                conn.shutdown(self._socket.SHUT_WR)
+                fin_ok = True
+            except Exception:  # noqa: BLE001
+                fin_ok = False
+            self._state["closed"] = bool(fin_ok)
+            self._state["fin"] = bool(fin_ok)
+            if fin_ok:
+                self._state["close_time"] = round(self._now(), 6)
+        elif self._state["open_until"] is None:
+            self._state["open_until"] = round(self._now(), 6)
+        self._done.set()
+
+    def finish(self, timeout: float = 30.0) -> dict:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout)
+        self._close_conn()
+        # Never fabricate a hold merely because ``finish`` was called: a premature
+        # peer EOF already capped ``open_until`` at the true EOF time.
+        if self._state["open_until"] is None and self.mode != "P2_CLOSE":
+            if self._state.get("peer_eof") is not True and self._state["accepted"] == 1:
+                self._state["open_until"] = round(self._now(), 6)
+        self._close_server()
+        return self._state
+
+    def log_fields(self, nonce: str, phase: str) -> dict:
+        state = self._state
+        received = bytes(self._received)
+        actions = _listener_action_names(received)
+        return {
+            "probe": "listener",
+            "schema": staging.LISTENER_SCHEMA,
+            "patch": staging.PATCH_ID,
+            "nonce": nonce,
+            "phase": phase,
+            "port": self.port,
+            "families": "ipv4",
+            "exclusive": "true",
+            "listener_pid": os.getpid(),
+            "accepted": state["accepted"],
+            "peer_pid": state["peer_pid"],
+            "peer_host": state["peer_host"],
+            "peer_port": state["peer_port"],
+            "peer_is_owned_ai": state["peer_is_owned_ai"],
+            "sent_bytes": state["sent_bytes"],
+            "received_bytes": len(received),
+            "received_sha256": hashlib.sha256(received).hexdigest(),
+            "actions": ",".join(actions),
+            "action_count": len(actions),
+            "closed": state["closed"],
+            "fin": state["fin"],
+            "close_time": state["close_time"],
+            "open_until": state["open_until"],
+            "peer_eof": state["peer_eof"],
+            "eof_time": state["eof_time"],
+        }
+
+
+PHASE_LAUNCH_ORDER = (
+    "P1A",
+    "P1B",
+    "FULL_P1",
+    "CRASH",
+    "P2_INITIAL",
+    "P2_CLOSE",
+    "P2_SILENT",
+)
+
+
+def _read_staged_p2_fields(staging_root) -> dict:
+    try:
+        paths = staging.role_paths(staging_root, "ai")
+    except Exception:  # noqa: BLE001
+        return {}
+    target = paths.data / "Balatro" / staging.PROBE_P2
+    if not target.is_file():
+        return {}
+    try:
+        return staging.parse_probe(target.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return {}
+
+
+def _p2_has_exhausted_cycle(fields: Mapping) -> bool:
+    index = 1
+    while f"cycle{index}_outcome" in fields:
+        if fields.get(f"cycle{index}_outcome") == "exhausted":
+            return True
+        index += 1
+    return False
+
+
+def _make_p2_settle(staging_root, phase: str, *, now: Callable[[], float] = time.time) -> Callable[[list], bool]:
+    """The tool decides when a P2 run's required evidence has settled (section 4)."""
+    quiet = 5.0 if phase == "P2_INITIAL" else 3.0
+    first_settled: dict = {"at": None}
+
+    def settle(_statuses=None) -> bool:
+        fields = _read_staged_p2_fields(staging_root)
+        if not fields:
+            first_settled["at"] = None
+            return False
+        if phase == "P2_INITIAL":
+            last = _as_number(fields.get("last_time"))
+            ready = _as_number(fields.get("last_time")) is not None and fields.get("first_result") not in (None, "")
+        else:
+            index = 1
+            last = None
+            ready = False
+            while f"cycle{index}_end_time" in fields:
+                if fields.get(f"cycle{index}_outcome") == "exhausted":
+                    ready = True
+                    last = _as_number(fields.get(f"cycle{index}_end_time"))
+                index += 1
+        if not ready or last is None or (now() - last) < quiet:
+            first_settled["at"] = None
+            return False
+        if first_settled["at"] is None:
+            first_settled["at"] = now()
+        return (now() - first_settled["at"]) >= quiet
+
+    return settle
+
+
+def _as_number(value):
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _make_probe_settle(
+    staging_root, phase: str, nonce: str, *, now: Callable[[], float] = time.time, quiet: float = 3.0
+) -> Callable[[list], bool]:
+    """Settle CRASH/P1B/FULL_P1 once every required nonce-bound probe is present."""
+    import isolation_certificate
+
+    roles = isolation_certificate.PHASE_ROLES.get(phase, ())
+    labels = isolation_certificate.PHASE_EVIDENCE.get(phase, ())
+    first_settled: dict = {"at": None}
+
+    def settle(_statuses=None) -> bool:
+        ready = True
+        for role in roles:
+            try:
+                paths = staging._paths_for_role(staging_root, role)
+            except Exception:  # noqa: BLE001
+                ready = False
+                break
+            save = paths.data / "Balatro"
+            for label in labels:
+                name = isolation_certificate.PROBE_BY_LABEL.get(label)
+                if not name:
+                    continue
+                target = save / name
+                if not target.is_file():
+                    ready = False
+                    break
+                try:
+                    fields = staging.parse_probe(target.read_text(encoding="utf-8", errors="replace"))
+                except OSError:
+                    ready = False
+                    break
+                if fields.get("nonce") != nonce:
+                    ready = False
+                    break
+            if not ready:
+                break
+        if not ready:
+            first_settled["at"] = None
+            return False
+        if first_settled["at"] is None:
+            first_settled["at"] = now()
+        return (now() - first_settled["at"]) >= quiet
+
+    return settle
+
+
+def _write_listener_log(staging_root, fields: Mapping) -> dict:
+    paths = staging.role_paths(staging_root, "ai")
+    save_dir = paths.data / "Balatro"
+    target = save_dir / staging.PROBE_LISTENER
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(fields)
+    payload["save"] = str(save_dir)
+    text = "\n".join(f"{key}={'' if value is None else value}" for key, value in payload.items()) + "\n"
+    target.write_text(text, encoding="utf-8")
+    return {"ok": True, "path": str(target)}
 
 
 def execute_measurement_phase(
@@ -2326,13 +2933,17 @@ def execute_measurement_phase(
     supervisor: Optional[Callable[[LaunchSession], dict]] = None,
     timeout: Optional[float] = None,
     dead_port_probe=None,
+    listener_factory: Optional[Callable[..., object]] = None,
+    settle_now: Optional[Callable[[], float]] = None,
 ) -> dict:
-    """Tool-owned measurement launch path for P1A→P1B→FULL_P1→CRASH/P2.
+    """Tool-owned measurement launch path for the ordered measurement phases.
 
-    H3/R3: CRASH is triggered by the tool (env-gated staged guard error) and read
-    back from the retained handles; P2's dead port is selected and measured by the
-    tool before spawn. Nothing here enables an AI capability or a match. Any
-    post-spawn exception/KeyboardInterrupt records the global lockout and re-raises.
+    N2: CRASH is triggered by the tool (env-gated wrapped error handler) and read
+    back from fresh nonce-bound probes plus the tool-owned end code. Section 4:
+    P2_INITIAL uses a measured dead port; P2_CLOSE/P2_SILENT use the tool-owned
+    exclusive 127.0.0.1 listener. N3: every run has a hard deadline and is ended by
+    the tool with a distinct recorded code once the required evidence has settled.
+    Nothing here enables an AI capability or a match.
     """
     import isolation_certificate
 
@@ -2343,6 +2954,8 @@ def execute_measurement_phase(
     enumerator = enumerator or default_enumerator()
     if phase not in PHASE_LAUNCH_ORDER:
         return {"ok": False, "code": "unknown_phase", "problems": ["unknown_phase"]}
+    if timeout is None:
+        timeout = staging.MEASUREMENT_DEADLINE_SECONDS
     session_id = session_id or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     live_map = _live_roots_map(live_install_root, appdata_root, steam_root, None)
     sources = live_source_map(live_install_root, appdata_root, steam_root)
@@ -2355,18 +2968,29 @@ def execute_measurement_phase(
 
     measurement_setup = None
     launch_port = port
-    if phase == "P2":
+    if phase == "P2_INITIAL":
         dead = measure_dead_port(port=port, prober=dead_port_probe)
         if not dead.get("ok"):
             return {"ok": False, "code": dead.get("code", "dead_port_unavailable"), "phase": phase,
                     "problems": dead.get("problems", ["dead_port_unavailable"])}
         launch_port = int(dead["dead_port"])
         measurement_setup = dead
+    elif phase in ("P2_CLOSE", "P2_SILENT"):
+        launch_port = int(port)
+        measurement_setup = {"kind": "listener", "port": launch_port, "mode": phase}
     elif phase == "CRASH":
-        measurement_setup = {"kind": "crash", "stimulus": "env_gated_guard_error"}
+        measurement_setup = {"kind": "crash", "stimulus": staging.MEASUREMENT_CRASH_STIMULUS}
 
     session = None
+    listener = None
+    listener_factory = listener_factory or MeasurementListener
     try:
+        if phase in ("P2_CLOSE", "P2_SILENT"):
+            listener = listener_factory(launch_port, mode=phase)
+            started = listener.start()
+            if not started.get("ok"):
+                return {"ok": False, "code": started.get("code", "listener_start_failed"),
+                        "phase": phase, "problems": [started.get("code", "listener_start_failed")]}
         prepared = isolation_certificate.prepare_session(
             staging_root,
             live=live_map,
@@ -2432,8 +3056,6 @@ def execute_measurement_phase(
                 on_terminate=on_terminate,
                 open_session=open_session,
                 require_certificate=False,
-                measure_crash=(phase == "CRASH"),
-                measure_p2=(phase == "P2"),
             )
         if not isinstance(session, LaunchSession) or not session.ok:
             isolation_certificate.record_session_failure(
@@ -2442,6 +3064,11 @@ def execute_measurement_phase(
             return {"ok": False, "code": "measurement_launch_failed", "phase": phase,
                     "result": _as_dict(session)}
         owned_pids = [record.pid for record in session.records]
+        ai_pids = [record.pid for record in session.records if record.role == "ai"]
+        if listener is not None:
+            arm = getattr(listener, "arm", None)
+            if callable(arm):
+                arm(ai_pids)
 
         def unexpected(statuses=None) -> dict:
             live = check_live_balatro_closed(enumerator, live_install_root)
@@ -2451,13 +3078,28 @@ def execute_measurement_phase(
                 enumerator, staging_root, live_install_root, ignore_pids=owned_pids
             )
 
+        end_mode = None
+        end_code = None
+        settle = None
+        if phase in ("CRASH", "P1B", "FULL_P1", "P2_INITIAL", "P2_CLOSE", "P2_SILENT"):
+            end_mode = staging.MEASUREMENT_END_MODE
+            end_code = staging.MEASUREMENT_END_CODES[phase]
+            if phase in ("P2_INITIAL", "P2_CLOSE", "P2_SILENT"):
+                settle = _make_p2_settle(staging_root, phase, now=settle_now or time.time)
+            else:
+                settle = _make_probe_settle(
+                    staging_root, phase, open_session.get("nonce") or "", now=settle_now or time.time
+                )
         supervision = (
             supervisor(session)
             if supervisor is not None
             else supervise_session(
                 session,
-                timeout=timeout if timeout is not None else plan.get("timeout"),
+                timeout=timeout,
                 unexpected_check=unexpected,
+                settle=settle,
+                end_mode=end_mode,
+                end_code=end_code,
             )
         )
         if not supervision.get("ok"):
@@ -2465,6 +3107,14 @@ def execute_measurement_phase(
                 staging_root, session_id=session_id, reason="supervision_failed"
             )
             return {"ok": False, "code": "measurement_supervision_failed", "phase": phase, "supervision": supervision}
+        if listener is not None:
+            state = listener.finish()
+            _write_listener_log(staging_root, listener.log_fields(open_session.get("nonce"), phase))
+            if not state.get("peer_is_owned_ai"):
+                isolation_certificate.record_session_failure(
+                    staging_root, session_id=session_id, reason="listener_peer_not_owned_ai"
+                )
+                return {"ok": False, "code": "listener_peer_not_owned_ai", "phase": phase, "listener": state}
         receipt = isolation_certificate.record_phase_receipt(
             staging_root,
             phase=phase,
@@ -2486,6 +3136,11 @@ def execute_measurement_phase(
     finally:
         if isinstance(session, LaunchSession):
             session.close()
+        if listener is not None:
+            try:
+                listener.finish()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def prepare_match_session(
@@ -2621,14 +3276,19 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--timeout", type=float, default=None)
     bootstrap.add_argument("--poll-interval", type=float, default=1.0)
 
-    measure = sub.add_parser("measure", help="tool-owned phase measurement (P1B/FULL_P1/CRASH/P2)")
-    measure.add_argument("--phase", required=True, choices=("P1B", "FULL_P1", "CRASH", "P2"))
+    measure = sub.add_parser("measure", help="tool-owned phase measurement (P1B/FULL_P1/CRASH/P2_*)")
+    measure.add_argument(
+        "--phase",
+        required=True,
+        choices=("P1B", "FULL_P1", "CRASH", "P2_INITIAL", "P2_CLOSE", "P2_SILENT"),
+    )
     measure.add_argument("--staging-root", default=str(staging.DEFAULT_STAGING_ROOT))
     measure.add_argument("--backup-root", default=str(staging.DEFAULT_BACKUP_ROOT))
     measure.add_argument("--install", default=str(staging.DEFAULT_INSTALL))
     measure.add_argument("--appdata", default=None)
     measure.add_argument("--steam-root", default=None)
     measure.add_argument("--port", type=int, default=8788)
+    measure.add_argument("--timeout", type=float, default=None)
 
     ack = sub.add_parser("acknowledge-lockout", help="append-only acknowledgement of the global lockout")
     ack.add_argument("--staging-root", default=str(staging.DEFAULT_STAGING_ROOT))
@@ -2731,6 +3391,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             steam_root=args.steam_root,
             port=args.port,
             backup_root=args.backup_root,
+            timeout=args.timeout,
         )
         _emit(result)
         return 0 if result.get("receipt", {}).get("ok") else 3
