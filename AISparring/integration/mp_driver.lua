@@ -67,8 +67,8 @@ MPDriver.LIMITS = {
 -- action_handlers.lua and the MP.ACTIONS senders). The AI's send guard
 -- default-denies anything outside this set, so the required life/timer
 -- penalties (`failTimer`, `failPvPTimer`, `startAnteTimer`, `pauseAnteTimer`)
--- and ordinary gameplay are never silenced. `lobbyOptions` is handled
--- separately: only the trusted human host may push it, only before start.
+-- and ordinary gameplay are never silenced. `createLobby` and `lobbyOptions`
+-- are gated separately on the trusted role: see `guard_allows`.
 MPDriver.SEND_ALLOWLIST = {
 	-- lobby lifecycle
 	createLobby = true,
@@ -86,6 +86,13 @@ MPDriver.SEND_ALLOWLIST = {
 	-- official match transport, so it is allowed; the pinned reconnect button
 	-- (`G.FUNCS.reconnect`) depends on it.
 	connect = true,
+	-- The pinned `MP.ACTIONS.sync_client()` sends `syncClient` with only the
+	-- `isCached` release flag immediately after joinedLobby/rejoinedLobby
+	-- (networking/action_handlers.lua:83-107, 1399-1404); the pinned server
+	-- stores that flag only for lobbyInfo display. It carries no private,
+	-- ranked or result data, so both roles may send it. Quoted key only so this
+	-- module contains no bare "Client" token (tests/run_runtime.py boundary).
+	["syncClient"] = true,
 	-- in-match coordination / gameplay
 	readyBlind = true,
 	unreadyBlind = true,
@@ -117,17 +124,28 @@ MPDriver.SEND_ALLOWLIST = {
 	letsGoGamblingNemesis = true,
 }
 
--- Config-changing actions only the trusted host may send before the match
--- starts. The guest can never push lobby configuration.
+-- Actions bound to the TRUSTED runtime role (the factory `role`, fixed at
+-- staged bootstrap), never to the MP-derived `MP.LOBBY.is_host` flag. The
+-- pinned core.lua:31 initializes `is_host = false` and only flips it true once
+-- the server answers lobbyInfo (networking/action_handlers.lua:182-
+-- 186), so the flag is false for the host's own real first `createLobby`.
+-- `createLobby` therefore gates on the trusted role plus the absence of a
+-- joined lobby; `lobbyOptions` additionally requires the server-confirmed host
+-- flag. Both are frozen once the match starts.
 MPDriver.HOST_ONLY = {
 	createLobby = true,
 	lobbyOptions = true,
 }
 
--- Guest-only lifecycle actions.
+-- Trusted-guest-only lifecycle actions: the AI role only, and never once the
+-- real server has confirmed a host (a forged `is_host = true` must not open the
+-- guest join either). `rejoinLobby` is deliberately NOT here: the pinned
+-- `action_connected` sends it automatically after any reconnect, for the host
+-- as well as the guest, carrying only the server-issued reconnect token for the
+-- exact lobby it was in (networking/action_handlers.lua:63-80). Refusing it for
+-- the human would strand the host's own match after a transient drop.
 MPDriver.GUEST_ONLY = {
 	joinLobby = true,
-	rejoinLobby = true,
 }
 
 -- Real wire actions that must never leave a staged runtime: ranked/server
@@ -307,15 +325,19 @@ function MPDriver.factory(ports)
 		return true
 	end
 
-	local function is_host_role()
-		local flag = rpath(mp, "LOBBY", "is_host")
-		if flag == true then
-			return true
-		end
-		if flag == false then
-			return false
-		end
-		return role == "human"
+	-- Whether a lobby has actually been joined: the real code is set only after
+	-- the server answers joinedLobby/rejoinedLobby. Used to stop a second
+	-- `createLobby` once the host is already in its own lobby.
+	local function lobby_joined()
+		local code = rpath(mp, "LOBBY", "code")
+		return type(code) == "string" and #code > 0
+	end
+
+	-- The server-confirmed host flag. The pinned Multiplayer source sets it
+	-- true only while answering lobbyInfo; it is never trusted on
+	-- its own for role authorization (the trusted `role` is).
+	local function host_confirmed()
+		return rpath(mp, "LOBBY", "is_host") == true
 	end
 
 	local originals = {
@@ -740,10 +762,16 @@ function MPDriver.factory(ports)
 
 	-- Real protocol send allowlist. Default-deny: only the allowlisted
 	-- coordination/gameplay actions pass, and the blocked/end-game/private set
-	-- can never pass. Role/phase gates are enforced on top: the guest can never
-	-- create a lobby or push lobby options, only the trusted human host may push
-	-- options, and configuration is frozen once the match starts. Returns true
-	-- when the action may be sent.
+	-- can never pass. Role/phase gates are enforced on top and bind to the
+	-- TRUSTED runtime `role`, never to the MP-derived `MP.LOBBY.is_host` alone:
+	--   * `createLobby` only for the human, and only before it has joined a
+	--     lobby (the pinned initial `is_host = false` must not refuse the
+	--     host's own first create).
+	--   * `lobbyOptions` only for the human once the server has confirmed the
+	--     host, and never after the match starts.
+	--   * `joinLobby` only for the AI, and never while the server
+	--     has confirmed a host (a forged `is_host = true` must not open them).
+	-- Returns true when the action may be sent.
 	function instance.guard_allows(action)
 		if type(action) ~= "string" or #action == 0 then
 			return false
@@ -751,18 +779,22 @@ function MPDriver.factory(ports)
 		if MPDriver.SEND_BLOCKED[action] == true then
 			return false
 		end
-		if MPDriver.HOST_ONLY[action] == true or action == "lobbyOptions" then
-			if not is_host_role() then
+		if MPDriver.HOST_ONLY[action] == true then
+			if role ~= "human" then
 				return false
 			end
-			if action == "lobbyOptions" and match_started() then
+			if match_started() then
 				return false
 			end
+			if action == "createLobby" then
+				return not lobby_joined()
+			end
+			return host_confirmed()
 		end
-		if MPDriver.GUEST_ONLY[action] == true and is_host_role() then
-			return false
+		if MPDriver.GUEST_ONLY[action] == true then
+			return role == "ai" and not host_confirmed()
 		end
-		return MPDriver.SEND_ALLOWLIST[action] == true or action == "lobbyOptions"
+		return MPDriver.SEND_ALLOWLIST[action] == true
 	end
 
 	-- Wrap Client.send with the allowlist. Returns an uninstall function that

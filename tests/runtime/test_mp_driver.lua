@@ -18,6 +18,9 @@ return function(ctx)
 		MP = {
 			LOBBY = {
 				code = opts.code,
+				-- Real pinned initial state: core.lua:31 `is_host = false`; only the
+				-- server's lobbyInfo ever sets it (action_handlers.lua:186).
+				is_host = opts.is_host == true,
 				ready_to_start = opts.ready_to_start or false,
 				connected = true,
 				username = "Guest",
@@ -286,11 +289,58 @@ return function(ctx)
 
 	test("send_guard_allows_host_options_only_before_start", function()
 		local MP, funcs = fake_engine({ code = "ABC12", ready_to_start = true })
+		MP.LOBBY.is_host = true
 		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
 		ctx.is_true(driver.guard_allows("lobbyOptions"))
-		ctx.is_true(driver.guard_allows("createLobby"))
+		ctx.eq(driver.guard_allows("createLobby"), false, "already in a server-confirmed lobby")
 		ctx.is_true(driver.host_start_game())
 		ctx.eq(driver.guard_allows("lobbyOptions"), false, "configuration frozen after start")
+	end)
+
+	-- Real pinned Multiplayer initial state (core.lua:31 `MP.LOBBY.is_host =
+	-- false`, no code) must not refuse the human host's own first createLobby.
+	test("send_guard_human_initial_state_allows_create_only", function()
+		local MP, funcs = fake_engine()
+		MP.LOBBY.is_host = false
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		ctx.is_true(driver.guard_allows("createLobby"), "the host's real first createLobby must pass")
+		ctx.eq(driver.guard_allows("lobbyOptions"), false, "options before the server confirms the host")
+		ctx.eq(driver.guard_allows("joinLobby"), false, "a human never joins as guest")
+		ctx.is_true(driver.guard_allows("rejoinLobby"), "the host's own automatic reconnect rejoin must pass")
+	end)
+
+	test("send_guard_human_after_server_confirmation_freezes_at_start", function()
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		MP.LOBBY.is_host = true
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		ctx.is_true(driver.guard_allows("lobbyOptions"), "confirmed host may push options")
+		ctx.eq(driver.guard_allows("createLobby"), false, "already joined: no second create")
+		MP.LOBBY.ready_to_start = true
+		ctx.is_true(driver.host_start_game())
+		ctx.eq(driver.guard_allows("lobbyOptions"), false, "frozen after start")
+		ctx.eq(driver.guard_allows("createLobby"), false, "frozen after start")
+	end)
+
+	test("send_guard_rejects_forged_ai_host_flag", function()
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		MP.LOBBY.is_host = true
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		ctx.eq(driver.guard_allows("createLobby"), false, "the AI never creates a lobby")
+		ctx.eq(driver.guard_allows("lobbyOptions"), false, "the AI never pushes lobby options")
+		ctx.eq(driver.guard_allows("joinLobby"), false, "a forged host flag refuses the guest join")
+		ctx.is_true(driver.guard_allows("rejoinLobby"), "token-bound reconnect rejoin is role-neutral")
+	end)
+
+	test("send_guard_allows_sync_client_and_blocks_the_private_set", function()
+		local MP, funcs = fake_engine()
+		local human = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local ai = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		ctx.is_true(human.guard_allows("syncClient"))
+		ctx.is_true(ai.guard_allows("syncClient"))
+		for action in next, MPDriver.SEND_BLOCKED do
+			ctx.eq(human.guard_allows(action), false, "human allowed " .. action)
+			ctx.eq(ai.guard_allows(action), false, "ai allowed " .. action)
+		end
 	end)
 
 	test("send_guard_wraps_and_restores_client_send", function()
@@ -313,6 +363,52 @@ return function(ctx)
 		ctx.eq(#sent, 1)
 		uninstall()
 		ctx.is_true(rawequal(client.send, original))
+	end)
+
+	test("install_send_guard_forwards_the_real_host_create_lobby", function()
+		local MP, funcs = fake_engine()
+		MP.LOBBY.is_host = false
+		local sent = {}
+		local client = {
+			send = function(message)
+				sent[#sent + 1] = message.action
+				return "forwarded"
+			end,
+		}
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, client = client })
+		local uninstall = driver.install_send_guard()
+		ctx.is_true(type(uninstall) == "function")
+		ctx.eq(client.send({ action = "createLobby" }), "forwarded")
+		ctx.eq(#sent, 1)
+		ctx.eq(sent[1], "createLobby")
+	end)
+
+	test("host_start_sends_real_create_lobby_through_the_guard_before_code", function()
+		-- End-to-end over the path that failed natively: host_start -> original
+		-- start_lobby -> create_lobby -> guarded Client.send, with the pinned
+		-- initial is_host=false and the lobby code arriving only after the send.
+		local MP, funcs = fake_engine()
+		local sent = {}
+		local client = {
+			send = function(message)
+				sent[#sent + 1] = message.action
+				return "forwarded"
+			end,
+		}
+		local original_start = funcs.start_lobby
+		local send_result = nil
+		funcs.start_lobby = function(e)
+			local code_before = MP.LOBBY.code
+			send_result = client.send({ action = "createLobby", gameMode = "attrition" })
+			ctx.eq(code_before, nil, "no lobby code before the server answers")
+			original_start(e)
+		end
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, client = client })
+		ctx.is_true(type(driver.install_send_guard()) == "function")
+		ctx.eq(MP.LOBBY.is_host, false)
+		ctx.is_true(driver.host_start())
+		ctx.eq(send_result, "forwarded", "the host's real createLobby must reach the server")
+		ctx.eq(sent[1], "createLobby")
 	end)
 
 	test("is_started_tracks_the_real_run_stage_and_latches", function()
