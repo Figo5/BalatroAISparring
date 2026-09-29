@@ -1632,6 +1632,125 @@ def test_p2_receipt_coverage_is_rederived_from_copied_artifact():
         assert any("P2_coverage_not_rederived" in problem for problem in verdict["problems"]), verdict
 
 
+def test_p2_receipt_refuses_extra_owned_role():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            for phase in ("P1A", "P1B", "FULL_P1"):
+                assert _record_phase(fixture, phase)["ok"], phase
+        prepared, bind = _prepare_and_probes(fixture, "P2_INITIAL", "p2-extra-role")
+        # A P2 phase that actually spawned a human alongside the AI (the live
+        # phase-role mismatch) can never be recorded as a passed receipt.
+        session = _FakeSession(
+            "p2-extra-role", fixture["staging_root"], prepared["nonce"], bind,
+            ("human", "ai"), **_end_kwargs("P2_INITIAL")
+        )
+        result = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P2_INITIAL", session_id="p2-extra-role",
+            session=session, live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+            after_exit_proof=_fake_dead_port_setup(),
+        )
+        assert not result["ok"] and "session_roles_mismatch" in result["problems"], result
+        assert ic.load_open_record(fixture["staging_root"], "p2-extra-role")["status"] == "failed"
+        assert ic.lockout(fixture["staging_root"])["locked"] is True
+
+
+def test_p2_receipt_refuses_multiple_processes_for_one_role():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            for phase in ("P1A", "P1B", "FULL_P1"):
+                assert _record_phase(fixture, phase)["ok"], phase
+        prepared, bind = _prepare_and_probes(fixture, "P2_INITIAL", "p2-multi")
+        # A single expected role launches exactly one process; two retained AI PIDs
+        # are never a valid AI-only phase.
+        session = _FakeSession(
+            "p2-multi", fixture["staging_root"], prepared["nonce"], bind,
+            ("ai", "ai"), **_end_kwargs("P2_INITIAL")
+        )
+        result = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P2_INITIAL", session_id="p2-multi",
+            session=session, live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+            after_exit_proof=_fake_dead_port_setup(),
+        )
+        assert not result["ok"]
+        assert any(problem.startswith("session_role_cardinality") for problem in result["problems"]), result
+
+
+def test_p2_receipt_refuses_retained_record_owned_disagreement():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            for phase in ("P1A", "P1B", "FULL_P1"):
+                assert _record_phase(fixture, phase)["ok"], phase
+        prepared, bind = _prepare_and_probes(fixture, "P2_INITIAL", "p2-identity")
+        session = _FakeSession(
+            "p2-identity", fixture["staging_root"], prepared["nonce"], bind,
+            ("ai",), **_end_kwargs("P2_INITIAL")
+        )
+        # The retained records and the owned handle must name the exact same PID.
+        session.owned[0].pid = session.records[0].pid + 1
+        result = ic.record_phase_receipt(
+            fixture["staging_root"], phase="P2_INITIAL", session_id="p2-identity",
+            session=session, live=fixture["live_map"], port=PORT, live_closed=lambda: True,
+            after_exit_proof=_fake_dead_port_setup(),
+        )
+        assert not result["ok"] and "session_roles_inconsistent" in result["problems"], result
+
+
+def test_p2_receipt_revalidation_rejects_multiple_pids_for_one_role():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            receipt_ids = _receipt_ids(fixture)
+            old_id = receipt_ids["P2_INITIAL"]
+            path = ic._receipt_path(fixture["staging_root"], old_id)
+            body = json.loads(path.read_text(encoding="utf-8"))
+            body["pids"]["ai"] = [body["pids"]["ai"][0], body["pids"]["ai"][0] + 1]
+            forged = {key: value for key, value in body.items() if key != "receipt_id"}
+            new_id = ic._digest(forged)
+            body["receipt_id"] = new_id
+            ic._receipt_path(fixture["staging_root"], new_id).write_text(
+                json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            receipt_ids["P2_INITIAL"] = new_id
+            verdict = ic.build_certificate(
+                fixture["staging_root"], receipt_ids=receipt_ids, live=fixture["live_map"], port=PORT
+            )
+        assert not verdict["ok"]
+        assert any("receipt_owned_pid_cardinality" in problem for problem in verdict["problems"]), verdict
+
+
+def test_p2_receipt_revalidation_rejects_owned_role_mismatch():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fixture = _stage_all(root)
+        with synthetic_tools(root):
+            receipt_ids = _receipt_ids(fixture)
+            old_id = receipt_ids["P2_INITIAL"]
+            path = ic._receipt_path(fixture["staging_root"], old_id)
+            body = json.loads(path.read_text(encoding="utf-8"))
+            # The rejected native receipt recorded a human PID alongside the AI's
+            # while still declaring the AI-only role list; revalidation must refuse.
+            body["pids"]["human"] = [body["pids"]["ai"][0] + 1]
+            forged = {key: value for key, value in body.items() if key != "receipt_id"}
+            new_id = ic._digest(forged)
+            body["receipt_id"] = new_id
+            ic._receipt_path(fixture["staging_root"], new_id).write_text(
+                json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            receipt_ids["P2_INITIAL"] = new_id
+            verdict = ic.build_certificate(
+                fixture["staging_root"], receipt_ids=receipt_ids, live=fixture["live_map"], port=PORT
+            )
+        assert not verdict["ok"]
+        assert any("receipt_owned_roles_mismatch" in problem for problem in verdict["problems"]), verdict
+
+
 def test_h3_crash_and_p2_derive_from_tool_evidence():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

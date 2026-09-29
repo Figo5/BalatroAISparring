@@ -1349,6 +1349,235 @@ def test_execute_launch_refuses_mismatched_open_session_fields():
         assert bound["code"] == "open_session_pids_bound", bound
 
 
+def _execute_launch_spawn_roles(staging_root, root, session_id, phase, *, require_certificate):
+    """Run execute_launch with an injected popen and report the actual spawned roles."""
+    for role in ("human", "ai"):
+        _fake_role_tree(staging_root, role)
+    _persist_open_record(staging_root, session_id, phase=phase, nonce="n" * 32)
+    fresh = _fresh_plan(staging_root, ("human", "ai"), session_id=session_id)
+    spawned = []
+
+    def popen(command, cwd=None, env=None, close_fds=None, creationflags=0):
+        spawned.append(command)
+        return FakeProc(7000 + len(spawned))
+
+    with patched(launch_practice, build_launch_plan=lambda **kwargs: fresh), patched(
+        staging, role_environment=lambda paths: _pinned_env(paths)
+    ):
+        result = launch_practice.execute_launch(
+            {"staging_root": str(staging_root), "session_id": session_id},
+            enumerator=FakeEnumerator([]),
+            popen=popen,
+            live_appdata_root=root / "appdata",
+            steam_root=root / "Steam",
+            open_session={"status": "open", "session_id": session_id, "nonce": "n" * 32, "phase": phase},
+            require_certificate=require_certificate,
+            job_factory=lambda: FakeJob(),
+            resume=lambda process: True,
+            create_time_reader=lambda process: 1000.0,
+        )
+    return result, spawned
+
+
+def test_execute_launch_binds_spawn_roles_to_prepared_phase():
+    # Every P2 phase is AI-only; the ordinary MATCH run stays two-role. The
+    # assertion is on the actual injected spawn calls, not on a plan object.
+    for phase in ("P2_INITIAL", "P2_CLOSE", "P2_SILENT"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging_root = root / "staging"
+            result, spawned = _execute_launch_spawn_roles(
+                staging_root, root, f"role-{phase.lower()}", phase, require_certificate=False
+            )
+            assert result.ok, (phase, result)
+            assert [record.role for record in result.records] == ["ai"], (phase, result.records)
+            assert len(spawned) == 1, (phase, spawned)
+            assert spawned[0][0] == str(staging.role_paths(staging_root, "ai").exe()), phase
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        staging_root = root / "staging"
+        result, spawned = _execute_launch_spawn_roles(
+            staging_root, root, "role-match", "MATCH", require_certificate=True
+        )
+        assert result.ok, result
+        assert sorted(record.role for record in result.records) == ["ai", "human"]
+        assert len(spawned) == 2
+
+
+def test_execute_launch_forged_plan_and_phase_cannot_widen_roles():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        staging_root = root / "staging"
+        for role in ("human", "ai"):
+            _fake_role_tree(staging_root, role)
+        _persist_open_record(staging_root, "role-p2-forged", phase="P2_SILENT", nonce="n" * 32)
+        fresh = _fresh_plan(staging_root, ("human", "ai"), session_id="role-p2-forged")
+        spawned = []
+
+        def popen(command, cwd=None, env=None, close_fds=None, creationflags=0):
+            spawned.append(command)
+            return FakeProc(7000 + len(spawned))
+
+        forged_plan = {
+            "staging_root": str(staging_root),
+            "session_id": "role-p2-forged",
+            "roles": {"human": fresh["roles"]["human"], "ai": fresh["roles"]["ai"]},
+            "may_launch": True,
+        }
+        with patched(launch_practice, build_launch_plan=lambda **kwargs: fresh), patched(
+            staging, role_environment=lambda paths: _pinned_env(paths)
+        ):
+            forged_phase = launch_practice.execute_launch(
+                forged_plan,
+                enumerator=FakeEnumerator([]),
+                popen=popen,
+                open_session={
+                    "status": "open", "session_id": "role-p2-forged", "nonce": "n" * 32, "phase": "MATCH",
+                },
+                require_certificate=False,
+                job_factory=lambda: FakeJob(),
+                resume=lambda process: True,
+                create_time_reader=lambda process: 1000.0,
+            )
+            assert forged_phase["code"] == "open_session_phase_mismatch", forged_phase
+            assert spawned == []
+            result = launch_practice.execute_launch(
+                forged_plan,
+                enumerator=FakeEnumerator([]),
+                popen=popen,
+                open_session={
+                    "status": "open", "session_id": "role-p2-forged", "nonce": "n" * 32, "phase": "P2_SILENT",
+                },
+                require_certificate=False,
+                job_factory=lambda: FakeJob(),
+                resume=lambda process: True,
+                create_time_reader=lambda process: 1000.0,
+            )
+        assert result.ok, result
+        assert [record.role for record in result.records] == ["ai"], result.records
+
+
+class _FakeMeasurementListener:
+    def __init__(self, port, *, mode, **kwargs):
+        self.port = int(port)
+        self.mode = mode
+        self._state = {"peer_is_owned_ai": True}
+
+    def start(self):
+        return {"ok": True, "code": "listener_started"}
+
+    def arm(self, ai_pids):
+        return None
+
+    def finished(self):
+        return False
+
+    def finish(self, timeout=30.0):
+        return dict(self._state)
+
+    def log_fields(self, nonce, phase):
+        return {
+            "probe": "listener",
+            "schema": staging.LISTENER_SCHEMA,
+            "patch": staging.PATCH_ID,
+            "nonce": nonce,
+            "phase": phase,
+            "port": self.port,
+        }
+
+
+def _fake_prepare_session(staging_root, *, live, session_id, port=None, closed_check=None,
+                          phase="MATCH", backup_id=None, backup_verify=None, measurement_setup=None):
+    record = {
+        "schema": ic.OPEN_SESSION_SCHEMA,
+        "session_id": session_id,
+        "phase": phase,
+        "nonce": "n" * 32,
+        "port": int(port) if port is not None else None,
+        "certificate_id": None,
+        "backup_id": "a" * 64,
+        "live_roots": {},
+        "before": {"digest": None, "roots": {}},
+        "before_files": {},
+        "measurement_setup": dict(measurement_setup) if measurement_setup else None,
+        "spawn_time": None,
+        "pids": {},
+        "status": "open",
+    }
+    ic._write_open_record(staging_root, record)
+    return {
+        "ok": True, "code": "session_prepared", "session_id": session_id, "phase": phase,
+        "nonce": record["nonce"], "port": port, "record": record, "problems": [],
+    }
+
+
+def _refused_dead_port_probe(candidate):
+    return {
+        "listener_absent": {"ipv4": True, "ipv6": True},
+        "refused": True,
+        "timed_out": False,
+        "error": None,
+        "timings": [0.001, 0.001, 0.001],
+        "attempts": 3,
+        "refused_attempts": 3,
+        "timed_out_attempts": 0,
+    }
+
+
+def test_execute_measurement_phase_spawns_only_phase_roles():
+    cases = (
+        ("P2_INITIAL", [("ai",)]),
+        ("P2_CLOSE", [("ai",)]),
+        ("P2_SILENT", [("ai",)]),
+        ("FULL_P1", [("human", "ai")]),
+    )
+    for phase, expected in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging_root = root / "staging"
+            for role in ("human", "ai"):
+                _fake_role_tree(staging_root, role)
+            session_id = f"measure-{phase.lower()}"
+            fresh = _fresh_plan(staging_root, ("human", "ai"), session_id=session_id)
+            spawned = []
+
+            def popen(command, cwd=None, env=None, close_fds=None, creationflags=0):
+                spawned.append(command)
+                return FakeProc(7100 + len(spawned))
+
+            with patched(launch_practice, build_launch_plan=lambda **kwargs: fresh), \
+                 patched(ic, prepare_session=_fake_prepare_session), \
+                 patched(
+                     launch_practice,
+                     supervise_session=lambda session, **kwargs: {"ok": True, "code": "supervision_ended"},
+                 ), \
+                 patched(staging, role_environment=lambda paths: _pinned_env(paths)):
+                launch_practice.execute_measurement_phase(
+                    staging_root,
+                    phase=phase,
+                    live_install_root=root / "live",
+                    live_appdata_root=root / "appdata",
+                    steam_root=root / "Steam",
+                    port=8788,
+                    backup_root=root / "backups",
+                    session_id=session_id,
+                    popen=popen,
+                    enumerator=FakeEnumerator([]),
+                    job_factory=lambda: FakeJob(),
+                    resume=lambda process: True,
+                    create_time_reader=lambda process: 1000.0,
+                    dead_port_probe=_refused_dead_port_probe,
+                    listener_factory=_FakeMeasurementListener,
+                )
+            spawned_roles = sorted(
+                role
+                for role in ("human", "ai")
+                if any(command[0] == str(staging.role_paths(staging_root, role).exe()) for command in spawned)
+            )
+            assert spawned, phase
+            assert spawned_roles == sorted(expected[0]), (phase, spawned_roles)
+
+
 def test_cli_bootstrap_timeout_is_wired_to_the_measurement_run():
     with tempfile.TemporaryDirectory() as tmp:
         captured = {}

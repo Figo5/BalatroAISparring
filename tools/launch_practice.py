@@ -1341,6 +1341,48 @@ def write_session(
     return staging.write_json(target, payload)
 
 
+def expected_roles_for_phase(phase: str) -> tuple:
+    """The exact launch role set for a *reloaded* prepared session phase.
+
+    Derived only from the persisted phase, never a caller value: P1A is the
+    bootstrap role; the P2 phases are AI-only; P1B/FULL_P1/CRASH and the ordinary
+    MATCH practice run use both staged roles. An unknown phase yields no roles so
+    the caller fails closed instead of launching a default set.
+    """
+    if phase == "P1A":
+        return (getattr(staging, "BOOTSTRAP_ROLE", "bootstrap"),)
+    if phase == isolation_certificate.MATCH:
+        return tuple(staging.ROLES)
+    roles = isolation_certificate.PHASE_ROLES.get(phase)
+    if not roles:
+        return ()
+    return tuple(roles)
+
+
+def _restrict_plan_to_roles(plan: Mapping, roles: Sequence[str]) -> list:
+    """Reduce a fresh launch plan to exactly ``roles``; never skip a missing role.
+
+    The plan is re-derived from disk, so this only drops roles the phase must not
+    launch and refuses outright when an intended role is absent instead of silently
+    spawning a partial session.
+    """
+    plan_roles = plan.get("roles")
+    if not isinstance(plan_roles, Mapping):
+        return ["launch_roles_unavailable"]
+    restricted: dict = {}
+    problems: list = []
+    for role in roles:
+        spec = plan_roles.get(role)
+        if not isinstance(spec, Mapping):
+            problems.append(f"expected_role_missing:{role}")
+            continue
+        restricted[str(role)] = spec
+    if problems:
+        return problems
+    plan["roles"] = restricted
+    return []
+
+
 def build_launch_plan(
     staging_root=None,
     port: int = 8788,
@@ -1816,6 +1858,13 @@ def execute_launch(
     phase = record.get("phase")
     measure_crash = phase == "CRASH"
     measure_p2 = phase in getattr(isolation_certificate, "P2_PHASES", ())
+    # The exact role set comes only from the reloaded prepared phase (P2 is AI-only),
+    # never from the caller's plan or a declared session role list.
+    expected_roles = expected_roles_for_phase(phase)
+    if not expected_roles:
+        return LaunchSession(
+            session_id, staging_root, [], [], nonce, 0.0, code="prepared_phase_roles_unknown"
+        )
     fresh = build_launch_plan(
         staging_root=staging_root,
         port=port,
@@ -1828,6 +1877,12 @@ def execute_launch(
         extra_live_roots=extra_live_roots,
         require_certificate=require_certificate,
     )
+    role_problems = _restrict_plan_to_roles(fresh, expected_roles)
+    if role_problems:
+        return LaunchSession(
+            session_id, staging_root, [], [], nonce, 0.0,
+            code=role_problems[0], blocked=sorted(set(role_problems)),
+        )
     session = _spawn_verified(
         fresh,
         popen,
@@ -1934,6 +1989,7 @@ def execute_bootstrap(
             code=record_problems[0], blocked=sorted(set(record_problems)),
         )
     nonce = record.get("nonce")
+    expected_roles = expected_roles_for_phase("P1A")
     fresh = build_bootstrap_plan(
         staging_root=staging_root,
         live_install_root=live_install_root,
@@ -1944,6 +2000,12 @@ def execute_bootstrap(
         steam_root=steam_root,
         extra_live_roots=extra_live_roots,
     )
+    role_problems = _restrict_plan_to_roles(fresh, expected_roles)
+    if role_problems:
+        return LaunchSession(
+            session_id, staging_root, [], [], nonce, 0.0,
+            code=role_problems[0], blocked=sorted(set(role_problems)),
+        )
     session = _spawn_verified(
         fresh,
         popen,

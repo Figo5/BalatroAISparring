@@ -885,6 +885,44 @@ def _owned_pids(session) -> dict:
     return pids
 
 
+def _session_role_bindings(session) -> tuple:
+    """Exact per-role PID bindings from retained records *and* owned handles.
+
+    Returns ``(record_bindings, problems)`` where ``record_bindings`` maps each role
+    to the exact PIDs its retained process records name. Nothing is silently
+    omitted: a nameless/invalid record, more than one retained process for a role,
+    or any disagreement between the retained records and the owned handles is a
+    bounded problem, so a session whose actual processes differ from its declared
+    phase roles can never be recorded as a passed receipt.
+    """
+    problems: list = []
+    record_bindings: dict = {}
+    owned_bindings: dict = {}
+    for source, target in (
+        (getattr(session, "records", ()) or (), record_bindings),
+        (getattr(session, "owned", ()) or (), owned_bindings),
+    ):
+        for item in source:
+            role = getattr(item, "role", None)
+            pid = getattr(item, "pid", None)
+            if role is None or str(role).strip() == "":
+                problems.append("session_role_nameless_record")
+                continue
+            if not _is_int(pid) or int(pid) <= 0:
+                problems.append(f"session_role_invalid_pid:{role}")
+                continue
+            target.setdefault(str(role), []).append(int(pid))
+    if not record_bindings:
+        problems.append("session_roles_unbound")
+    for bindings in (record_bindings, owned_bindings):
+        for role, pids in bindings.items():
+            if len(pids) != 1:
+                problems.append(f"session_role_cardinality:{role}")
+    if record_bindings != owned_bindings:
+        problems.append("session_roles_inconsistent")
+    return record_bindings, problems
+
+
 def _owned_all_exited(session) -> bool:
     try:
         statuses = session.is_running()
@@ -1975,6 +2013,15 @@ def record_phase_receipt(
         problems.append("after_exit_proof_unexpected")
     if not _owned_all_exited(session):
         problems.append("owned_processes_running")
+    # Bind the phase's exact roles to the *actual* retained records/handles: a
+    # session that spawned an extra role (e.g. a human alongside AI in a P2 phase),
+    # a missing/foreign role, more than one process for a role, or retained records
+    # that disagree with the owned handles is refused here.
+    expected_roles = set(PHASE_ROLES.get(phase, ()))
+    record_bindings, role_problems = _session_role_bindings(session)
+    if set(record_bindings) != expected_roles:
+        role_problems.append("session_roles_mismatch")
+    problems.extend(role_problems)
     record = _receipt_open_record(staging_root, session_id)
     if record is None:
         problems.append("open_session_missing")
@@ -2194,6 +2241,46 @@ def _digest_roots(snapshot: Mapping) -> dict:
     }
 
 
+def _receipt_role_problems(phase: str, receipt: Mapping) -> list:
+    """Bind a receipt's *actual* owned roles/PIDs to the phase's exact role set.
+
+    A declared ``roles`` list is never sufficient on its own: the retained
+    records/PIDs recorded at receipt time must name exactly the phase's roles, so an
+    extra role (for example a human spawned during an AI-only P2 phase), a missing
+    role, a duplicate list entry, a duplicated PID or a foreign role can never be
+    certified - or re-validated from persisted evidence.
+    """
+    problems: list = []
+    expected = set(PHASE_ROLES.get(phase, ()))
+    if not expected:
+        return ["receipt_roles_mismatch"]
+    roles = receipt.get("roles")
+    if not isinstance(roles, list) or set(roles) != expected or len(roles) != len(set(roles)):
+        problems.append("receipt_roles_mismatch")
+    pids = receipt.get("pids")
+    if not isinstance(pids, Mapping) or not pids:
+        problems.append("receipt_roles_unbound")
+        return problems
+    if set(pids) != expected:
+        problems.append("receipt_owned_roles_mismatch")
+    seen: set = set()
+    for role, values in pids.items():
+        # Exactly one process per role is launched, including both-role normal
+        # phases: a role with several retained PIDs is never a valid receipt.
+        if not isinstance(values, list) or len(values) != 1:
+            problems.append(f"receipt_owned_pid_cardinality:{role}")
+            continue
+        value = values[0]
+        if not _is_int(value) or int(value) <= 0:
+            problems.append(f"receipt_owned_pid_invalid:{role}")
+            continue
+        if int(value) in seen:
+            problems.append("receipt_owned_pid_duplicate")
+            continue
+        seen.add(int(value))
+    return problems
+
+
 def _validate_receipt(staging_root, phase: str, receipt: Mapping) -> list:
     problems: list = []
     if receipt.get("schema") != PHASE_RECEIPT_SCHEMA:
@@ -2205,8 +2292,7 @@ def _validate_receipt(staging_root, phase: str, receipt: Mapping) -> list:
         problems.append("receipt_nonce_missing")
     if not _is_number(receipt.get("spawn_time")):
         problems.append("receipt_spawn_time_missing")
-    if not isinstance(receipt.get("roles"), list) or set(receipt["roles"]) != set(PHASE_ROLES.get(phase, ())):
-        problems.append("receipt_roles_mismatch")
+    problems.extend(_receipt_role_problems(phase, receipt))
     if receipt.get("changed_roots"):
         problems.append("receipt_live_diff")
     if receipt.get("before", {}).get("digest") != receipt.get("after", {}).get("digest"):
