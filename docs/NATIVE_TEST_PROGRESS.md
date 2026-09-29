@@ -68,3 +68,21 @@ Correction: SILENT now refuses any receive error at/before the exhausted keepali
 Sampler note: the independent sampler for this rerun recorded no rows because the previous run's `.stop` file had not been removed (operator error). Substitute independent evidence: the human staged role's newest Lovely log is 19:28 local (the rejected pre-fix P2_INITIAL); since the fix only AI-role logs were created, one per P2 run (23:18, 23:20, 23:23, 23:51 local). Samplers for P2_INITIAL and P2_CLOSE each saw exactly one staged AI `Balatro.exe`.
 
 **All seven required phases now hold valid receipts** under the current validator: P1A `f6360118…`, P1B `f24f04b1…`, FULL_P1 `822088ab…`, CRASH `ccdc71e4…`, P2_INITIAL `f8a21e3f…`, P2_CLOSE `3e782e87…`, P2_SILENT `6cbec6bc…`. No lockout, no open session. Independent snapshots before the P2 reruns and after the final SILENT run: live AppData (982 files incl. Mods and saves) and install (15 files) byte-identical.
+
+## First real staged matches and re-certification (September 29)
+
+Certificate `fcee4a95…` was issued from the seven receipts above. Three real staged MATCH runs then went through the production practice host (`work/dev_match.py`; the only substitution is the live-exit trigger, which uses a PID confirmed absent because the companion is not yet installed live). Each run passed every gate, took a fresh backup, opened the certificate record, started the pinned local server, launched and attested both staged roles, then aborted safely with `practice_prestart_timeout`. Both clients left through ordinary `leaveLobby`, and each session record closed with a measured `passed` verdict (zero changed live roots).
+
+Root cause (service op trace + human Lovely log): the companion send guard treated Multiplayer's initial `MP.LOBBY.is_host = false` as "not host" and blocked the human's own first `createLobby`, so no lobby ever existed. Fixed in `e1e8a16` (Claude review `CLAUDE_MP_DRIVER_HOST_GUARD_REVIEW.md`). Because this changes staged companion bytes, the old staging tree and package were archived (`work/archive-staging-e1e8a16`, `work/archive-package-e1e8a16`), and the full build was repeated fresh: backup, bootstrap, role staging, package, placement, all seven phases with a fresh backup before each.
+
+| Phase (build `e1e8a16`) | Receipt | Processes |
+|---|---|---|
+| P1A | `9de06ff15fde0897dcdb45f2c30f9fe2dc8dbd4a77b6ef13ec2e4debdf0b2650` | bootstrap only |
+| P1B | `bc3d4ad10f58a7f831576ca8a227ba8669326c524bc021427b9d70eacd3ae909` | human + ai |
+| FULL_P1 | `0c4edc94f85e5e50c8f4e4be05166546fb3b82f1e8735b07cfe62d6b455db5d9` | human 21372 + ai 20412 |
+| CRASH | `037063dbb312566f02c213e75a1753e1f86a871a0bf41278448712362d135a95` | human 18724 + ai 2468 |
+| P2_INITIAL | `06a2df042d428179e4827f104515db6807128bd2b6c7e8cd064d3a3f6482dae1` | ai 16320 only |
+| P2_CLOSE | `666640f309fef41cba485767ed13d48cdff0ac8119d4240269445bbdceec0382` | ai 13468 only |
+| P2_SILENT | `d470d2a88921ca90ec47c31e66ea08cbba2345b92b8a918b8f0cb1e42cd070ed` | ai 10584 only |
+
+All receipts recorded with zero changed live roots. The run was interrupted once after P1B when the previous orchestrator session ended; no open record or lockout remained, P1A/P1B revalidated, and it resumed from FULL_P1. The independent sampler (`work/procs-recert-resume.csv`) saw only staged `Balatro.exe` images, one AI process per P2 phase. **Certificate `ab7e1fcc1db3ef41cfa47cd1d43b0728da4db096072605a6c9923f0783c2190d`: complete; check passes.**
