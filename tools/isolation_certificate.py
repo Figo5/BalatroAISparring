@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -1368,6 +1369,31 @@ def _silent_expiry_eof_ok(derived: Mapping, cycle: Mapping, listener: Mapping) -
     return True
 
 
+def _silent_receive_errors_after_cycle(derived: Mapping, cycle: Mapping) -> bool:
+    """SILENT accepts only the pinned source's post-exhaustion receive error.
+
+    After the keepalive-path ``tryReconnect()`` fails, the main loop sets
+    ``hasGivenUp``, but the packet coroutine ``networkPacketQueue`` was suspended
+    inside its ``for _ = 1, packetsPerCycle`` loop (``hasGivenUp`` is only checked at
+    the top of the ``while``). On the next tick it resumes that loop and calls
+    ``Networking.Client:receive()`` once more on the replacement client whose connect
+    just failed, producing the expected ``Socket is not connected`` error (whenever the
+    coroutine was paused mid-loop; a run without it is equally valid). Every
+    recorded receive error must therefore fall *strictly after* the single exhausted
+    keepalive cycle's ``end_time``; a missing/non-numeric time, or a time at/before
+    the cycle end, still refuses coverage.
+    """
+    end = cycle.get("end_time")
+    errors = derived.get("receive_errors") or []
+    if end is None:
+        return not errors
+    for item in errors:
+        timestamp = _as_float(item.get("time")) if isinstance(item, Mapping) else None
+        if timestamp is None or not math.isfinite(timestamp) or timestamp <= float(end):
+            return False
+    return True
+
+
 def _p2_phase_coverage(phase: str, derived: Mapping, listener: Mapping) -> dict:
     """The exact section 4 coverage definitions, one per P2 phase."""
     listener = _listener_view(listener)
@@ -1438,7 +1464,7 @@ def _p2_phase_coverage(phase: str, derived: Mapping, listener: Mapping) -> dict:
             and cycle.get("cause") == "keepalive"
             and derived.get("schema_ok")
             and str(derived.get("first_result")).strip() == "1"
-            and not derived.get("receive_errors")
+            and _silent_receive_errors_after_cycle(derived, cycle)
             and spacing_ok
             and _listener_held_through(listener, cycle)
             and _silent_expiry_eof_ok(derived, cycle, listener)

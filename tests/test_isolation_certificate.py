@@ -1965,6 +1965,105 @@ def test_p2_silent_requires_a_legitimate_expiry_eof_and_hold_through_cycle():
     assert "keepalive" not in missing["covered"], missing
 
 
+def _silent_derived_with_errors(errors):
+    derived = _silent_derived()
+    derived["receive_errors"] = errors
+    return derived
+
+
+def _silent_cycle_end():
+    return _silent_derived()["cycles"][0]["end_time"]
+
+
+def test_p2_silent_accepts_post_exhaustion_receive_error():
+    # Pinned original source: after the keepalive-path tryReconnect() fails the main
+    # loop sets hasGivenUp, but the suspended packet coroutine resumes its per-cycle
+    # for-loop and calls Client:receive() once more on the replacement client without
+    # re-checking hasGivenUp. That expected post-cycle "Socket is not connected"
+    # error is original behaviour and must not refuse coverage.
+    derived = _silent_derived_with_errors(
+        [{"value": "Socket is not connected", "time": _silent_cycle_end() + 0.052}]
+    )
+    coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+    assert coverage["covered"] == ["keepalive"], coverage
+    assert coverage["pending"] == [], coverage
+
+
+def test_p2_silent_rejects_receive_error_at_cycle_end():
+    derived = _silent_derived_with_errors([{"value": "x", "time": _silent_cycle_end()}])
+    coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+    assert "keepalive" not in coverage["covered"], coverage
+
+
+def test_p2_silent_rejects_receive_error_during_cycle():
+    derived = _silent_derived_with_errors([{"value": "x", "time": 150.0}])
+    coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+    assert "keepalive" not in coverage["covered"], coverage
+
+
+def test_p2_silent_rejects_receive_error_before_cycle():
+    # 145.0 is the listener's EOF / the cycle's start time: it is not post-exhaustion.
+    derived = _silent_derived_with_errors([{"value": "x", "time": 145.0}])
+    coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+    assert "keepalive" not in coverage["covered"], coverage
+
+
+def test_p2_silent_rejects_receive_error_without_time():
+    derived = _silent_derived_with_errors([{"value": "x", "time": None}])
+    coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+    assert "keepalive" not in coverage["covered"], coverage
+
+
+def test_p2_silent_rejects_mixed_pre_and_post_cycle_receive_errors():
+    # One legitimate post-exhaustion error never launders an earlier one.
+    end = _silent_cycle_end()
+    for errors in (
+        [{"value": "closed", "time": 150.0}, {"value": "Socket is not connected", "time": end + 0.05}],
+        [{"value": "Socket is not connected", "time": end + 0.05}, {"value": "closed", "time": 150.0}],
+    ):
+        derived = _silent_derived_with_errors(errors)
+        coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+        assert "keepalive" not in coverage["covered"], (errors, coverage)
+
+
+def test_p2_silent_rejects_non_finite_or_non_numeric_receive_error_time():
+    # NaN compares False against the cycle end, so it must be refused explicitly.
+    for bad in ("nan", float("nan"), "inf", float("inf"), "not-a-time", "", {"t": 1}):
+        derived = _silent_derived_with_errors([{"value": "x", "time": bad}])
+        coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+        assert "keepalive" not in coverage["covered"], (bad, coverage)
+    derived = _silent_derived_with_errors(["not-a-mapping"])
+    coverage = ic._p2_phase_coverage("P2_SILENT", derived, _silent_listener())
+    assert "keepalive" not in coverage["covered"], coverage
+
+
+def test_p2_silent_real_refused_artifact_covers_keepalive():
+    refused = REPO / "work" / "native-p2-silent-refused"
+    p2_path = refused / "aisparring_probe_p2.txt"
+    listener_path = refused / "aisparring_probe_listener.txt"
+    if not p2_path.is_file() or not listener_path.is_file():
+        print("skip: work/native-p2-silent-refused artifacts absent")
+        return
+    fields = staging.parse_probe(p2_path.read_text(encoding="utf-8"))
+    listener_fields = staging.parse_probe(listener_path.read_text(encoding="utf-8"))
+    derived = ic._p2_derive(fields, int(str(fields.get("port")).strip()))
+    coverage = ic._p2_phase_coverage("P2_SILENT", derived, ic._listener_view(listener_fields))
+    assert coverage["covered"] == ["keepalive"], coverage
+    assert coverage["pending"] == [], coverage
+
+    # The record-time path and the copied-artifact re-derivation path share this same
+    # classifier; re-deriving from a byte-for-byte copy must agree exactly.
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / "probe-p2-copy.txt"
+        shutil.copyfile(p2_path, copy)
+        recopied = ic._p2_derive(
+            staging.parse_probe(copy.read_text(encoding="utf-8")),
+            int(str(fields.get("port")).strip()),
+        )
+        again = ic._p2_phase_coverage("P2_SILENT", recopied, ic._listener_view(listener_fields))
+        assert again["covered"] == coverage["covered"], again
+
+
 def _p2_initial_refusal(fixture, session_id, *, after_exit_proof, artifact=None):
     with synthetic_tools(fixture["root"]):
         for phase in ("P1A", "P1B", "FULL_P1"):
