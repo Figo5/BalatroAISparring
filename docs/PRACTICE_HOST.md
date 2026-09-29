@@ -183,7 +183,12 @@ checker is injectable (`runtime_checker=`) so fixtures never depend on `lupa`.
    **both** roles.
 6. **Mark attested, then publish.** Only after both probes pass does the host call
    the trusted `service.mark_attested(expected_config_digest)` and then the
-   certificate's atomic `write_launcher_attestation` (§6.4).
+   certificate's atomic `write_launcher_attestation` (§6.4), and immediately after
+   the files are published it calls the trusted host-only
+   `service.start_prestart_window()` so the bounded pre-start budget starts when the
+   companions can actually read the attestation (a failure to call it is a no-op that
+   leaves the earlier `mark_attested` clock in force, so the timeout is never
+   bypassed).
 7. **Supervise**, retain the human results window until it exits, then retire the
    server/service and record the measured per-session live diff (§8, §9).
 

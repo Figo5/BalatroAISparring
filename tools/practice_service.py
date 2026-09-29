@@ -911,6 +911,7 @@ class _SessionState:
     aborted: bool = False
     attested: bool = False
     attested_at: Optional[float] = None
+    prestart_started_at: Optional[float] = None
     last_error: Optional[str] = None
     last_decision_sequence: Optional[int] = None
     last_seen: dict = field(default_factory=dict)
@@ -1114,6 +1115,37 @@ class PracticeService:
                 self._state.attested_at = self._clock()
         return True
 
+    def start_prestart_window(self) -> bool:
+        """Trusted host-only: start the pre-start clock once roles can act.
+
+        The reviewed order is unchanged (M8): the host attests the service
+        first, then publishes the launcher-attestation files the companions
+        poll. Both roles' probes can finish well before that (slow) publication,
+        so the bounded pre-start budget is measured from publication rather than
+        from ``mark_attested``. Called by the supervisor immediately after a
+        successful attestation write.
+
+        A session that is not attested, or already started/ended/aborted, is
+        left untouched and ``False`` is returned, so this can never be used to
+        bypass the deadline: if it is never called the watchdog keeps using the
+        earlier ``attested_at`` start. Never a wire op (not in ``OPS``), and the
+        first call wins so a repeated call is an idempotent no-op.
+        """
+        if self._closed:
+            raise PracticeError(CODE_SERVICE_CLOSED)
+        with self._lock:
+            state = self._state
+            if (
+                not state.attested
+                or state.started
+                or state.ended
+                or state.aborted
+                or state.prestart_started_at is not None
+            ):
+                return False
+            state.prestart_started_at = self._clock()
+            return True
+
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> int:
@@ -1213,6 +1245,13 @@ class PracticeService:
         self._watchdog_stop = None
         self._watchdog_thread = None
 
+    @staticmethod
+    def _prestart_start(state: _SessionState) -> Optional[float]:
+        """Pre-start clock: the publication time when set, else the attestation time."""
+        if state.prestart_started_at is not None:
+            return state.prestart_started_at
+        return state.attested_at
+
     def _watchdog_loop(self) -> None:
         event = self._watchdog_stop
         while event is not None and not event.wait(self.watchdog_interval):
@@ -1243,8 +1282,8 @@ class PracticeService:
                     and not state.started
                     and not state.ended
                     and not state.aborted
-                    and state.attested_at is not None
-                    and now - state.attested_at > self.prestart_timeout
+                    and self._prestart_start(state) is not None
+                    and now - self._prestart_start(state) > self.prestart_timeout
                 ):
                     prestart_expired = True
             if summary is not None:

@@ -265,7 +265,10 @@ receipt.
 
 Because the multi-hour match timeout only makes sense after `start`, an attested
 but never-started session is bounded by `prestart_timeout` (default 90 s,
-disabled when `<= 0`), measured from `mark_attested`. Expiry aborts with
+disabled when `<= 0`), measured from the trusted host-only
+`start_prestart_window()` call that the supervisor makes once the attestation
+files are published (falling back to `mark_attested` if it is never called, so
+the deadline is never bypassed). Expiry aborts with
 `practice_prestart_timeout` and writes the terminal summary. The deadline is
 loopback-only and independent of the match timeout.
 

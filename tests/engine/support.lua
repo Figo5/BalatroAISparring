@@ -91,6 +91,11 @@ function Support.card(opts)
 		set = opts.set or "Default",
 		consumeable = opts.consumeable or false,
 		eternal = opts.eternal,
+		-- Real `Card:set_ability` always stores these (card.lua:398-399), so the
+		-- fixture mirrors the plain-numeric ability fields the buy-space
+		-- predicate reads.
+		card_limit = opts.card_limit or 0,
+		extra_slots_used = opts.extra_slots_used or 0,
 	}
 	if opts.consumeable_data ~= nil then
 		ability.consumeable = opts.consumeable_data
@@ -125,16 +130,38 @@ function Support.card(opts)
 	return setmetatable(card, { __index = Card })
 end
 
+-- A `CardArea.config` clone of the real engine's metatable (cardarea.lua:13-28):
+-- `card_limit` is served only by `__index` over `card_limits`, so a rawget reads
+-- nil and a naive `card_limit =` write is intercepted by `__newindex`.
+local function area_config(opts)
+	local config = setmetatable({ card_limits = {} }, {
+		__index = function(t, key)
+			if key == "card_limit" then
+				return (t.card_limits.total_slots or 0) - (t.card_limits.extra_slots_used or 0)
+			end
+		end,
+		__newindex = function(t, key, value)
+			if key == "card_limit" then
+				if not t.card_limits.base then rawset(t.card_limits, "base", value) end
+				if not t.card_limits.total_slots then rawset(t.card_limits, "total_slots", value) end
+				rawset(t.card_limits, "mod", value - t.card_limits.base - (t.card_limits.extra_slots or 0) + (t.card_limits.extra_slots_used or 0))
+			else
+				rawset(t, key, value)
+			end
+		end,
+	})
+	config.highlighted_limit = 5
+	config.card_limit = opts.limit or 5
+	config.type = opts.type or "hand"
+	return config
+end
+
 local function area(opts)
 	opts = opts or {}
 	local instance = {
 		cards = opts.cards or {},
 		highlighted = {},
-		config = {
-			card_limit = opts.limit or 5,
-			highlighted_limit = 5,
-			type = opts.type or "hand",
-		},
+		config = area_config(opts),
 	}
 	function instance:add_to_highlighted(card)
 		self.highlighted[#self.highlighted + 1] = card

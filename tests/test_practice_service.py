@@ -94,6 +94,20 @@ class BlockingRunner:
         return dict(self.response)
 
 
+class FakeClock:
+    """Injectable monotonic clock for the bounded pre-start window tests."""
+
+    def __init__(self, start=0.0):
+        self.t = float(start)
+
+    def __call__(self):
+        return self.t
+
+    def set(self, value):
+        self.t = float(value)
+        return self.t
+
+
 def make_config(tmp, **overrides):
     values = dict(
         session_id="sess-1",
@@ -806,6 +820,69 @@ def test_prestart_deadline_after_attestation():
             assert service.terminal_phase == ps.TERMINAL_CLOSED
         finally:
             service.stop()
+
+
+def test_prestart_window_measured_from_publication():
+    """The pre-start budget starts when the attestation files are published.
+
+    Both roles' probes can finish well before the (slow) attestation writer
+    publishes the files the companions poll, so measuring from ``mark_attested``
+    would spend the budget before either role can act.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        clock = FakeClock(1000.0)
+        service = make_service(tmp, prestart_timeout=90.0, role_timeout=0.0, watchdog_interval=0.02, clock=clock)
+        session = Session(service)
+        service.mark_attested(CONFIG_DIGEST)  # attested at t0
+        service.start()
+        try:
+            clock.set(1055.0)  # published 55 s later
+            assert service.start_prestart_window() is True
+            # t0 + 100 is past attested_at + 90, but only publication + 45.
+            clock.set(1100.0)
+            time.sleep(0.1)
+            status = session.send("human", "status", {})
+            assert status.get("aborted") is not True, status
+            # Still inside the window one second before publication + 90.
+            clock.set(1144.0)
+            time.sleep(0.1)
+            assert session.send("human", "status", {}).get("aborted") is not True
+            # Expires only after publication + 90.
+            clock.set(1146.0)
+            deadline = time.time() + 3.0
+            status = None
+            while time.time() < deadline:
+                time.sleep(0.05)
+                status = session.send("human", "status", {})
+                if status.get("aborted"):
+                    break
+            assert status is not None and status.get("aborted") is True, status
+            assert status.get("error") == ps.CODE_PRESTART_TIMEOUT
+        finally:
+            service.stop()
+
+
+def test_prestart_window_is_noop_before_attestation_and_after_start_or_abort():
+    with tempfile.TemporaryDirectory() as tmp:
+        clock = FakeClock(500.0)
+        service = make_service(tmp, prestart_timeout=90.0, role_timeout=0.0, watchdog_interval=0.02, clock=clock)
+        session = Session(service)
+        # Before the trusted attestation the window cannot be started; a failed
+        # call leaves the earlier (attested_at) clock as the only bound.
+        assert service.start_prestart_window() is False
+        assert service.start_prestart_window() is False
+        service.mark_attested(CONFIG_DIGEST)
+        assert service.start_prestart_window() is True
+        session.handshake()
+        assert service.started is True
+        assert service.start_prestart_window() is False
+
+        aborted = make_service(
+            tmp, prestart_timeout=90.0, role_timeout=0.0, watchdog_interval=0.02, clock=FakeClock(500.0)
+        )
+        aborted.mark_attested(CONFIG_DIGEST)
+        aborted.abort(ps.CODE_ABORTED)
+        assert aborted.start_prestart_window() is False
 
 
 def test_ai_end_receipt_alone_does_not_terminate():

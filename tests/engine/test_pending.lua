@@ -143,6 +143,12 @@ return function(ctx)
 			blind_key = "bl_small",
 			blind_on_deck = "Small",
 		})
+		engine.G.blind_select_opts = { small = { get_UIE_by_ID = function(_, id)
+			if id == "select_blind_button" then
+				return { config = { button = "select_blind", ref_table = engine.G.P_BLINDS.bl_small }, UIBox = {} }
+			end
+			return nil
+		end } }
 		engine.G.FUNCS.select_blind = function()
 			engine.G.STATE = STATES.SELECTING_HAND
 		end

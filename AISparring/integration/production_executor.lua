@@ -63,6 +63,13 @@ local TOKEN_PATTERN = "^[0-9A-Za-z_%.-]+$"
 local REF_PATTERN = "^([0-9A-Za-z_%-]+):([0-9]+)$"
 local MAX_SELECTION = 64
 
+-- Bounded scan ceiling for the real UIBox registry (`G.I.UIBOX`: the dense
+-- array of currently alive UIBoxes; boxes register at engine/ui.lua:92-97 and
+-- unregister in UIBox:remove). Mods (Handy, JokerDisplay, Multiplayer) add
+-- boxes, and dense_count refuses outright above the ceiling, so keep it well
+-- above any realistic count; the scan runs only on the round-eval screen.
+local MAX_SCAN = 4096
+
 -- Bounded stall window for a committed action whose anchored visible effect has
 -- not appeared yet (e.g. vanilla `buy_from_shop` queues the remove/payment behind
 -- a ~0.1s UI event, and a consumable use may run a longer card animation before
@@ -141,6 +148,56 @@ local function rpath(obj, a, b, c, d, e)
 		value = rget(value, e)
 	end
 	return value
+end
+
+-- Protected NORMAL indexing. A rawget only sees raw fields, but real engine
+-- values are frequently computed by a metatable (`CardArea.config.card_limit`
+-- is served by `__index` over `card_limits`, cardarea.lua:13-28) or inherited
+-- from a class table (UIBox methods). `rget` would read nil for those.
+local function nget(obj, key)
+	if type(obj) ~= "table" or key == nil then
+		return nil
+	end
+	local ok, value = pcall(function()
+		return obj[key]
+	end)
+	if not ok then
+		return nil
+	end
+	return value
+end
+
+-- Real `CardArea` card limit, read through the config metatable.
+local function area_limit(area)
+	local config = nget(area, "config")
+	local limit = nget(config, "card_limit")
+	if is_nat(limit) then
+		return limit
+	end
+	return nil
+end
+
+-- Room for one more card in `area` for the SPECIFIC `card`, mirroring the real
+-- `G.FUNCS.check_for_buy_space` predicate (button_callbacks.lua:2444-2453,
+-- which also drives SMODS `can_select_card`): `#area.cards + 1 +
+-- card.ability.extra_slots_used <= area.config.card_limit +
+-- card.ability.card_limit`. The UI callback is never called (it shows an
+-- alert); only its raw arithmetic is reproduced. Returns nil when the card's
+-- ability table is unavailable/not numeric so the caller can fall back.
+local function buy_room(count, limit, card)
+	local ability = rget(card, "ability")
+	if type(ability) ~= "table" then
+		return nil
+	end
+	local extra = nget(ability, "extra_slots_used")
+	local bonus = nget(ability, "card_limit")
+	if extra ~= nil and not is_nat(extra) then
+		return nil
+	end
+	if bonus ~= nil and not is_nat(bonus) then
+		return nil
+	end
+	return count + (1 + (extra or 0)) <= limit + (bonus or 0)
 end
 
 local function token_of(value, limit)
@@ -237,6 +294,83 @@ local function pvp_blind_on_deck(G)
 	return pvp_choice ~= nil and pvp_choice ~= false
 end
 
+-- The real on-deck blind choice UIBox (`G.blind_select_opts[lower(blind_on_deck)]`),
+-- shared by the `skip_blind` and `select_blind`/PvP-ready lookups.
+local function on_deck_blind_box(G)
+	local game = rget(G, "GAME")
+	if type(game) ~= "table" then
+		return nil
+	end
+	local on_deck = rget(game, "blind_on_deck")
+	if type(on_deck) ~= "string" then
+		return nil
+	end
+	local box = rget(rget(G, "blind_select_opts"), string.lower(on_deck))
+	if type(box) ~= "table" then
+		return nil
+	end
+	return box
+end
+
+-- The real `select_blind_button` element of an on-deck blind choice
+-- (mp/ui/game/blind_choice.lua:210-228). Its `UIBox` is the choice box and its
+-- `config.ref_table` is exactly the on-deck blind config
+-- (`G.P_BLINDS[round_resets.blind_choices[on_deck]]`), which is what
+-- `resolve_action_blind` returns.
+local function select_blind_button_of(box)
+	if type(box) ~= "table" then
+		return nil
+	end
+	-- Protected NORMAL indexing: real UIBox objects inherit `get_UIE_by_ID`
+	-- through their class metatable, so a rawget would never find it.
+	local ok_get, lookup = pcall(function()
+		return box.get_UIE_by_ID
+	end)
+	if not ok_get or type(lookup) ~= "function" then
+		return nil
+	end
+	local ok, ui = pcall(lookup, box, "select_blind_button")
+	if ok and type(ui) == "table" then
+		return ui
+	end
+	return nil
+end
+
+-- The real cash-out button. It is NOT part of `G.round_eval`'s element tree:
+-- the tally UI creates it as its own UIBox with `config.major = G.round_eval`
+-- (functions/common_events.lua:1430-1443), and every UIBox registers itself in
+-- the `G.I.UIBOX` registry (engine/ui.lua:92-97), while `UIBox:get_UIE_by_ID`
+-- only searches its own tree (ui.lua:101-116) and `Moveable:set_role` stores
+-- `role.major` (engine/moveable.lua:478-488). So
+-- `G.round_eval:get_UIE_by_ID('cash_out_button')` is always nil on the real
+-- engine; scan the bounded registry for the box bound to the CURRENT
+-- round_eval and read the real element through its (metatable) method. A box
+-- belonging to an older/different round_eval is ignored.
+local function cash_out_button(G, round_eval)
+	local registry = rget(rget(G, "I"), "UIBOX")
+	local count = dense_count(registry, MAX_SCAN)
+	if count == nil then
+		return nil
+	end
+	for i = 1, count do
+		local box = rawget(registry, i)
+		if type(box) == "table" then
+			local role = nget(box, "role")
+			if type(role) == "table" and rawequal(nget(role, "major"), round_eval) then
+				local lookup = nget(box, "get_UIE_by_ID")
+				if type(lookup) == "function" then
+					local ok, ui = pcall(lookup, box, "cash_out_button")
+					if ok and type(ui) == "table"
+						and nget(nget(ui, "config"), "button") == "cash_out" then
+						return ui
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
 local function resolve_ref(G, value)
 	local zone, ordinal = parse_ref(value)
 	if zone == nil then
@@ -300,13 +434,21 @@ local function is_negative(card)
 	return type(edition) == "table" and rget(edition, "type") == "negative"
 end
 
-local function slot_room(G, area_key, negative)
+local function slot_room(G, area_key, card, negative)
 	local area = rget(G, area_key)
 	local count = dense_count(rget(area, "cards"), 256)
-	local limit = rpath(area, "config", "card_limit")
-	if count == nil or not is_nat(limit) then
+	local limit = area_limit(area)
+	if count == nil or limit == nil then
 		return nil
 	end
+	if type(card) == "table" then
+		local room = buy_room(count, limit, card)
+		if room ~= nil then
+			return room
+		end
+	end
+	-- Fallback when the card's ability data is unavailable: keep the previous
+	-- negative-edition rule (a negative card fits one over the limit).
 	if negative then
 		return count < limit + 1
 	end
@@ -431,8 +573,8 @@ local function check_use_ok(G, card)
 	end
 	local jokers = rget(G, "jokers")
 	local jcount = dense_count(rget(jokers, "cards"), 256)
-	local jlimit = rpath(jokers, "config", "card_limit")
-	return jcount ~= nil and is_nat(jlimit) and jcount < jlimit
+	local jlimit = area_limit(jokers)
+	return jcount ~= nil and jlimit ~= nil and jcount < jlimit
 end
 
 -- Engine areas a `G.FUNCS.use_card` commit removes its target from synchronously
@@ -588,36 +730,21 @@ function ProductionExecutor.factory(ports)
 				return value
 			end
 		end
-		local game = rget(G, "GAME")
 		if name == "cash_out" then
 			-- `G.FUNCS.cash_out` clears its own `e.config.button`
-			-- (button_callbacks.lua:2915) and reads the round tally
-			-- (`G.GAME.current_round.dollars`), so the real `G.round_eval`
-			-- cash-out button element must exist before committing; nothing is
-			-- fabricated and cash-out waits for the tally UI.
+			-- (button_callbacks.lua:2986) and reads the round tally
+			-- (`G.GAME.current_round.dollars`), so the real cash-out button
+			-- element must exist before committing; nothing is fabricated and
+			-- cash-out waits for the tally UI. The element lives in a separate
+			-- registered UIBox, never in `G.round_eval`'s tree.
 			local round_eval = rget(G, "round_eval")
 			if type(round_eval) ~= "table" then
 				return nil
 			end
-			local lookup = round_eval.get_UIE_by_ID
-			if type(lookup) ~= "function" then
-				return nil
-			end
-			local ok, ui = pcall(lookup, round_eval, "cash_out_button")
-			if ok and type(ui) == "table" then
-				return ui
-			end
-			return nil
+			return cash_out_button(G, round_eval)
 		elseif name == "skip_blind" or name == "pvp_ready" then
-			if type(game) ~= "table" then
-				return nil
-			end
-			local on_deck = rget(game, "blind_on_deck")
-			if type(on_deck) ~= "string" then
-				return nil
-			end
-			local box = rget(rget(G, "blind_select_opts"), string.lower(on_deck))
-			if type(box) ~= "table" then
+			local box = on_deck_blind_box(G)
+			if box == nil then
 				return nil
 			end
 			if name == "skip_blind" then
@@ -629,15 +756,7 @@ function ProductionExecutor.factory(ports)
 			-- `select_blind_button`'s `config.ref_table` is the blind config
 			-- (mp/ui/game/blind_choice.lua:210-228); `mp_toggle_ready` takes the
 			-- real element.
-			local lookup = box.get_UIE_by_ID
-			if type(lookup) ~= "function" then
-				return nil
-			end
-			local ok, ui = pcall(lookup, box, "select_blind_button")
-			if ok and type(ui) == "table" then
-				return ui
-			end
-			return nil
+			return select_blind_button_of(box)
 		end
 		return nil
 	end
@@ -933,11 +1052,11 @@ function ProductionExecutor.factory(ports)
 			return nil, CODE.ILLEGAL
 		end
 		if kind == "joker" then
-			if slot_room(G, "jokers", is_negative(card)) ~= true then
+			if slot_room(G, "jokers", card, is_negative(card)) ~= true then
 				return nil, CODE.ILLEGAL
 			end
 		elseif kind == "consumable" then
-			if slot_room(G, "consumeables", is_negative(card)) ~= true then
+			if slot_room(G, "consumeables", card, is_negative(card)) ~= true then
 				return nil, CODE.ILLEGAL
 			end
 		end
@@ -1008,10 +1127,13 @@ function ProductionExecutor.factory(ports)
 		end
 		local kind = item_kind(card)
 		if kind == "joker" then
-			-- L3: vanilla `can_select_card` (button_callbacks.lua:2113) accepts a
-			-- negative-edition joker regardless of free joker slots; only a
-			-- non-negative joker needs slot room.
-			if not is_negative(card) and slot_room(G, "jokers", false) ~= true then
+			-- L3: this build's `can_select_card` (button_callbacks.lua:2135-2145)
+			-- allows a joker only when `#G.jokers.cards < card_limit +
+			-- (ability.card_limit - ability.extra_slots_used)`, i.e. exactly
+			-- `buy_room`; a negative joker (ability.card_limit = 1) therefore fits
+			-- one over the limit, not unconditionally. The negative-edition rule
+			-- is only the fallback when ability data is unreadable.
+			if slot_room(G, "jokers", card, is_negative(card)) ~= true then
 				return nil, CODE.ILLEGAL
 			end
 		elseif kind == "consumable" then
@@ -1036,7 +1158,7 @@ function ProductionExecutor.factory(ports)
 		end
 		local hand = rget(G, "hand")
 		local hand_first = rget(rget(hand, "cards"), 1)
-		local hand_limit = rpath(hand, "config", "card_limit")
+		local hand_limit = area_limit(hand)
 		-- H1/A: mirror `G.FUNCS.can_skip_booster` as patched by SMODS
 		-- (smods-booster.toml:124-126), but the real UI always requires a pack
 		-- card FIRST (`G.pack_cards.cards[1]`, button_callbacks.lua:2133). After
@@ -1432,7 +1554,22 @@ function ProductionExecutor.factory(ports)
 			if blind == nil then
 				return nil, CODE.ILLEGAL
 			end
-			return invoke("select_blind", { config = { ref_table = blind } })
+			-- The real on-deck `select_blind_button` retains the choice UIBox the
+			-- deferred callback reads (`e.UIBox:get_UIE_by_ID('tag_container')`,
+			-- button_callbacks.lua:2596) and its `config.ref_table` is the exact
+			-- blind config. A fabricated `{ config = { ref_table = blind } }` has
+			-- no UIBox, and `invoke`'s pcall cannot catch the deferred-event
+			-- error, so the game would crash; refuse instead of invoking.
+			local button = select_blind_button_of(on_deck_blind_box(G))
+			if button == nil then
+				return nil, CODE.ELEMENT_MISSING
+			end
+			local config = rget(button, "config")
+			if type(config) ~= "table" or rget(config, "button") ~= "select_blind"
+				or rget(config, "ref_table") ~= blind then
+				return nil, CODE.ELEMENT_MISSING
+			end
+			return invoke("select_blind", button)
 		elseif t == "SKIP_BLIND" then
 			local e = resolve_element("skip_blind")
 			if type(e) ~= "table" then
@@ -1617,9 +1754,9 @@ function ProductionExecutor.factory(ports)
 				-- C2: resolve the real cash-out element from G (the injected
 				-- port is preferred when it yields one, but production wires a
 				-- nil-returning default). `G.FUNCS.cash_out` only writes
-				-- `e.config.button`, so the source-backed element is the
-				-- `round_eval` cash-out button (or a faithful minimal element).
-				-- Build the anchor from the pre-callback phase first.
+				-- `e.config.button`, so the source-backed element is the real
+				-- registry-bound tally button. Build the anchor from the
+				-- pre-callback phase first.
 				local e = resolve_element("cash_out")
 				if type(e) ~= "table" then
 					return nil, CODE.ELEMENT_MISSING

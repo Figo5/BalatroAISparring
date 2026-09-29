@@ -47,6 +47,66 @@ return function(ctx)
 		end
 	end
 
+	-- Real `G.FUNCS.select_blind` reads `e.UIBox:get_UIE_by_ID('tag_container')`
+	-- and `e.config.ref_table` (button_callbacks.lua:2596-2598). The fixture
+	-- reproduces that shape so a fabricated element with no `UIBox` fails.
+	local function real_select_blind(engine)
+		local record = engine.G.FUNCS.select_blind
+		engine.G.FUNCS.select_blind = function(e)
+			record(e)
+			local tag = e.UIBox:get_UIE_by_ID("tag_container")
+			local blind = e.config.ref_table
+			if tag == nil or type(blind) ~= "table" then
+				error("select_blind fixture: missing UIBox/ref_table")
+			end
+			engine.G.GAME.round_resets.blind = blind
+			engine.G.blind_select = nil
+			return true
+		end
+	end
+
+	-- The real on-deck blind choice UIBox with a `select_blind_button` element
+	-- (mp/ui/game/blind_choice.lua:210-228): the element's `UIBox` is the choice
+	-- box and its `config.ref_table` is the on-deck blind config.
+	local function blind_choice_box(engine, on_deck_lower, button, ref_table)
+		local tag = { config = { ref_table = "tag" } }
+		local element = { config = { button = button, ref_table = ref_table } }
+		-- Like the real engine UIBox, `get_UIE_by_ID` is inherited through the
+		-- class metatable, never a raw field, so a rawget lookup fails here.
+		local UIBoxClass = {}
+		UIBoxClass.__index = UIBoxClass
+		function UIBoxClass:get_UIE_by_ID(id)
+			if id == "tag_container" then
+				return tag
+			end
+			if id == "select_blind_button" then
+				return element
+			end
+			return nil
+		end
+		local box = setmetatable({}, UIBoxClass)
+		element.UIBox = box
+		engine.G.blind_select_opts = { [on_deck_lower] = box }
+		return box, element
+	end
+
+	-- The real cash-out button UIBox: a separate box registered in `G.I.UIBOX`
+	-- (`engine/ui.lua:92-97`) with `role.major = G.round_eval`
+	-- (`functions/common_events.lua:1430-1443`, `engine/moveable.lua:478-488`),
+	-- never part of `G.round_eval`'s element tree. Methods live on the class
+	-- metatable, so a rawget lookup fails exactly as on the real engine.
+	local function cash_out_box(round_eval, button)
+		local UIBoxClass = {}
+		UIBoxClass.__index = UIBoxClass
+		function UIBoxClass:get_UIE_by_ID(id)
+			if id == "cash_out_button" then
+				return self._element
+			end
+			return nil
+		end
+		return setmetatable({ _element = button, role = { major = round_eval } }, UIBoxClass)
+	end
+
 	test("factory_binds_role_and_ports", function()
 		local engine = support.engine()
 		local adapter = bundle.EngineAdapter.factory({
@@ -139,6 +199,77 @@ return function(ctx)
 		local ok, code = pipeline.executor.validate(action)
 		eq(ok, nil)
 		eq(code, "exec_illegal")
+	end)
+
+	test("buy_joker_requires_slot_room", function()
+		-- `CardArea.config.card_limit` is metatable-backed, so the executor must
+		-- read it with normal indexing (rpath/rawget is always nil).
+		local shop_joker = support.card({ set = "Joker", center = "j_joker", cost = 3, center_set = "Joker" })
+		local filler = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+		local _, full = setup({
+			state = STATES.SHOP, shop_jokers = { shop_joker }, jokers = { filler }, joker_slots = 1,
+		})
+		local refused = { type = "BUY_ITEM", item_ref = "shop:1", id = "buy-joker-full" }
+		local ok, code = full.executor.validate(refused)
+		eq(ok, nil)
+		eq(code, "exec_illegal")
+
+		local engine, pipeline = setup({
+			state = STATES.SHOP, shop_jokers = { shop_joker }, jokers = {}, joker_slots = 1,
+		})
+		local accepted = { type = "BUY_ITEM", item_ref = "shop:1", id = "buy-joker-room" }
+		is_true(pipeline.executor.validate(accepted) == true)
+		is_true(pipeline.executor.dispatch(accepted) == true)
+		eq(engine.calls[#engine.calls].name, "buy_from_shop")
+	end)
+
+	test("buy_consumable_requires_slot_room", function()
+		local shop_consumable = support.card({
+			set = "Tarot", consumeable = true, center = "c_hermit", center_set = "Tarot", cost = 3,
+		})
+		local filler = support.card({ set = "Tarot", consumeable = true, center = "c_star", center_set = "Tarot" })
+		local _, full = setup({
+			state = STATES.SHOP, shop_jokers = { shop_consumable }, consumeables = { filler }, consumable_slots = 1,
+		})
+		local refused = { type = "BUY_ITEM", item_ref = "shop:1", id = "buy-consumable-full" }
+		local ok, code = full.executor.validate(refused)
+		eq(ok, nil)
+		eq(code, "exec_illegal")
+
+		local _, pipeline = setup({
+			state = STATES.SHOP, shop_jokers = { shop_consumable }, consumeables = {}, consumable_slots = 1,
+		})
+		local accepted = { type = "BUY_ITEM", item_ref = "shop:1", id = "buy-consumable-room" }
+		is_true(pipeline.executor.validate(accepted) == true)
+		is_true(pipeline.executor.dispatch(accepted) == true)
+	end)
+
+	test("buy_negative_joker_fits_one_over_limit", function()
+		-- Mirrors `check_for_buy_space` with `ability.card_limit = 1`: a full
+		-- joker area still fits the negative joker.
+		local negative = support.card({
+			set = "Joker", center = "j_joker", cost = 3, center_set = "Joker",
+			edition = "negative", card_limit = 1,
+		})
+		local filler = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+		local _, pipeline = setup({
+			state = STATES.SHOP, shop_jokers = { negative }, jokers = { filler }, joker_slots = 1,
+		})
+		local action = { type = "BUY_ITEM", item_ref = "shop:1", id = "buy-negative" }
+		is_true(pipeline.executor.validate(action) == true)
+		is_true(pipeline.executor.dispatch(action) == true)
+	end)
+
+	test("use_consumable_reads_area_limit_via_metatable", function()
+		-- The Ankh `check_use` gate reads the joker area limit with normal
+		-- indexing too; with a metatable-backed config a rawget would wrongly
+		-- refuse a free slot.
+		local ankh = support.card({ set = "Spectral", center_set = "Spectral", consumeable_data = {}, center = "c_ankh", usable = true })
+		local engine, pipeline = setup({ consumeables = { ankh }, jokers = {}, joker_slots = 1 })
+		real_use_card(engine)
+		local action = { type = "USE_CONSUMABLE", source_ref = "consumable:1", target_refs = {}, id = "ankh-free" }
+		is_true(pipeline.executor.validate(action) == true)
+		is_true(pipeline.executor.dispatch(action) == true)
 	end)
 
 	test("sell_joker_validate_and_dispatch", function()
@@ -237,18 +368,81 @@ return function(ctx)
 		eq(engine.hand.highlighted[1], target)
 	end)
 
-	test("select_blind_uses_engine_blind_object", function()
+	test("select_blind_uses_real_engine_element", function()
+		-- Ordinary SELECT_BLIND must dispatch the real on-deck
+		-- `select_blind_button`: its `UIBox` is the blind choice box and its
+		-- `config.ref_table` is the on-deck blind config, exactly what the real
+		-- callback reads (button_callbacks.lua:2596-2598).
 		local engine, pipeline = setup({
 			state = STATES.BLIND_SELECT,
 			blind_select = {},
 			blind_key = "bl_small",
 			blind_on_deck = "Small",
 		})
+		local box, element = blind_choice_box(engine, "small", "select_blind", engine.G.P_BLINDS.bl_small)
+		real_select_blind(engine)
 		local action = { type = "SELECT_BLIND", id = "blind-1" }
 		is_true(pipeline.executor.validate(action) == true)
 		is_true(pipeline.executor.dispatch(action) == true)
 		eq(engine.calls[#engine.calls].name, "select_blind")
+		eq(engine.calls[#engine.calls].e, element)
+		eq(engine.calls[#engine.calls].e.UIBox, box)
 		eq(engine.calls[#engine.calls].e.config.ref_table, engine.G.P_BLINDS.bl_small)
+		eq(engine.G.GAME.round_resets.blind, engine.G.P_BLINDS.bl_small)
+	end)
+
+	test("select_blind_missing_real_element_refused", function()
+		-- No on-deck `select_blind_button`: the fabricated element would make the
+		-- deferred `e.UIBox:get_UIE_by_ID('tag_container')` crash the game, so it
+		-- is refused with ELEMENT_MISSING and the callback never runs.
+		local engine, pipeline = setup({
+			state = STATES.BLIND_SELECT,
+			blind_select = {},
+			blind_key = "bl_small",
+			blind_on_deck = "Small",
+		})
+		local action = { type = "SELECT_BLIND", id = "blind-missing" }
+		is_true(pipeline.executor.validate(action) == true)
+		local ok, code = pipeline.executor.dispatch(action)
+		eq(ok, nil)
+		eq(code, "exec_element_missing")
+		eq(#engine.calls, 0, "select_blind ran without a real element")
+	end)
+
+	test("select_blind_disabled_button_refused", function()
+		-- The `run_info` variant of the blind choice has the same id but no
+		-- `button='select_blind'`; it must never be dispatched.
+		local engine, pipeline = setup({
+			state = STATES.BLIND_SELECT,
+			blind_select = {},
+			blind_key = "bl_small",
+			blind_on_deck = "Small",
+		})
+		blind_choice_box(engine, "small", nil, engine.G.P_BLINDS.bl_small)
+		local action = { type = "SELECT_BLIND", id = "blind-disabled" }
+		is_true(pipeline.executor.validate(action) == true)
+		local ok, code = pipeline.executor.dispatch(action)
+		eq(ok, nil)
+		eq(code, "exec_element_missing")
+		eq(#engine.calls, 0, "disabled select_blind_button was dispatched")
+	end)
+
+	test("select_blind_ref_table_mismatch_refused", function()
+		-- A stale choice element pointing at a different blind is not the action
+		-- this session validated; dispatching it would select the wrong blind.
+		local engine, pipeline = setup({
+			state = STATES.BLIND_SELECT,
+			blind_select = {},
+			blind_key = "bl_small",
+			blind_on_deck = "Small",
+		})
+		blind_choice_box(engine, "small", "select_blind", engine.G.P_BLINDS.bl_big)
+		local action = { type = "SELECT_BLIND", id = "blind-mismatch" }
+		is_true(pipeline.executor.validate(action) == true)
+		local ok, code = pipeline.executor.dispatch(action)
+		eq(ok, nil)
+		eq(code, "exec_element_missing")
+		eq(#engine.calls, 0, "mismatched ref_table was dispatched")
 	end)
 
 	test("skip_blind_requires_element_port", function()
@@ -291,34 +485,66 @@ return function(ctx)
 		eq(engine.calls[#engine.calls].e, marker)
 	end)
 
-	test("advance_ui_cash_out_source_element_fallback", function()
+	test("advance_ui_cash_out_uses_uibox_registry", function()
 		-- Production wires no `element_for`; the executor resolves the real
-		-- `round_eval` cash-out button from G (`common_events.lua:1071`).
-		local marker = { config = { id = "cash_out_button" } }
-		local engine, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = {
-			get_UIE_by_ID = function(_, id)
-				if id == "cash_out_button" then
-					return marker
-				end
-				return nil
-			end,
-		} })
+		-- cash-out button from the `G.I.UIBOX` registry box bound to the current
+		-- `G.round_eval` (common_events.lua:1430-1443). The button is NOT in
+		-- `round_eval`'s own element tree, so `get_UIE_by_ID` there is nil.
+		local round_eval = { get_UIE_by_ID = function() return nil end }
+		local marker = { config = { button = "cash_out" } }
+		local engine, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = round_eval })
+		engine.G.I = { UIBOX = { cash_out_box(round_eval, marker) } }
 		local ok, code = pipeline.executor.advance_ui()
 		is_true(ok == true, "advance: " .. tostring(code))
 		eq(engine.calls[#engine.calls].name, "cash_out")
 		eq(engine.calls[#engine.calls].e, marker)
 	end)
 
-	test("advance_ui_cash_out_waits_for_real_button", function()
-		-- Cash-out must not run before the real round-tally button exists: the
-		-- executor requires `G.round_eval:get_UIE_by_ID('cash_out_button')` (C2)
-		-- and never fabricates a minimal element.
-		local _, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = {
-			get_UIE_by_ID = function() return nil end,
-		} })
+	test("advance_ui_cash_out_ignores_other_round_eval_box", function()
+		-- A box still registered from an older round_eval must never be used;
+		-- the cash-out waits (ELEMENT_MISSING) for the current tally box.
+		local current = {}
+		local older = {}
+		local marker = { config = { button = "cash_out" } }
+		local engine, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = current })
+		engine.G.I = { UIBOX = { cash_out_box(older, marker) } }
 		local ok, code = pipeline.executor.advance_ui()
 		eq(ok, nil)
 		eq(code, "exec_element_missing")
+		eq(#engine.calls, 0, "stale round_eval box was dispatched")
+	end)
+
+	test("advance_ui_cash_out_requires_button_config", function()
+		-- Only a real `config.button == 'cash_out'` element is accepted; a
+		-- non-button node under `round_eval`'s box is ignored.
+		local round_eval = {}
+		local engine, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = round_eval })
+		engine.G.I = { UIBOX = { cash_out_box(round_eval, { config = {} }) } }
+		local ok, code = pipeline.executor.advance_ui()
+		eq(ok, nil)
+		eq(code, "exec_element_missing")
+		eq(#engine.calls, 0, "non-cash-out element was dispatched")
+	end)
+
+	test("advance_ui_cash_out_without_registry_is_missing", function()
+		-- Missing `G.I` / `G.I.UIBOX` fails closed without error.
+		local _, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = {} })
+		local ok, code = pipeline.executor.advance_ui()
+		eq(ok, nil)
+		eq(code, "exec_element_missing")
+	end)
+
+	test("advance_ui_cash_out_waits_for_tally_button", function()
+		-- Cash-out must not run before the registered tally box actually exposes
+		-- the button: the executor requires the real element and never fabricates
+		-- a minimal one.
+		local round_eval = {}
+		local engine, pipeline = setup({ state = STATES.ROUND_EVAL, round_eval = round_eval })
+		engine.G.I = { UIBOX = { cash_out_box(round_eval, nil) } }
+		local ok, code = pipeline.executor.advance_ui()
+		eq(ok, nil)
+		eq(code, "exec_element_missing")
+		eq(#engine.calls, 0, "cash_out ran without a real element")
 	end)
 
 	test("select_blind_pvp_routes_through_ready_button", function()
@@ -507,6 +733,26 @@ return function(ctx)
 		eq(engine.calls[#engine.calls].e, marker)
 	end)
 
+	test("select_blind_pvp_path_unchanged", function()
+		-- The PvP path still routes through `mp_toggle_ready` with the real
+		-- on-deck `select_blind_button` and never invokes `select_blind`.
+		local engine, pipeline = setup({
+			state = STATES.BLIND_SELECT,
+			blind_key = "bl_mp_nemesis",
+			boss_blind = "bl_mp_nemesis",
+			blind_on_deck = "Boss",
+			ready_blind = false,
+			blind_select = {},
+		})
+		local _, element = blind_choice_box(engine, "boss", "select_blind", engine.G.P_BLINDS.bl_mp_nemesis)
+		local action = { type = "SELECT_BLIND", id = "blind-pvp-unchanged" }
+		is_true(pipeline.executor.validate(action) == true)
+		is_true(pipeline.executor.dispatch(action) == true)
+		eq(#engine.calls, 1)
+		eq(engine.calls[1].name, "mp_toggle_ready")
+		eq(engine.calls[1].e, element)
+	end)
+
 	test("select_booster_consumable_requires_can_use", function()
 		-- C1: a pack consumable is used on selection, so the engine's
 		-- `can_use_consumeable` is the gate rather than free consumable slots.
@@ -524,20 +770,37 @@ return function(ctx)
 		is_true(pipeline2.executor.validate(action2) == true)
 	end)
 
-	test("select_booster_negative_joker_ignores_full_slots", function()
-		-- L3: vanilla `can_select_card` accepts a negative joker regardless of
-		-- free joker slots (button_callbacks.lua:2113).
-		local negative = support.card({ set = "Joker", center = "j_joker", area_type = "joker", edition = "negative" })
-		local filler = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
-		local engine, pipeline = setup({
+	test("select_booster_negative_joker_fits_one_over_the_limit", function()
+		-- L3: this build's `can_select_card` (button_callbacks.lua:2135-2145)
+		-- allows a joker when `#G.jokers.cards < card_limit +
+		-- (ability.card_limit - ability.extra_slots_used)`. A negative edition
+		-- stores `ability.card_limit = 1` (SMODS overrides.lua:2216), so it fits
+		-- one over a full joker area but not two over.
+		local function negative_joker()
+			local card = support.card({ set = "Joker", center = "j_joker", area_type = "joker", edition = "negative" })
+			card.ability.card_limit = 1
+			card.ability.extra_slots_used = 0
+			return card
+		end
+		local function filler()
+			return support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+		end
+		local _, pipeline = setup({
 			state = STATES.BUFFOON_PACK,
-			pack_cards = { negative },
-			jokers = { filler },
+			pack_cards = { negative_joker() },
+			jokers = { filler() },
 			joker_slots = 1,
 		})
-		real_use_card(engine)
 		local action = { type = "SELECT_BOOSTER_ITEM", card_refs = { "booster:1" }, id = "pack-negative" }
-		is_true(pipeline.executor.validate(action) == true)
+		is_true(pipeline.executor.validate(action) == true, "full area: a negative joker fits one over")
+		local _, over = setup({
+			state = STATES.BUFFOON_PACK,
+			pack_cards = { negative_joker() },
+			jokers = { filler(), filler() },
+			joker_slots = 1,
+		})
+		local ok = over.executor.validate({ type = "SELECT_BOOSTER_ITEM", card_refs = { "booster:1" }, id = "pack-negative-2" })
+		is_true(ok ~= true, "already one over: the real can_select_card refuses")
 	end)
 
 	test("play_cards_requires_forced_selection", function()

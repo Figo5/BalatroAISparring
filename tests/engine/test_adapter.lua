@@ -30,6 +30,14 @@ return function(ctx)
 		return seen, list
 	end
 
+	local function cert_types(result)
+		local seen = {}
+		for _, item in ipairs(result.ui_view.certificates.items) do
+			seen[item.type] = true
+		end
+		return seen
+	end
+
 	test("factory_binds_role_session_and_ports", function()
 		local engine = support.engine()
 		local revision = bundle.StateRevision.factory()
@@ -117,6 +125,69 @@ return function(ctx)
 		is_true(seen.BUY_VOUCHER == true, "BUY_VOUCHER")
 		is_true(seen.REROLL == true, "REROLL")
 		is_true(seen.LEAVE_SHOP == true, "LEAVE_SHOP")
+	end)
+
+	test("buy_joker_offered_only_with_slot_room", function()
+		-- `CardArea.config.card_limit` is metatable-backed, so the adapter must
+		-- read it with normal indexing (a rawget is always nil, which used to
+		-- suppress every joker purchase).
+		local shop_joker = support.card({ set = "Joker", center = "j_joker", cost = 3, center_set = "Joker" })
+		local filler = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+
+		local full = produce(support.engine({
+			state = STATES.SHOP, shop_jokers = { shop_joker }, jokers = { filler }, joker_slots = 1,
+		}))
+		is_true(full ~= nil)
+		is_true(cert_types(full).BUY_ITEM ~= true, "full-slot joker purchase offered")
+
+		local room = produce(support.engine({
+			state = STATES.SHOP, shop_jokers = { shop_joker }, jokers = {}, joker_slots = 1,
+		}))
+		is_true(room ~= nil)
+		is_true(cert_types(room).BUY_ITEM == true, "joker purchase with room not offered")
+	end)
+
+	test("buy_consumable_offered_only_with_slot_room", function()
+		local shop_consumable = support.card({
+			set = "Tarot", consumeable = true, center = "c_hermit", center_set = "Tarot", cost = 3,
+		})
+		local filler = support.card({ set = "Tarot", consumeable = true, center = "c_star", center_set = "Tarot" })
+
+		local full = produce(support.engine({
+			state = STATES.SHOP, shop_jokers = { shop_consumable }, consumeables = { filler }, consumable_slots = 1,
+		}))
+		is_true(full ~= nil)
+		is_true(cert_types(full).BUY_ITEM ~= true, "full-slot consumable purchase offered")
+
+		local room = produce(support.engine({
+			state = STATES.SHOP, shop_jokers = { shop_consumable }, consumeables = {}, consumable_slots = 1,
+		}))
+		is_true(room ~= nil)
+		is_true(cert_types(room).BUY_ITEM == true, "consumable purchase with room not offered")
+	end)
+
+	test("buy_negative_joker_offered_over_full_slots", function()
+		-- Mirrors `check_for_buy_space` with `ability.card_limit = 1`: a full
+		-- joker area still offers the negative joker.
+		local negative = support.card({
+			set = "Joker", center = "j_joker", cost = 3, center_set = "Joker",
+			edition = "negative", card_limit = 1,
+		})
+		local filler = support.card({ set = "Joker", center = "j_joker", area_type = "joker" })
+		local result = produce(support.engine({
+			state = STATES.SHOP, shop_jokers = { negative }, jokers = { filler }, joker_slots = 1,
+		}))
+		is_true(result ~= nil)
+		is_true(cert_types(result).BUY_ITEM == true, "negative joker over a full area not offered")
+	end)
+
+	test("match_slot_limits_are_projected", function()
+		local engine = support.engine({ hand_limit = 8, joker_slots = 5, consumable_slots = 2 })
+		local _, handle = capture(engine)
+		local plain = bundle.obs.export(handle)
+		eq(plain.match.hand_size, 8)
+		eq(plain.match.joker_slots, 5)
+		eq(plain.match.consumable_slots, 2)
 	end)
 
 	test("booster_pack_phase", function()

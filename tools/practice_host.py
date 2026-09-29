@@ -2250,6 +2250,11 @@ class MatchSupervisor:
             written = self._write_attestations(nonce)
             if not written.get("ok"):
                 return self._fail(written.get("code", CODE_ATTESTATION), attestation=_gate_summary(attestation))
+            # The companions only act after reading the published attestation
+            # files, so the bounded pre-start budget starts now, not at
+            # ``mark_attested``. A failure here is a no-op: the service keeps
+            # its earlier clock and the timeout is never bypassed.
+            self._start_prestart_window()
 
         self._set_phase("running")
         verdict = self._supervise_loop()
@@ -2324,6 +2329,23 @@ class MatchSupervisor:
         return write_role_attestations(
             self.config, session_id=self.session_id, nonce=nonce, control_port=control_port, port=port
         )
+
+    def _start_prestart_window(self) -> dict:
+        """Trusted host-only: open the pre-start clock after the files are published.
+
+        Called immediately after a successful ``_write_attestations`` (M8 order
+        unchanged). A missing/refusing service method is a no-op rather than a
+        failure: the service keeps its earlier ``attested_at`` start, so the
+        pre-start timeout is never bypassed by not resetting it.
+        """
+        fn = getattr(self.service, "start_prestart_window", None)
+        if not callable(fn):
+            return {"ok": False, "code": CODE_ATTESTATION, "problems": ["service_start_prestart_window_missing"]}
+        try:
+            started = bool(fn())
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "code": CODE_ATTESTATION}
+        return {"ok": True, "code": CODE_OK} if started else {"ok": False, "code": CODE_ATTESTATION}
 
     def _finalize_after_run(self) -> dict:
         """Retain the human window, retire server/service only after it exits, then diff."""

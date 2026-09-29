@@ -174,6 +174,56 @@ local function rpath(obj, a, b, c, d, e)
 	return value
 end
 
+-- Protected NORMAL indexing. A rawget only sees raw fields, but real engine
+-- values are frequently computed by a metatable (`CardArea.config.card_limit`
+-- is served by `__index` over `card_limits`, cardarea.lua:13-28) or inherited
+-- from a class table. `rget` would read nil for those.
+local function nget(obj, key)
+	if type(obj) ~= "table" or key == nil then
+		return nil
+	end
+	local ok, value = pcall(function()
+		return obj[key]
+	end)
+	if not ok then
+		return nil
+	end
+	return value
+end
+
+-- Real `CardArea` card limit, read through the config metatable.
+local function area_limit(area)
+	local config = nget(area, "config")
+	local limit = nget(config, "card_limit")
+	if is_nat(limit) then
+		return limit
+	end
+	return nil
+end
+
+-- Room for one more card in `area` for the SPECIFIC `card`, mirroring the real
+-- `G.FUNCS.check_for_buy_space` predicate (button_callbacks.lua:2444-2453,
+-- which also drives SMODS `can_select_card`): `#area.cards + 1 +
+-- card.ability.extra_slots_used <= area.config.card_limit +
+-- card.ability.card_limit`. The UI callback is never called (it shows an
+-- alert); only its raw arithmetic is reproduced. Returns nil when the card's
+-- ability data is unavailable/not numeric so the caller can fall back.
+local function buy_room(count, limit, card)
+	local ability = rget(card, "ability")
+	if type(ability) ~= "table" then
+		return nil
+	end
+	local extra = nget(ability, "extra_slots_used")
+	local bonus = nget(ability, "card_limit")
+	if extra ~= nil and not is_nat(extra) then
+		return nil
+	end
+	if bonus ~= nil and not is_nat(bonus) then
+		return nil
+	end
+	return count + (1 + (extra or 0)) <= limit + (bonus or 0)
+end
+
 local function token_of(value, limit)
 	if type(value) ~= "string" or #value == 0 or #value > limit then
 		return nil
@@ -549,15 +599,23 @@ local function build_zone(cards, count, builder)
 	return out
 end
 
--- Card-area slot room, mirroring `check_for_buy_space` raw predicates without
--- calling the UI callback (which shows an alert as a side effect).
-local function slot_room(G, area_key, negative)
+-- Card-area slot room, mirroring the real `check_for_buy_space` raw predicate
+-- without calling the UI callback (which shows an alert as a side effect). The
+-- specific card's `ability.extra_slots_used` / `ability.card_limit` are honoured
+-- when readable; otherwise the negative-edition rule is the fallback.
+local function slot_room(G, area_key, card, negative)
 	local area = rget(G, area_key)
 	local cards = rget(area, "cards")
 	local count = dense_count(cards, LIMITS.scan)
-	local limit = rpath(area, "config", "card_limit")
-	if count == nil or not is_nat(limit) then
+	local limit = area_limit(area)
+	if count == nil or limit == nil then
 		return nil
+	end
+	if type(card) == "table" then
+		local room = buy_room(count, limit, card)
+		if room ~= nil then
+			return room
+		end
 	end
 	if negative then
 		return count < limit + 1
@@ -642,9 +700,9 @@ local function build_match(G, MP)
 	local resets = rpath(G, "GAME", "round_resets")
 	put(match, "hands_per_round", int_field(rget(resets, "hands")))
 	put(match, "discards_per_round", int_field(rget(resets, "discards")))
-	put(match, "hand_size", int_field(rpath(G, "hand", "config", "card_limit")))
-	put(match, "joker_slots", int_field(rpath(G, "jokers", "config", "card_limit")))
-	put(match, "consumable_slots", int_field(rpath(G, "consumeables", "config", "card_limit")))
+	put(match, "hand_size", int_field(area_limit(rget(G, "hand"))))
+	put(match, "joker_slots", int_field(area_limit(rget(G, "jokers"))))
+	put(match, "consumable_slots", int_field(area_limit(rget(G, "consumeables"))))
 	return match
 end
 
@@ -1231,8 +1289,8 @@ local function check_use_ok(G, card)
 	end
 	local jokers = rget(G, "jokers")
 	local jcount = dense_count(rget(jokers, "cards"), LIMITS.jokers)
-	local jlimit = rpath(jokers, "config", "card_limit")
-	return jcount ~= nil and is_nat(jlimit) and jcount < jlimit
+	local jlimit = area_limit(jokers)
+	return jcount ~= nil and jlimit ~= nil and jcount < jlimit
 end
 
 local function cert_use_consumables(builder, G)
@@ -1339,12 +1397,12 @@ local function cert_shop(builder, G)
 				if affordable then
 					local item_ref = ref("shop", i)
 					if kind == "joker" then
-						local room = slot_room(G, "jokers", edition_type(card) == "negative")
+						local room = slot_room(G, "jokers", card, edition_type(card) == "negative")
 						if room == true then
 							builder.add({ type = "BUY_ITEM", certified = true, item_ref = item_ref, capacity_ok = true })
 						end
 					elseif kind == "consumable" then
-						local room = slot_room(G, "consumeables", edition_type(card) == "negative")
+						local room = slot_room(G, "consumeables", card, edition_type(card) == "negative")
 						if room == true then
 							builder.add({ type = "BUY_ITEM", certified = true, item_ref = item_ref, capacity_ok = true })
 						end
@@ -1463,10 +1521,13 @@ local function cert_booster(builder, G)
 				local kind = item_kind(card)
 				local card_ref = ref("booster", i)
 				if kind == "joker" then
-					-- L3: vanilla `can_select_card` (button_callbacks.lua:2113)
-					-- accepts a negative-edition joker regardless of free joker
-					-- slots; only a plain joker needs slot room.
-					if edition_type(card) == "negative" or slot_room(G, "jokers", false) == true then
+					-- L3: this build's `can_select_card` (button_callbacks.lua:
+					-- 2135-2145) allows a joker only when `#G.jokers.cards <
+					-- card_limit + (ability.card_limit - ability.extra_slots_used)`
+					-- (exactly `buy_room`); a negative joker fits one over the
+					-- limit, not unconditionally. The negative-edition rule is only
+					-- the fallback when ability data is unreadable.
+					if slot_room(G, "jokers", card, edition_type(card) == "negative") == true then
 						builder.add({ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { card_ref }, capacity_ok = true })
 					end
 				elseif kind == "consumable" then
@@ -1496,7 +1557,7 @@ local function cert_booster(builder, G)
 	end
 	local hand = rget(G, "hand")
 	local hand_first = rget(rget(hand, "cards"), 1)
-	local hand_limit = rpath(hand, "config", "card_limit")
+	local hand_limit = area_limit(hand)
 	local pack_first = type(rawget(cards, 1)) == "table"
 	-- H1/A: SMODS routes every mod booster through `SMODS_BOOSTER_OPENED` and
 	-- extends `can_skip_booster` to that state (smods-booster.toml:124-126), but

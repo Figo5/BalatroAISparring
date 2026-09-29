@@ -207,6 +207,7 @@ class FakeService:
         self.attested = False
         self.attest_calls = []
         self.attest_digest = None
+        self.prestart_calls = 0
         self._events = events
 
     def _record(self, name):
@@ -222,6 +223,11 @@ class FakeService:
         self.attest_calls.append(expected_config_digest)
         self.attest_digest = expected_config_digest
         self.attested = True
+        return True
+
+    def start_prestart_window(self):
+        self._record("start_prestart_window")
+        self.prestart_calls += 1
         return True
 
     def abort(self, code="practice_aborted"):
@@ -1637,6 +1643,46 @@ def test_supervisor_writes_attestation_with_control_and_match_ports_separately()
         assert result["ok"] is True, result
         assert captured["control_port"] == 51234
         assert captured["port"] == 8788
+
+
+def test_supervisor_starts_prestart_window_after_publishing_attestations():
+    """The pre-start clock starts only once the attestation files are published."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        events = []
+        service = FakeService(None, events=events, ended=True, terminal_phase="closed")
+        writer = lambda cfg, **kwargs: events.append("attestation_write") or {"ok": True, "code": practice_host.CODE_OK}
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            attestation_writer=writer,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        # M8 order is unchanged (service attested first, then the files); the
+        # pre-start window opens immediately after a successful publication.
+        assert events.index("mark_attested") < events.index("attestation_write")
+        assert events.index("attestation_write") < events.index("start_prestart_window")
+        assert service.prestart_calls == 1
+
+
+def test_supervisor_does_not_start_prestart_window_when_writes_fail():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        events = []
+        service = FakeService(None, events=events)
+        writer = lambda cfg, **kwargs: {"ok": False, "code": practice_host.CODE_ATTESTATION}
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            attestation_writer=writer,
+        )
+        result = supervisor.run()
+        assert result["ok"] is False, result
+        assert service.prestart_calls == 0
+        assert "start_prestart_window" not in events
 
 
 def test_supervisor_success_retains_human_and_keeps_server_until_exit():
