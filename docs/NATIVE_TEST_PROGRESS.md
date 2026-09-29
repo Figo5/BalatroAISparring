@@ -86,3 +86,31 @@ Root cause (service op trace + human Lovely log): the companion send guard treat
 | P2_SILENT | `d470d2a88921ca90ec47c31e66ea08cbba2345b92b8a918b8f0cb1e42cd070ed` | ai 10584 only |
 
 All receipts recorded with zero changed live roots. The run was interrupted once after P1B when the previous orchestrator session ended; no open record or lockout remained, P1A/P1B revalidated, and it resumed from FULL_P1. The independent sampler (`work/procs-recert-resume.csv`) saw only staged `Balatro.exe` images, one AI process per P2 phase. **Certificate `ab7e1fcc1db3ef41cfa47cd1d43b0728da4db096072605a6c9923f0783c2190d`: complete; check passes.**
+
+## Unlock-popup fix, re-certification and match 10 (September 29 evening)
+
+**Cause of the remaining pre-start stalls (match 9, build 57fb6f4 + diagnostics).** The human role's own log showed Balatro's Blue Deck unlock popup (`create_unlock_overlay`, "Discover at least 20 items") opening on the main menu, then `menu_not_ready detail="st=1/11 ui=0 p=1 ov=1 T=13.9"` until the 90 s abort. The popup pauses the game, so the deferred main-menu UI event never fires on an unattended role, and the lobby is never created. `Game:start_run` queues the same popups, so the AI could also freeze mid-match.
+
+**Fix `c33bab6`.** `mp_driver` identifies only the vanilla unlock popup: the back element is `overlay_menu_back_button` with `button == 'continue_unlock'`. It dismisses the popup through the real `G.FUNCS.continue_unlock`. The runtime policy is:
+- The AI dismisses always.
+- The human dismisses only before its match starts, after an 8 s grace so an attended user can read it.
+- At most one attempt per 0.5 s, 32 successes and 64 attempts.
+- 20 s of continuous blocking ends in a clean `unlock_overlay_stuck` stop.
+- No coordinator step and no AI decision happen while a popup is up.
+
+The commit includes the reviewed coordinator diagnostics. The Claude Opus 5.5 High review cycle was READY, then BLOCKED on R1/N1 (a post-cap gate without a bound, and chained human graces), then READY for re-certification (`CLAUDE_UNLOCK_OVERLAY_REVIEW*.md`). Independent reruns: run_runtime 108/108 on lua51 and luajit21, and all 12 suites green. `test_practice_service` has an intermittent Windows temp-dir teardown race (WinError 145) that is unrelated to this change.
+
+**Re-certification (build `c33bab6`).** The full fresh build (`work/recert-c33bab6`) produced receipts P1B `1465adac…`, FULL_P1 `816c1013…`, CRASH `506c4c88…`, P2_INITIAL `66ea87b6…`, P2_CLOSE `4089f8a7…` and P2_SILENT `6ae88c71…`, plus P1A. **Certificate `e9bc994a51a409a56c6e3f033f685c9ca1aaf25607c4ad75fe45b42f3d7d9a0d`: complete; check passes.**
+
+**Match 10** (session `s-7003a17e…`, rookie, normal pacing, Major League attrition):
+- The human popup was dismissed after its grace (`unlock_overlay_dismissed count=1`, then `p=0 ov=0`). The host created the lobby, the AI joined and readied, and the host started the match.
+- The AI played Ante 1 small/big/boss and Ante 2 small/big: blind selection, hands, a discard, shop purchases, three boosters with picks, two consumables and leaving the shop. That was **37 accepted decisions, 0 rejected**.
+- It then selected the Nemesis (PvP) blind and sent `readyBlind`. The human role's public opponent feed received the AI's location and lives (`loc_ready-bl_mp_nemesis`, lives 4).
+- From there the AI correctly waited for its opponent with `policy_no_action` (a backoff wait, not a loop error), because the unattended human never plays. The orchestrator ended the run by sending WM_CLOSE to the staged human window. The host reported `practice_human_exited_before_end`, the AI companion closed (`practice_closed`), and no process, open record or lockout remained.
+- Session receipt: `verdict=passed`, `changed_roots=[]`. The independent live snapshot before and after was identical (AppData 983 files, install 15 files).
+
+**Observations for follow-up (not blockers):**
+- The service summary counts `policy_no_action` waits in `errors` (33). The adapter could expose the PvP wait as a waiting state instead of polling the policy every ~2.5 s.
+- The send guard blocks Handy's `handyMPExtensionDisable` and Multiplayer's `streamLogLines`, which is intended for private practice. Handy/MP compatibility remains an in-game acceptance item.
+- The AI does not use the Multiplayer PvP timer against a slow opponent.
+- PvP resolution, lives, match end and results cannot be exercised without a human actually playing to the PvP blind. Per AGENTS.md, a full human run is not played by the orchestrator, so this remains for the controlled live smoke with the user.
