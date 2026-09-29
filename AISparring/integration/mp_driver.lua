@@ -41,6 +41,7 @@ MPDriver.CODE = {
 	NOT_READY = "driver_not_ready",
 	WRONG_ROLE = "driver_wrong_role",
 	SEND_BLOCKED = "driver_send_blocked",
+	NO_UNLOCK_OVERLAY = "driver_no_unlock_overlay",
 	INTERNAL = "driver_internal_error",
 }
 
@@ -50,6 +51,16 @@ MPDriver.CODE = {
 -- substituted because the real callback mutates the element's config/children
 -- and UIBox.
 MPDriver.READY_ELEMENT_ID = "lobby_menu_start"
+
+-- Vanilla unlock-notification overlay identity. `continue_unlock` is used only
+-- by the deck/card unlock popups as their back-button callback
+-- (functions/button_callbacks.lua:1386-1405), so a back element whose
+-- `config.button` is exactly this identifies exactly an unlock notification and
+-- never an options/credits/Multiplayer/game-over/lobby overlay. The element id
+-- is the pinned generic-options default
+-- (functions/UI_definitions.lua:6784-6825).
+MPDriver.UNLOCK_BACK_ID = "overlay_menu_back_button"
+MPDriver.UNLOCK_BUTTON = "continue_unlock"
 
 MPDriver.RULESET_KEY = "ruleset_mp_majorleague"
 MPDriver.RULESET_SHORT = "majorleague"
@@ -422,6 +433,62 @@ function MPDriver.factory(ports)
 			end
 		end
 		return rget(G, "MAIN_MENU_UI") ~= nil
+	end
+
+	-- The real vanilla unlock-notification overlay's back element, or nil. Only
+	-- the unlock popups use `continue_unlock` as their back button, so every
+	-- other overlay kind is never matched. `G.OVERLAY_MENU` is a real UIBox whose
+	-- `get_UIE_by_ID` is inherited through its class metatable, so the method and
+	-- the element's `config.button` are resolved with protected normal indexing,
+	-- never rawget. Never throws.
+	function instance.unlock_overlay()
+		local overlay = rget(G, "OVERLAY_MENU")
+		if type(overlay) ~= "table" then
+			return nil
+		end
+		local ok_get, get_by_id = pcall(function()
+			return overlay.get_UIE_by_ID
+		end)
+		if not ok_get or type(get_by_id) ~= "function" then
+			return nil
+		end
+		local ok_element, element = pcall(get_by_id, overlay, MPDriver.UNLOCK_BACK_ID)
+		if not ok_element or type(element) ~= "table" then
+			return nil
+		end
+		local ok_button, button = pcall(function()
+			return element.config.button
+		end)
+		if not ok_button or button ~= MPDriver.UNLOCK_BUTTON then
+			return nil
+		end
+		return element
+	end
+
+	-- Dismiss the vanilla unlock-notification overlay through the real
+	-- `continue_unlock` callback. Role-independent: the caller decides policy.
+	-- A *new* unlock overlay opened by the callback's own chained
+	-- `G.E_MANAGER:update` still counts as success for this one. Never throws.
+	function instance.dismiss_unlock_overlay()
+		local element = instance.unlock_overlay()
+		if element == nil then
+			return false, CODE.NO_UNLOCK_OVERLAY
+		end
+		local overlay = rget(G, "OVERLAY_MENU")
+		if type(overlay) ~= "table" then
+			return false, CODE.NO_UNLOCK_OVERLAY
+		end
+		local continue_unlock = rget(funcs, "continue_unlock")
+		if type(continue_unlock) ~= "function" then
+			return false, CODE.MISSING_CALLBACK
+		end
+		if not pcall(continue_unlock, element) then
+			return false, CODE.INTERNAL
+		end
+		if rawequal(rget(G, "OVERLAY_MENU"), overlay) then
+			return false, CODE.BAD_STATE
+		end
+		return true, CODE.OK
 	end
 
 	-- The registry entry and the live forced ruleset must agree before any

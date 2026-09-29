@@ -413,6 +413,59 @@ local function boot_staged(host_module, base, companion)
 		base.decode = decode
 	end
 	base.funcs = G and G.FUNCS or nil
+	-- Diagnostic only (staged roles): fingerprint the first few overlay menus
+	-- opened (first UI element ids / text labels of the definition, bounded), so
+	-- an unattended overlay that pauses a staged role on its main menu can be
+	-- named from the role's own log. Behaviour is unchanged: the original
+	-- callback is always invoked with the same arguments.
+	if type(G) == "table" and type(G.FUNCS) == "table" and type(G.FUNCS.overlay_menu) == "function" then
+		local original_overlay = G.FUNCS.overlay_menu
+		local overlay_logs = 0
+		local function fingerprint(args)
+			local found = {}
+			local visited = 0
+			local function walk(node, depth)
+				if #found >= 4 or visited > 400 or depth > 12 or type(node) ~= "table" then
+					return
+				end
+				visited = visited + 1
+				local config = rawget(node, "config")
+				if type(config) == "table" then
+					local id = rawget(config, "id")
+					local text = rawget(config, "text")
+					if type(id) == "string" and #found < 4 then
+						found[#found + 1] = "id:" .. string.sub(id, 1, 24)
+					elseif type(text) == "string" and #text > 0 and #found < 4 then
+						found[#found + 1] = "t:" .. string.sub(text, 1, 20)
+					end
+				end
+				local nodes = rawget(node, "nodes")
+				if type(nodes) == "table" then
+					for i = 1, math.min(#nodes, 40) do
+						walk(nodes[i], depth + 1)
+					end
+				end
+			end
+			if type(args) == "table" then
+				walk(rawget(args, "definition"), 0)
+			end
+			return table.concat(found, "|")
+		end
+		G.FUNCS.overlay_menu = function(args, ...)
+			if overlay_logs < 5 and type(base.logger) == "table" and type(base.logger.record) == "function" then
+				overlay_logs = overlay_logs + 1
+				pcall(function()
+					base.logger.record({
+						event = "overlay_opened",
+						count = overlay_logs,
+						status = tostring(rawget(G, "STATE")),
+						detail = fingerprint(args),
+					})
+				end)
+			end
+			return original_overlay(args, ...)
+		end
+	end
 	local instance, code = host_module.factory(base)
 	if instance == nil then
 		return { code = code or "companion_boot_failed", role = "staged", staged_role = descriptors.role }
@@ -477,11 +530,24 @@ local function boot_companion(modules, companion)
 	-- simply reports booted=false until the launcher writes the file.
 	if detail ~= nil and type(detail.instance) == "table" then
 		if type(Game) == "table" and type(detail.instance.update) == "function" then
+			local update_logger = base.logger
 			local handle = host_module.install_update(Game, function(dt)
 				detail.instance.update(dt)
 			end, {
 				max_update_errors = COMPANION_MAX_UPDATE_ERRORS,
+				on_error = function(count, err)
+					if type(update_logger) == "table" and type(update_logger.record) == "function" then
+						update_logger.record({
+							event = "companion_update_error",
+							count = count,
+							detail = string.sub(tostring(err), 1, 80),
+						})
+					end
+				end,
 				on_failure = function()
+					if type(update_logger) == "table" and type(update_logger.record) == "function" then
+						pcall(update_logger.record, { event = "companion_update_disabled", count = COMPANION_MAX_UPDATE_ERRORS })
+					end
 					pcall(detail.instance.uninstall)
 				end,
 			})

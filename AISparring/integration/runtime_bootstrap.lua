@@ -56,6 +56,7 @@ RuntimeBootstrap.CODE = {
 	TERMINAL = "boot_terminal",
 	STOPPED = "boot_stopped",
 	INTERNAL = "boot_internal_error",
+	UNLOCK_STUCK = "unlock_overlay_stuck",
 }
 
 RuntimeBootstrap.ROLE_AI = "ai_staged"
@@ -86,6 +87,25 @@ RuntimeBootstrap.LIMITS = {
 	-- frame error. Coordination aborts only after `coord_timeout` seconds.
 	coord_retry_interval = 0.5,
 	coord_timeout = 60,
+	-- Vanilla unlock-notification dismissal: at most one attempt per interval, a
+	-- fixed per-instance success cap and an overall attempt cap. A continuously
+	-- blocking overlay that never clears is bounded by `unlock_block_timeout`
+	-- (a clean stop, never a frame error). Diagnostic-only otherwise: it never
+	-- counts toward update_errors.
+	unlock_dismiss_interval = 0.5,
+	max_unlock_dismissals = 32,
+	max_unlock_attempts = 64,
+	-- A continuously-present unlock overlay that never clears (a callback that
+	-- never really dismisses, a refusal loop or a chained popup that never ends)
+	-- is a clean stop, exactly like the pre-start/hello timeouts. The clock runs
+	-- on every allowed, non-graced tick with an unlock overlay up (including
+	-- capped or rate-limited ticks) and is cleared while the human grace below
+	-- runs, so a grace never counts toward it.
+	unlock_block_timeout = 20,
+	-- The human's own pre-start unlock notification is shown for this grace
+	-- window before it is dismissed, so an attended human can read it. The AI
+	-- is always immediate and never graced.
+	human_unlock_grace = 8,
 	-- Overall pre-start coordination deadline. The service aborts its own
 	-- pre-start window after 90 s, so the runtime's deadline must be strictly
 	-- larger (service timeout + margin) or the runtime would keep attempting
@@ -430,6 +450,23 @@ function RuntimeBootstrap.factory(ports)
 	local counters = { decisions = 0, rejected = 0, errors = 0, terminal = 0 }
 	local inbound = {}
 	local inbound_count = 0
+	-- Bounded vanilla unlock-notification dismissal bookkeeping. `unlock_blocking`
+	-- continuity is tracked separately so an overlay that never clears is a clean
+	-- stop; the clock is cleared on human-grace ticks. Diagnostic-only
+	-- otherwise: never counts toward update_errors.
+	local unlock_dismissals = 0
+	local unlock_attempts = 0
+	local last_unlock_attempt_at = nil
+	local unlock_cap_logged = false
+	local unlock_attempt_cap_logged = false
+	local unlock_refusal_logged = {}
+	local unlock_block_since = nil
+	local human_unlock_overlay = nil
+	local human_unlock_since = nil
+	-- Set when a human grace first runs out unattended; later popups (the rest
+	-- of an unattended chain) are then dismissed promptly, so N popups never
+	-- cost N graces. Popups the human closes themselves each keep their grace.
+	local human_grace_done = false
 
 	local function record_error(code)
 		counters.errors = counters.errors + 1
@@ -438,6 +475,67 @@ function RuntimeBootstrap.factory(ports)
 			pcall(logger.record, { event = "runtime_bootstrap", code = last_error, role = role })
 		end
 		return last_error
+	end
+
+	-- Diagnostic only (no control effect): why the bounded pre-start coordinator
+	-- is currently waiting, logged once per change so a stalled start is
+	-- explainable from the role's own log. Reasons are fixed tokens; the detail
+	-- is a short bounded string of engine enums, never a card/seed/credential.
+	local last_wait = nil
+	local last_wait_at = nil
+	local function wait_clock()
+		local ok, value = pcall(clock.now)
+		if ok and type(value) == "number" and value == value then
+			return value
+		end
+		return nil
+	end
+	-- Logged when the reason changes, or at most every 10 s while the same
+	-- reason persists (the detail carries advancing engine clocks, so a plain
+	-- detail-change dedupe would log every frame).
+	local function note_wait(reason, detail)
+		if type(detail) ~= "string" then
+			detail = nil
+		end
+		local at = wait_clock()
+		if reason == last_wait and (at == nil or last_wait_at == nil or at - last_wait_at < 10) then
+			return
+		end
+		last_wait = reason
+		last_wait_at = at
+		if logger ~= nil then
+			pcall(function()
+				logger.record({
+					event = "coordinator_wait",
+					code = token_of(reason, 64),
+					detail = detail ~= nil and string.sub(detail, 1, 96) or nil,
+				})
+			end)
+		end
+	end
+
+	-- Compact engine snapshot for menu waits: stage/state, menu UI, pause,
+	-- overlay, game-time (TOTAL) and real-time (REAL) clocks and the base event
+	-- queue length. Engine enums/numbers only.
+	local function menu_detail()
+		local ok, value = pcall(function()
+			local timers = rget(G, "TIMERS")
+			local function num(v)
+				if type(v) == "number" then
+					return string.format("%.1f", v)
+				end
+				return "nil"
+			end
+			local queue = rget(rget(rget(G, "E_MANAGER"), "queues"), "base")
+			local qn = type(queue) == "table" and #queue or -1
+			return "st=" .. tostring(rget(G, "STAGE")) .. "/" .. tostring(rget(G, "STATE"))
+				.. " ui=" .. (rget(G, "MAIN_MENU_UI") ~= nil and 1 or 0)
+				.. " p=" .. (rget(rget(G, "SETTINGS"), "paused") == true and 1 or 0)
+				.. " ov=" .. (rget(G, "OVERLAY_MENU") ~= nil and 1 or 0)
+				.. " T=" .. num(rget(timers, "TOTAL")) .. " R=" .. num(rget(timers, "REAL"))
+				.. " q=" .. tostring(qn)
+		end)
+		return ok and value or nil
 	end
 
 	local function now()
@@ -1110,9 +1208,11 @@ function RuntimeBootstrap.factory(ports)
 	-- when it did not take effect (late UI / not-yet-ready).
 	local function advance_coordinator(current)
 		if mp_driver == nil then
+			note_wait("driver_missing")
 			return
 		end
 		if not setup_acked then
+			note_wait(setup_sent and "setup_awaiting_ack" or "setup_unsent")
 			if not setup_sent and coord_ready(current) then
 				if co_send(protocol.OPS.SETUP, {}) ~= nil then
 					setup_sent = true
@@ -1124,20 +1224,27 @@ function RuntimeBootstrap.factory(ports)
 		-- menu: reporting the code, readying, starting and the audit seed all
 		-- happen with the match stage changing underneath.
 		if not mp_driver.connected() then
+			note_wait("mp_not_connected")
 			return
 		end
 		if role == "ai" and join_code ~= nil and not join_sent then
 			-- `join_lobby` is a main-menu callback; wait for the real menu.
-			if mp_driver.main_menu_ready() and coord_ready(current) then
-				local ok = mp_driver.ai_join(join_code)
+			if not mp_driver.main_menu_ready() then
+				note_wait("join_menu_not_ready", menu_detail())
+			elseif coord_ready(current) then
+				local ok, join_code_result = mp_driver.ai_join(join_code)
 				if ok == true then
 					join_sent = true
+					note_wait("join_sent")
+				else
+					note_wait("ai_join_refused", join_code_result)
 				end
 			end
 			return
 		end
 		if instance.lobby_code() == nil then
 			if not mp_driver.main_menu_ready() then
+				note_wait("menu_not_ready", menu_detail())
 				return
 			end
 			if coord_ready(current) then
@@ -1146,9 +1253,12 @@ function RuntimeBootstrap.factory(ports)
 					-- it exactly once and wait for the real code. Only an explicit
 					-- callback failure re-arms the send.
 					if not lobby_enter_sent then
-						local entry = mp_driver.ruleset()
-						if entry ~= nil then
+						local entry, ruleset_code = mp_driver.ruleset()
+						if entry == nil then
+							note_wait("ruleset_unavailable", ruleset_code)
+						else
 							lobby_enter_sent = true
+							note_wait("host_start_calling")
 							local ok, host_code = mp_driver.host_start(human_seed)
 							if ok ~= true then
 								-- Once the real create callback has been invoked, a
@@ -1161,17 +1271,22 @@ function RuntimeBootstrap.factory(ports)
 									coord_failure = host_code
 								else
 									lobby_enter_sent = false
+									note_wait("host_start_refused", host_code)
 								end
+							else
+								note_wait("lobby_code_awaiting_server")
 							end
 						end
 					end
 				else
+					note_wait("join_code_polling")
 					co_send(protocol.OPS.JOIN_CODE, {})
 				end
 			end
 			return
 		end
 		if role == "human" and not lobby_code_acked then
+			note_wait("lobby_code_report_pending")
 			if not lobby_code_sent and coord_ready(current) then
 				if co_send(protocol.OPS.LOBBY_CODE, { lobby_code = instance.lobby_code() }) ~= nil then
 					lobby_code_sent = true
@@ -1182,7 +1297,9 @@ function RuntimeBootstrap.factory(ports)
 		if not ready_sent then
 			if coord_ready(current) then
 				local digest_value = compute_digest()
-				if digest_value ~= nil then
+				if digest_value == nil then
+					note_wait("ready_digest_unavailable")
+				else
 					if co_send(protocol.OPS.READY, { config_digest = digest_value }) ~= nil then
 						ready_sent = true
 					end
@@ -1191,20 +1308,27 @@ function RuntimeBootstrap.factory(ports)
 			return
 		end
 		if not ready_acked then
+			note_wait("ready_awaiting_ack")
 			return
 		end
 		if role == "ai" then
 			if not guest_ready_committed then
 				if coord_ready(current) then
-					local ok = mp_driver.ai_ready()
+					local ok, ready_code = mp_driver.ai_ready()
 					if ok == true then
 						guest_ready_committed = true
+						note_wait("guest_ready_committed")
+					else
+						note_wait("ai_ready_refused", ready_code)
 					end
 				end
 			end
 			return
 		end
 		if not start_sent then
+			if rpath(MP, "LOBBY", "ready_to_start") ~= true then
+				note_wait("start_awaiting_guest_ready")
+			end
 			if rpath(MP, "LOBBY", "ready_to_start") == true and coord_ready(current) then
 				if co_send(protocol.OPS.START, {}) ~= nil then
 					start_sent = true
@@ -1213,14 +1337,18 @@ function RuntimeBootstrap.factory(ports)
 			return
 		end
 		if not start_acked then
+			note_wait("start_awaiting_ack")
 			return
 		end
 		if not start_committed then
 			if coord_ready(current) then
-				local ok = mp_driver.host_start_game()
+				local ok, start_code = mp_driver.host_start_game()
 				if ok == true then
 					start_committed = true
 					start_committed_at = current
+					note_wait("start_committed")
+				else
+					note_wait("start_commit_refused", start_code)
 				end
 			end
 			return
@@ -1278,6 +1406,116 @@ function RuntimeBootstrap.factory(ports)
 				record_error(CODE.TERMINAL_TIMEOUT)
 			end
 		end
+	end
+
+	-- Dismiss a vanilla unlock-notification overlay that is blocking a staged
+	-- role, bounded and diagnostic-only. The human's popups are dismissed only
+	-- BEFORE the match (once the human's match has started they belong to the
+	-- human), the first one only after a grace window; the AI's are always dismissed
+	-- immediately because an unattended AI can never click Continue. Returns
+	-- `blocking, stopped`: `blocking` is true when an unlock overlay is still
+	-- present after this tick's step, so an in-match AI never consumes a decision
+	-- against a frozen or flapping overlay, and `stopped` is true when a
+	-- continuously-blocking overlay passed `unlock_block_timeout` and the runtime
+	-- was cleanly stopped. Bounds: one attempt per `unlock_dismiss_interval`,
+	-- `max_unlock_dismissals` successes, `max_unlock_attempts` attempts and
+	-- `unlock_block_timeout` of continuous blocking. Never touches update_errors.
+	local function handle_unlock_overlay(current)
+		if mp_driver == nil or type(mp_driver.unlock_overlay) ~= "function" then
+			return false
+		end
+		local allowed = role == "ai"
+		if not allowed and role == "human" then
+			local started = false
+			if type(mp_driver.is_started) == "function" then
+				local ok_started, value = pcall(mp_driver.is_started)
+				started = ok_started and value == true
+			end
+			allowed = not start_committed and not started
+		end
+		if not allowed then
+			unlock_block_since = nil
+			return false
+		end
+		local overlay = mp_driver.unlock_overlay()
+		if overlay == nil then
+			unlock_block_since = nil
+			return false
+		end
+		-- L2: an attended human sees each pre-start unlock for the grace window
+		-- (the same overlay object must stay up; a replacement restarts it) until
+		-- one grace runs out unattended; from then on the rest of the chain is
+		-- dismissed like the AI's. A grace never counts toward the stuck bound
+		-- below: the clock is cleared while graced. The AI is never graced.
+		if role == "human" and not human_grace_done then
+			if not rawequal(overlay, human_unlock_overlay) then
+				human_unlock_overlay = overlay
+				human_unlock_since = current
+			end
+			if human_unlock_since == nil
+				or current - human_unlock_since < RuntimeBootstrap.LIMITS.human_unlock_grace then
+				unlock_block_since = nil
+				return true
+			end
+			human_grace_done = true
+		end
+		-- M1: every permitted, non-graced tick with an unlock overlay up counts
+		-- toward the continuous-block bound, including ticks where a cap or the
+		-- rate limit prevents an attempt, so no path can gate the AI loop
+		-- forever. It is a clean stop, exactly like the pre-start/hello timeouts.
+		if unlock_block_since == nil then
+			unlock_block_since = current
+		end
+		if current - unlock_block_since > RuntimeBootstrap.LIMITS.unlock_block_timeout then
+			record_error(CODE.UNLOCK_STUCK)
+			instance.shutdown(CODE.UNLOCK_STUCK)
+			return true, true
+		end
+		if unlock_attempts >= RuntimeBootstrap.LIMITS.max_unlock_attempts then
+			if not unlock_attempt_cap_logged then
+				unlock_attempt_cap_logged = true
+				if logger ~= nil then
+					pcall(logger.record, { event = "unlock_attempt_cap", count = unlock_attempts })
+				end
+			end
+			return true
+		end
+		if unlock_dismissals >= RuntimeBootstrap.LIMITS.max_unlock_dismissals then
+			if not unlock_cap_logged then
+				unlock_cap_logged = true
+				if logger ~= nil then
+					pcall(logger.record, { event = "unlock_dismiss_cap", count = unlock_dismissals })
+				end
+			end
+			return true
+		end
+		if last_unlock_attempt_at ~= nil
+			and current - last_unlock_attempt_at < RuntimeBootstrap.LIMITS.unlock_dismiss_interval then
+			return true
+		end
+		last_unlock_attempt_at = current
+		unlock_attempts = unlock_attempts + 1
+		local ok, code = mp_driver.dismiss_unlock_overlay()
+		if ok == true then
+			unlock_dismissals = unlock_dismissals + 1
+			if logger ~= nil then
+				pcall(logger.record, { event = "unlock_overlay_dismissed", count = unlock_dismissals })
+			end
+		elseif (code == mp_driver.CODE.MISSING_CALLBACK
+			or code == mp_driver.CODE.INTERNAL
+			or code == mp_driver.CODE.BAD_STATE)
+			and unlock_refusal_logged[code] ~= true then
+			unlock_refusal_logged[code] = true
+			if logger ~= nil then
+				pcall(logger.record, { event = "unlock_overlay_refused", code = code, count = unlock_dismissals })
+			end
+		end
+		-- A chained *new* popup still leaves an unlock overlay up.
+		local still_blocking = mp_driver.unlock_overlay() ~= nil
+		if not still_blocking then
+			unlock_block_since = nil
+		end
+		return still_blocking
 	end
 
 	function instance.is_inert()
@@ -1465,8 +1703,25 @@ function RuntimeBootstrap.factory(ports)
 			return "terminal", CODE.TERMINAL
 		end
 
+		-- A vanilla unlock popup (deck/card unlock) freezes an unattended role:
+		-- nobody clicks Continue, so the deferred main-menu event never fires and
+		-- the run can stall. Dismiss it within the staged bounds above (allowed
+		-- roles only, one attempt per interval, fixed success/attempt caps, the
+		-- human grace and a continuous-block timeout that is a clean stop). An
+		-- in-match AI then never consumes a decision against a still-present popup.
+		local unlock_blocking, unlock_stopped = false, false
+		if handshake == "acked" and mp_driver ~= nil then
+			unlock_blocking, unlock_stopped = handle_unlock_overlay(current)
+		end
+		if unlock_stopped then
+			return "stopped", CODE.UNLOCK_STUCK
+		end
+
 		if handshake == "acked" then
-			if auto_coordinate then
+			-- L1: never advance the coordinator under a popup. The pre-start
+			-- deadline below stays OUTSIDE this gate so a stuck pre-start popup
+			-- still ends in the existing clean coord timeout.
+			if auto_coordinate and not unlock_blocking then
 				advance_coordinator(current)
 			end
 			-- Overall pre-start deadline: the whole bounded coordination window
@@ -1502,7 +1757,7 @@ function RuntimeBootstrap.factory(ports)
 		elseif loop ~= nil then
 			match_running = true
 		end
-		if loop ~= nil and not loop.is_stopped() and match_running then
+		if loop ~= nil and not loop.is_stopped() and match_running and not unlock_blocking then
 			local status, loop_code = loop.update()
 			if status == "submitted" then
 				counters.decisions = counters.decisions + 1

@@ -55,6 +55,591 @@ return function(ctx)
 		return instance.update(0.016)
 	end
 
+	local function unlock_element(button)
+		return { config = { id = "overlay_menu_back_button", button = button or "continue_unlock" } }
+	end
+
+	local function metatable_overlay(element)
+		return setmetatable({}, {
+			__index = {
+				get_UIE_by_ID = function(_, id)
+					if id == "overlay_menu_back_button" then
+						return element
+					end
+					return nil
+				end,
+			},
+		})
+	end
+
+	local function mounted_menu(engine)
+		return {
+			get_UIE_by_ID = function(_, id)
+				if id == "lobby_menu_start" then
+					return engine.ready_element
+				end
+				return nil
+			end,
+		}
+	end
+
+	-- A match-9-shaped unlock popup: while it is up the main menu UI has not
+	-- mounted; the real continue_unlock clears the overlay and (I1) unpauses like
+	-- exit_overlay_menu, and the deferred main-menu event then mounts the menu.
+	-- `chain` opens the next popup instead (the chained E_MANAGER update),
+	-- `chain_count` more times when set;
+	-- `leave` never clears it (a callback that is not really dismissing);
+	-- `menu_ready` keeps the menu mounted under the popup.
+	local function install_unlock_overlay(bctx, opts)
+		opts = opts or {}
+		local engine = bctx.engine
+		local G = engine.G
+		local state = { dismissed = 0 }
+		local function build()
+			G.SETTINGS.paused = true
+			return metatable_overlay(unlock_element(opts.button))
+		end
+		G.OVERLAY_MENU = build()
+		G.MAIN_MENU_UI = opts.menu_ready and mounted_menu(engine) or nil
+		G.FUNCS.continue_unlock = function()
+			state.dismissed = state.dismissed + 1
+			if opts.leave then
+				return
+			end
+			if opts.chain and (opts.chain_count == nil or state.dismissed <= opts.chain_count) then
+				G.OVERLAY_MENU = build()
+			else
+				G.OVERLAY_MENU = nil
+				G.SETTINGS.paused = false
+				G.MAIN_MENU_UI = mounted_menu(engine)
+			end
+		end
+		return state
+	end
+
+	local function setup_ok(bctx, setup_role)
+		support.inbound(bctx, {
+			ok = true,
+			code = "practice_ok",
+			role = setup_role,
+			ruleset_id = "ruleset_mp_majorleague",
+			gamemode = "gamemode_mp_attrition",
+			-- The real service returns the full forced ruleset keyset; the host
+			-- verifies its locally recorded create keyset against it.
+			forced_options = {
+				"timer_base_seconds",
+				"timer_forgiveness",
+				"the_order",
+				"preview_disabled",
+				"enemy_location_disabled",
+				"timer_display_threshold",
+			},
+			difficulty = "competitive",
+			mode = "normal",
+			pacing = "normal",
+		})
+	end
+
+	test("human_prestart_unlock_overlay_is_dismissed_so_the_lobby_can_start", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		setup_ok(bctx, "human")
+		-- The unlock popup is up and the main menu UI has not mounted: exactly
+		-- match 9's frozen pre-start.
+		local state = install_unlock_overlay(bctx)
+		ctx.eq(bctx.engine.start_lobby_calls, 0)
+		-- L2: the human's own pre-start popup is shown for its grace window; the
+		-- gated coordinator never creates the lobby under it.
+		for _ = 1, 7 do
+			step(instance, bctx)
+		end
+		ctx.eq(state.dismissed, 0, "not dismissed inside the human grace window")
+		ctx.eq(bctx.engine.start_lobby_calls, 0)
+		for _ = 1, 2 do
+			step(instance, bctx)
+		end
+		ctx.eq(state.dismissed, 1, "the popup is dismissed once the grace passes")
+		ctx.eq(bctx.engine.start_lobby_calls, 1, "the host creates the lobby once the overlay is gone")
+		ctx.eq(bctx.engine.G.OVERLAY_MENU, nil)
+		instance.shutdown("test")
+	end)
+
+	test("human_in_match_unlock_overlay_is_left_to_the_human", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", lobby_code = "ABC12" })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		-- The human's match has started: its popups belong to the human.
+		local state = install_unlock_overlay(bctx)
+		for _ = 1, 4 do
+			step(instance, bctx)
+		end
+		ctx.eq(state.dismissed, 0)
+		ctx.is_true(bctx.engine.G.OVERLAY_MENU ~= nil)
+		instance.shutdown("test")
+	end)
+
+	test("ai_in_match_unlock_overlay_holds_the_loop_until_it_is_gone", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
+		local state = install_unlock_overlay(bctx, { chain = true })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		local _, blocked = drain_envelopes(bctx)
+		ctx.eq(blocked.decide_begin, nil, "no decision is consumed while the popup is up")
+		ctx.is_true(state.dismissed >= 1)
+		-- The popup finally clears: the loop resumes on the next tick.
+		bctx.engine.G.OVERLAY_MENU = nil
+		step(instance, bctx)
+		local _, resumed = drain_envelopes(bctx)
+		ctx.is_true(resumed.decide_begin ~= nil, "the loop resumes once the overlay is gone")
+		instance.shutdown("test")
+	end)
+
+	test("non_unlock_overlays_are_never_touched_for_either_role", function()
+		-- The human case runs PRE-START (no match yet, frozen menu) so the policy
+		-- gate allows dismissal and only the identity check refuses: a broken
+		-- identity check would now actually dismiss it.
+		local human, _, human_ctx = support.bootstrap(ctx.repo_root, { role = "human", started = false })
+		local human_state = install_unlock_overlay(human_ctx, { button = "exit_overlay_menu" })
+		local human_overlay = human_ctx.engine.G.OVERLAY_MENU
+		human.install()
+		drain_envelopes(human_ctx)
+		support.inbound(human_ctx, { ok = true, code = "practice_ok" })
+		for _ = 1, 10 do
+			step(human, human_ctx)
+		end
+		ctx.eq(human_state.dismissed, 0, "the human must not dismiss a foreign overlay")
+		ctx.is_true(rawequal(human_ctx.engine.G.OVERLAY_MENU, human_overlay))
+		ctx.eq(human_ctx.engine.start_lobby_calls, 0, "the frozen menu never creates a lobby")
+		human.shutdown("test")
+
+		-- The AI keeps a joined match; its foreign overlay is refused by identity.
+		local ai, _, ai_ctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
+		local ai_state = install_unlock_overlay(ai_ctx, { button = "exit_overlay_menu" })
+		local ai_overlay = ai_ctx.engine.G.OVERLAY_MENU
+		ai.install()
+		drain_envelopes(ai_ctx)
+		support.inbound(ai_ctx, { ok = true, code = "practice_ok" })
+		for _ = 1, 3 do
+			step(ai, ai_ctx)
+		end
+		ctx.eq(ai_state.dismissed, 0, "the ai must not dismiss a foreign overlay")
+		ctx.is_true(rawequal(ai_ctx.engine.G.OVERLAY_MENU, ai_overlay))
+		ai.shutdown("test")
+	end)
+
+	test("unlock_dismissal_is_rate_limited_and_capped", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local records = {}
+		local logger = { record = function(fields)
+			records[#records + 1] = fields
+		end }
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12", logger = logger })
+		local state = install_unlock_overlay(bctx, { chain = true })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		-- Within the interval the same popup is not re-attempted.
+		bctx.clock.advance(0.25)
+		instance.update(0.016)
+		ctx.eq(state.dismissed, 1, "at most one attempt per interval")
+		bctx.clock.advance(0.25)
+		instance.update(0.016)
+		ctx.eq(state.dismissed, 2)
+		-- Keep chaining at the minimum interval: the fixed success cap is reached
+		-- before the continuous-block bound (M1) would stop the runtime.
+		for _ = 1, 30 do
+			step(instance, bctx, 0.5)
+		end
+		ctx.eq(state.dismissed, RuntimeBootstrap.LIMITS.max_unlock_dismissals)
+		-- One more refused tick logs the cap exactly once.
+		step(instance, bctx, 0.5)
+		local caps = 0
+		for _, record in ipairs(records) do
+			if record.event == "unlock_dismiss_cap" then
+				caps = caps + 1
+			end
+		end
+		ctx.eq(caps, 1, "the cap is logged exactly once")
+		ctx.is_true(instance.state() ~= "stopped", "the cap alone never aborts the runtime")
+		instance.shutdown("test")
+	end)
+
+	test("human_unlock_grace_shows_the_popup_then_dismisses_it", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", started = false })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		local state = install_unlock_overlay(bctx)
+		-- The grace is counted from the first tick that observed this overlay.
+		step(instance, bctx)
+		bctx.clock.advance(7)
+		instance.update(0.016)
+		ctx.eq(state.dismissed, 0, "the human sees the popup for the grace window")
+		ctx.eq(bctx.engine.G.SETTINGS.paused, true)
+		-- A replacement overlay object restarts the grace.
+		bctx.engine.G.OVERLAY_MENU = metatable_overlay(unlock_element())
+		bctx.engine.G.SETTINGS.paused = true
+		local replaced = bctx.engine.G.OVERLAY_MENU
+		step(instance, bctx)
+		bctx.clock.advance(7)
+		instance.update(0.016)
+		ctx.eq(state.dismissed, 0, "a replaced overlay object restarts the grace")
+		ctx.is_true(rawequal(bctx.engine.G.OVERLAY_MENU, replaced))
+		-- Once the grace passes the popup is dismissed and the menu unpauses.
+		bctx.clock.advance(1)
+		instance.update(0.016)
+		ctx.eq(state.dismissed, 1)
+		ctx.eq(bctx.engine.G.OVERLAY_MENU, nil)
+		ctx.eq(bctx.engine.G.SETTINGS.paused, false)
+		instance.shutdown("test")
+	end)
+
+	test("ai_unlock_popup_is_dismissed_on_the_first_tick", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai" })
+		local state = install_unlock_overlay(bctx)
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		ctx.eq(state.dismissed, 1, "the ai is immediate, never graced")
+		ctx.eq(bctx.engine.G.OVERLAY_MENU, nil)
+		instance.shutdown("test")
+	end)
+
+	test("unlock_popup_gates_the_coordinator_but_not_the_prestart_deadline", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", started = false })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		setup_ok(bctx, "human")
+		-- A popup replaced every tick keeps restarting the human grace, so no
+		-- dismissal is ever permitted (and M1's clock never starts) while the
+		-- menu is already mounted: the coordinator must not step.
+		local function install_fresh()
+			bctx.engine.G.OVERLAY_MENU = metatable_overlay(unlock_element())
+			bctx.engine.G.MAIN_MENU_UI = mounted_menu(bctx.engine)
+			bctx.engine.G.SETTINGS.paused = true
+		end
+		install_fresh()
+		for _ = 1, 5 do
+			step(instance, bctx)
+			install_fresh()
+		end
+		ctx.eq(bctx.engine.start_lobby_calls, 0, "no coordinator step under the popup")
+		-- The deadline check stays outside the gate and still ends the boot.
+		bctx.clock.advance(RuntimeBootstrap.LIMITS.prestart_timeout)
+		local status, code = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(code, "boot_coord_timeout")
+		ctx.eq(instance.status().last_error, "boot_coord_timeout")
+	end)
+
+	test("unlock_overlay_that_never_clears_is_a_clean_stuck_stop", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai" })
+		local state = install_unlock_overlay(bctx, { leave = true })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		ctx.eq(state.dismissed, 1, "the first attempt is made immediately")
+		-- Just inside the bound the runtime is still alive.
+		bctx.clock.advance(19)
+		instance.update(0.016)
+		ctx.is_true(instance.state() ~= "stopped", "no stop before the bound")
+		ctx.is_true(bctx.engine.G.OVERLAY_MENU ~= nil)
+		-- Past the bound it is a clean stop, exactly like a coord timeout.
+		bctx.clock.advance(2)
+		local status, code = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(code, "unlock_overlay_stuck")
+		ctx.eq(instance.status().last_error, "unlock_overlay_stuck")
+		ctx.eq(instance.status().state, "stopped")
+	end)
+
+	test("unlock_success_cap_then_a_still_present_chain_is_a_clean_stop", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local records = {}
+		local logger = { record = function(fields)
+			records[#records + 1] = fields
+		end }
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", logger = logger })
+		local state = install_unlock_overlay(bctx, { chain = true })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		for _ = 1, 31 do
+			step(instance, bctx, 0.5)
+		end
+		ctx.eq(state.dismissed, RuntimeBootstrap.LIMITS.max_unlock_dismissals)
+		-- One more refused tick logs the success cap while the chain is still up.
+		step(instance, bctx, 0.5)
+		ctx.is_true(instance.state() ~= "stopped", "the cap alone does not stop the runtime")
+		-- The chained popup is still up: the continuous-block bound ends it.
+		bctx.clock.advance(RuntimeBootstrap.LIMITS.unlock_block_timeout)
+		local status, code = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(code, "unlock_overlay_stuck")
+		local caps = 0
+		for _, record in ipairs(records) do
+			if record.event == "unlock_dismiss_cap" then
+				caps = caps + 1
+			end
+		end
+		ctx.eq(caps, 1, "the success cap is logged exactly once")
+	end)
+
+	test("unlock_attempt_cap_bounds_failed_attempts_once", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local records = {}
+		local logger = { record = function(fields)
+			records[#records + 1] = fields
+		end }
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", logger = logger })
+		local G = bctx.engine.G
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		-- Each episode is a failed dismissal followed by a clear, so the
+		-- continuous-block clock resets every episode and never reaches its bound;
+		-- only the attempt cap limits the attempts.
+		local attempts = 0
+		G.FUNCS.continue_unlock = function()
+			attempts = attempts + 1
+		end
+		for _ = 1, 64 do
+			G.SETTINGS.paused = true
+			G.OVERLAY_MENU = metatable_overlay(unlock_element())
+			step(instance, bctx, 0.5)
+			G.OVERLAY_MENU = nil
+			step(instance, bctx, 0.5)
+		end
+		ctx.eq(attempts, RuntimeBootstrap.LIMITS.max_unlock_attempts)
+		-- The overlay is still up: the attempt cap is logged exactly once.
+		G.SETTINGS.paused = true
+		G.OVERLAY_MENU = metatable_overlay(unlock_element())
+		step(instance, bctx, 0.5)
+		local caps = 0
+		for _, record in ipairs(records) do
+			if record.event == "unlock_attempt_cap" then
+				caps = caps + 1
+			end
+		end
+		ctx.eq(caps, 1, "the attempt cap is logged exactly once")
+		ctx.is_true(instance.state() ~= "stopped", "the attempt cap never aborts the runtime")
+		instance.shutdown("test")
+	end)
+
+	-- R1: once a cap is reached no further attempt is made, yet an in-match AI
+	-- must still end in the clean stuck stop rather than a loop gated forever.
+	test("in_match_ai_after_the_attempt_cap_still_ends_in_a_stuck_stop", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		-- The cap is reached pre-start (the fixture service never answers
+		-- decisions, so a minute of in-match ticks would stop the loop itself);
+		-- the AI is then moved into the match before the final popup.
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai" })
+		local G = bctx.engine.G
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		local attempts = 0
+		G.FUNCS.continue_unlock = function()
+			attempts = attempts + 1
+		end
+		for _ = 1, RuntimeBootstrap.LIMITS.max_unlock_attempts do
+			G.OVERLAY_MENU = metatable_overlay(unlock_element())
+			step(instance, bctx, 0.5)
+			G.OVERLAY_MENU = nil
+			step(instance, bctx, 0.5)
+		end
+		ctx.eq(attempts, RuntimeBootstrap.LIMITS.max_unlock_attempts)
+		bctx.engine.set_match_code("ABC12")
+		bctx.engine.set_run()
+		-- A new popup after the cap: no attempt, but the bound still applies.
+		G.OVERLAY_MENU = metatable_overlay(unlock_element())
+		step(instance, bctx, 0.5)
+		ctx.eq(attempts, RuntimeBootstrap.LIMITS.max_unlock_attempts, "no attempt past the cap")
+		ctx.is_true(instance.state() ~= "stopped")
+		bctx.clock.advance(RuntimeBootstrap.LIMITS.unlock_block_timeout + 1)
+		local status, code = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(code, "unlock_overlay_stuck")
+	end)
+
+	test("in_match_ai_after_the_success_cap_and_a_clear_still_ends_in_a_stuck_stop", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
+		local G = bctx.engine.G
+		local state = install_unlock_overlay(bctx, { chain = true })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		for _ = 1, RuntimeBootstrap.LIMITS.max_unlock_dismissals - 1 do
+			step(instance, bctx, 0.5)
+		end
+		ctx.eq(state.dismissed, RuntimeBootstrap.LIMITS.max_unlock_dismissals)
+		-- The chain clears for one tick (the stuck clock resets), then a new popup.
+		G.OVERLAY_MENU = nil
+		step(instance, bctx, 0.5)
+		G.OVERLAY_MENU = metatable_overlay(unlock_element())
+		step(instance, bctx, 0.5)
+		ctx.eq(state.dismissed, RuntimeBootstrap.LIMITS.max_unlock_dismissals, "no dismissal past the cap")
+		ctx.is_true(instance.state() ~= "stopped")
+		bctx.clock.advance(RuntimeBootstrap.LIMITS.unlock_block_timeout + 1)
+		local status, code = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(code, "unlock_overlay_stuck")
+	end)
+
+	-- N1: a chain of pre-start unlock popups on the human is shown once (first
+	-- popup's grace) and the rest are dismissed promptly; a healthy chain never
+	-- trips the stuck bound and the lobby is created.
+	test("human_prestart_unlock_chain_is_dismissed_without_a_stuck_stop", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		setup_ok(bctx, "human")
+		local state = install_unlock_overlay(bctx, { chain = true, chain_count = 5 })
+		for _ = 1, 30 do
+			step(instance, bctx)
+		end
+		ctx.is_true(instance.state() ~= "stopped", "a healthy chain is never a stuck stop")
+		ctx.eq(state.dismissed, 6, "all six chained popups are dismissed")
+		ctx.eq(bctx.engine.G.OVERLAY_MENU, nil)
+		ctx.eq(bctx.engine.start_lobby_calls, 1, "the host creates the lobby after the chain")
+		instance.shutdown("test")
+	end)
+
+	test("human_start_committed_but_not_yet_running_keeps_its_popup", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", deferred_code = true })
+		-- Defence in depth, not an observed engine window: the real
+		-- host_start_game latches is_started() in the same call that commits the
+		-- start. Pin is_started() false so the `not start_committed` clause is
+		-- still exercised on its own and dropping it is caught here.
+		local real_driver = bctx.modules.MPDriver
+		bctx.modules.MPDriver = {
+			factory = function(ports)
+				local driver = real_driver.factory(ports)
+				driver.is_started = function()
+					return false
+				end
+				return driver
+			end,
+		}
+		bctx.engine.MP.LOBBY.ready_to_start = true
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		setup_ok(bctx, "human")
+		step(instance, bctx)
+		-- The real create is asynchronous: the code arrives later.
+		ctx.eq(bctx.engine.start_lobby_calls, 1)
+		bctx.engine.complete_lobby("ABC12")
+		for _ = 1, 12 do
+			step(instance, bctx)
+			for _, message in ipairs(support.drain_outbound(bctx)) do
+				if message.op == "start" then
+					support.inbound(bctx, { ok = true, code = "practice_ok", started = true })
+				else
+					support.inbound(bctx, { ok = true, code = "practice_ok" })
+				end
+			end
+			if instance.describe().lobby_ready then
+				break
+			end
+		end
+		ctx.is_true(instance.describe().lobby_ready, "the human start is committed")
+		local state = install_unlock_overlay(bctx)
+		for _ = 1, 10 do
+			step(instance, bctx)
+		end
+		ctx.eq(state.dismissed, 0, "a committed-but-not-running human keeps its popup")
+		ctx.is_true(bctx.engine.G.OVERLAY_MENU ~= nil)
+		instance.shutdown("test")
+	end)
+
+	test("ai_prestart_popup_blocks_ai_join_until_it_is_dismissed", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", started = false })
+		local state = install_unlock_overlay(bctx)
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		-- The AI's own popup is dismissed immediately and the deferred main-menu
+		-- UI mounts, so the coordinator can join on later ticks.
+		ctx.eq(state.dismissed, 1)
+		ctx.is_true(bctx.engine.G.MAIN_MENU_UI ~= nil)
+		for _ = 1, 6 do
+			step(instance, bctx)
+			for _, message in ipairs(support.drain_outbound(bctx)) do
+				if message.op == "setup" then
+					setup_ok(bctx, "ai")
+				elseif message.op == "join_code" then
+					support.inbound(bctx, { ok = true, code = "practice_ok", lobby_code = "ABC12" })
+				else
+					support.inbound(bctx, { ok = true, code = "practice_ok" })
+				end
+			end
+		end
+		ctx.eq(instance.lobby_code(), "ABC12", "ai_join runs once the popup is gone")
+		instance.shutdown("test")
+	end)
+
+	test("unlock_dismissal_logs_allowlisted_fields_only", function()
+		local Logger = support.mod(ctx.repo_root, "AISparring/src/logger.lua")
+		local records = {}
+		local logger = { record = function(fields)
+			records[#records + 1] = fields
+		end }
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12", logger = logger })
+		install_unlock_overlay(bctx)
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		-- A fresh popup with the callback gone: the refusal is logged once.
+		bctx.engine.G.OVERLAY_MENU = metatable_overlay(unlock_element())
+		bctx.engine.G.FUNCS.continue_unlock = nil
+		step(instance, bctx)
+		step(instance, bctx)
+		local dismissals, refusals = 0, 0
+		for _, record in ipairs(records) do
+			if record.event == "unlock_overlay_dismissed"
+				or record.event == "unlock_overlay_refused"
+				or record.event == "unlock_dismiss_cap" then
+				for key in pairs(record) do
+					ctx.is_true(Logger.is_allowed_field(key), "non-allowlisted log field: " .. tostring(key))
+				end
+				if record.event == "unlock_overlay_dismissed" then
+					dismissals = dismissals + 1
+				end
+				if record.event == "unlock_overlay_refused" then
+					refusals = refusals + 1
+				end
+			end
+		end
+		ctx.is_true(dismissals >= 1)
+		ctx.eq(refusals, 1, "a refusal is logged once per distinct code")
+		instance.shutdown("test")
+	end)
+
 	test("human_install_sends_hello_and_never_activates", function()
 		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
 		local installed = instance.install()
@@ -407,6 +992,62 @@ return function(ctx)
 		ctx.is_true(by_op.lobby_code ~= nil)
 		ctx.eq(by_op.lobby_code.observation.lobby_code, "ABC12")
 		ctx.eq(bctx.engine.start_lobby_calls, 1)
+		instance.shutdown("test")
+	end)
+
+	test("coordinator_logs_why_the_host_is_waiting_once_per_change", function()
+		local records = {}
+		local logger = { record = function(fields)
+			records[#records + 1] = fields
+		end }
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", deferred_code = true, logger = logger })
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		support.inbound(bctx, {
+			ok = true,
+			code = "practice_ok",
+			role = "human",
+			ruleset_id = "ruleset_mp_majorleague",
+			gamemode = "gamemode_mp_attrition",
+			forced_options = { "timer_base_seconds" },
+			difficulty = "competitive",
+			mode = "normal",
+			pacing = "normal",
+		})
+		-- Not on the real main menu yet: the wait reason and engine enums are logged.
+		bctx.engine.set_run()
+		for _ = 1, 3 do
+			step(instance, bctx)
+		end
+		local function waits(code)
+			local found = {}
+			for i = 1, #records do
+				if records[i].event == "coordinator_wait" and records[i].code == code then
+					found[#found + 1] = records[i]
+				end
+			end
+			return found
+		end
+		local menu = waits("menu_not_ready")
+		ctx.eq(#menu, 1, "logged once per change, not every tick")
+		ctx.is_true(type(menu[1].detail) == "string" and menu[1].detail:find("st=", 1, true) ~= nil)
+		ctx.eq(bctx.engine.start_lobby_calls, 0)
+		-- The menu becomes ready: the host creates and then waits for the server code.
+		bctx.engine.set_main_menu()
+		for _ = 1, 3 do
+			step(instance, bctx)
+		end
+		ctx.eq(bctx.engine.start_lobby_calls, 1)
+		ctx.eq(#waits("lobby_code_awaiting_server"), 1)
+		for i = 1, #records do
+			if records[i].event == "coordinator_wait" then
+				for key in pairs(records[i]) do
+					ctx.is_true(key == "event" or key == "code" or key == "detail", "bounded fields only: " .. tostring(key))
+				end
+			end
+		end
 		instance.shutdown("test")
 	end)
 

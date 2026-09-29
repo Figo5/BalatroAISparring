@@ -1831,15 +1831,21 @@ function CompanionHost.install_update(game, update_fn, options)
 		max_errors = LIMITS.max_update_errors
 	end
 	local on_failure = rawget(options, "on_failure")
+	-- Diagnostic only: told about each swallowed update error (count + bounded
+	-- message) so a stalled staged role is explainable from its own log.
+	local on_error = rawget(options, "on_error")
 	local errors = 0
 	local active = true
 	local wrapper
 	wrapper = function(self, dt)
 		local r1, r2 = original(self, dt)
 		if active then
-			local ok = pcall(update_fn, dt)
+			local ok, err = pcall(update_fn, dt)
 			if not ok then
 				errors = errors + 1
+				if type(on_error) == "function" then
+					pcall(on_error, errors, err)
+				end
 				if errors >= max_errors then
 					active = false
 					if type(on_failure) == "function" then

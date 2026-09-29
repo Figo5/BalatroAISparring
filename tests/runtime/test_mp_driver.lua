@@ -441,6 +441,124 @@ return function(ctx)
 		ctx.eq(driver.main_menu_ready(), false, "the menu UI handle is required")
 	end)
 
+	local function unlock_element(button)
+		return { config = { id = "overlay_menu_back_button", button = button or "continue_unlock" } }
+	end
+
+	-- A real UIBox-shaped overlay: get_UIE_by_ID exists ONLY through the class
+	-- metatable (never a raw field), exactly like the pinned UIBox class. A
+	-- rawget-only implementation cannot resolve the back element.
+	local function metatable_overlay(element)
+		return setmetatable({}, {
+			__index = {
+				get_UIE_by_ID = function(_, id)
+					if id == "overlay_menu_back_button" then
+						return element
+					end
+					return nil
+				end,
+			},
+		})
+	end
+
+	test("unlock_overlay_resolves_the_metatable_back_element_and_dismisses_it", function()
+		local MP, funcs = fake_engine()
+		local element = unlock_element()
+		local overlay = metatable_overlay(element)
+		local G = { OVERLAY_MENU = overlay }
+		local dismissed, seen = 0, nil
+		funcs.continue_unlock = function(e)
+			dismissed = dismissed + 1
+			seen = e
+			G.OVERLAY_MENU = nil
+		end
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G })
+		ctx.eq(rawget(overlay, "get_UIE_by_ID"), nil, "the method lives only on the metatable")
+		ctx.is_true(rawequal(driver.unlock_overlay(), element))
+		local ok, code = driver.dismiss_unlock_overlay()
+		ctx.is_true(ok)
+		ctx.eq(code, "driver_ok")
+		ctx.eq(dismissed, 1)
+		ctx.is_true(rawequal(seen, element), "the real element is passed to continue_unlock")
+		ctx.eq(G.OVERLAY_MENU, nil)
+	end)
+
+	test("unlock_overlay_ignores_foreign_overlays", function()
+		local MP, funcs = fake_engine()
+		local called = 0
+		funcs.continue_unlock = function() called = called + 1 end
+		-- Real generic-options back button: never the unlock callback.
+		local options = metatable_overlay(unlock_element("exit_overlay_menu"))
+		local G = { OVERLAY_MENU = options }
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, G = G })
+		ctx.eq(driver.unlock_overlay(), nil)
+		local ok, code = driver.dismiss_unlock_overlay()
+		ctx.eq(ok, false)
+		ctx.eq(code, "driver_no_unlock_overlay")
+		ctx.eq(called, 0)
+		ctx.is_true(rawequal(G.OVERLAY_MENU, options))
+		-- A Multiplayer-style overlay: unrelated back button, never matched.
+		G.OVERLAY_MENU = metatable_overlay(unlock_element("mp_overlay_back"))
+		ctx.eq(driver.unlock_overlay(), nil)
+		driver.dismiss_unlock_overlay()
+		ctx.eq(called, 0)
+		-- A Multiplayer error overlay box with no matching back element.
+		G.OVERLAY_MENU = setmetatable({}, { __index = { get_UIE_by_ID = function() return nil end } })
+		ctx.eq(driver.unlock_overlay(), nil)
+		local refused, refused_code = driver.dismiss_unlock_overlay()
+		ctx.eq(refused, false)
+		ctx.eq(refused_code, "driver_no_unlock_overlay")
+	end)
+
+	test("dismiss_unlock_overlay_refuses_cleanly_without_an_overlay", function()
+		local MP, funcs = fake_engine()
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, G = {} })
+		local ok, code = driver.dismiss_unlock_overlay()
+		ctx.eq(ok, false)
+		ctx.eq(code, "driver_no_unlock_overlay")
+	end)
+
+	test("dismiss_unlock_overlay_reports_a_missing_and_a_throwing_callback", function()
+		local MP, funcs = fake_engine()
+		local G = { OVERLAY_MENU = metatable_overlay(unlock_element()) }
+		funcs.continue_unlock = nil
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, G = G })
+		local ok, code = driver.dismiss_unlock_overlay()
+		ctx.eq(ok, false)
+		ctx.eq(code, "driver_missing_callback")
+		ctx.is_true(G.OVERLAY_MENU ~= nil)
+		funcs.continue_unlock = function() error("boom") end
+		local raised_ok, raised_code = driver.dismiss_unlock_overlay()
+		ctx.eq(raised_ok, false)
+		ctx.eq(raised_code, "driver_internal_error")
+		ctx.is_true(G.OVERLAY_MENU ~= nil)
+	end)
+
+	test("dismiss_unlock_overlay_reports_bad_state_when_the_overlay_stays", function()
+		local MP, funcs = fake_engine()
+		local overlay = metatable_overlay(unlock_element())
+		local G = { OVERLAY_MENU = overlay }
+		funcs.continue_unlock = function() end
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, G = G })
+		local ok, code = driver.dismiss_unlock_overlay()
+		ctx.eq(ok, false)
+		ctx.eq(code, "driver_bad_state")
+		ctx.is_true(rawequal(G.OVERLAY_MENU, overlay))
+	end)
+
+	test("dismiss_unlock_overlay_accepts_a_chained_next_overlay", function()
+		local MP, funcs = fake_engine()
+		local first = metatable_overlay(unlock_element())
+		local second = metatable_overlay(unlock_element())
+		local G = { OVERLAY_MENU = first }
+		funcs.continue_unlock = function() G.OVERLAY_MENU = second end
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G })
+		local ok, code = driver.dismiss_unlock_overlay()
+		ctx.is_true(ok)
+		ctx.eq(code, "driver_ok")
+		ctx.is_true(rawequal(G.OVERLAY_MENU, second))
+	end)
+
 	test("host_start_failure_after_create_is_fatal_not_rearmed", function()
 		local MP, funcs, calls = fake_engine()
 		-- The lobby is created but the real options are never forced.
