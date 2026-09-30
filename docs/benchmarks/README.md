@@ -84,7 +84,7 @@ runtime:
 | Family | What it adds | What is trustworthy |
 |---|---|---|
 | `large_hand` | 9–12 card hands (Juggler, Paint Brush, Turtle Bean), 2–5 Jokers | reliability and budget; agreement stays within the shared model |
-| `scaling` | one scaling Joker (Ride the Bus, Green Joker, Obelisk, Hologram, …) | reliability only: both sides treat it as no effect |
+| `scaling` | one scaling Joker (Ride the Bus, Green Joker, Obelisk, Hologram, …); those with a shown value (docs/SCALING_VALUES_DESIGN.md) get a random current value | agreement for Jokers with a shown value, where both sides apply it with vanilla's before-scoring growth; reliability only for the rest (Supernova, Obelisk), which both sides treat as no effect |
 | `rule` | one rule-changing Joker (Four Fingers, Shortcut, Smeared, Splash, Pareidolia) | reliability only: the policy falls back to category ranking and the reference ignores the rule |
 | `boss` | a boss blind key; suit bosses and The Plant debuff their cards | reliability only: rule-changing boss effects are not modelled |
 
@@ -93,12 +93,16 @@ runtime:
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
 | failures / illegal | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| max sandbox instructions (budget 2,000,000) | 161k | 752k | 750k | 898k |
-| mean / p95 latency, LuaJIT | 13 / 22 ms | 15 / 25 ms | 15 / 25 ms | 16 / 28 ms |
+| max sandbox instructions (budget 2,000,000) | 161k | 808k | 832k | 925k |
+| mean / p95 latency, LuaJIT | 13 / 20 ms | 14 / 24 ms | 14 / 25 ms | 15 / 26 ms |
 
-The `boss` and `scaling` families still show about 100% agreement. That is
-exactly the shared blind spot: neither side models those effects, so this
-agreement means nothing about play quality there.
+The `boss` family still shows about 100% agreement. That is exactly the shared
+blind spot: neither side models those effects, so this agreement means nothing
+about play quality there. In the `scaling` family both sides now apply shown
+values. With the policy's shown-value lookup switched off, Competitive's
+agreement there falls from 100% to 96.9% and Expert's to 96.4%. So the
+family does exercise the feature, but only as a consistency check against the
+same model.
 
 ## Blind simulator (`tests/benchmark_blinds.py`)
 
