@@ -128,4 +128,16 @@ return function(ctx)
 			end
 		end
 	end)
+
+	test("ungrown_scaling_joker_can_still_be_upgraded", function()
+		local frame = Support.full_slot_upgrade_frame()
+		frame.shop.items[1].center = "j_hologram"
+		frame.self.jokers[1].center = "j_hologram"
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			frame.self.jokers[1].current = { kind = "xmult", value = 100 }
+			ctx.eq(Support.run(env, difficulty, frame).action.type, "SELL_JOKER", difficulty .. " at x1")
+			frame.self.jokers[1].current = { kind = "xmult", value = 125 }
+			ctx.neq(Support.run(env, difficulty, frame).action.type, "SELL_JOKER", difficulty .. " at x1.25")
+		end
+	end)
 end

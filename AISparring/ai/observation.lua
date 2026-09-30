@@ -306,6 +306,35 @@ local function read_fields(t, spec)
 	return nil, out
 end
 
+-- Owned scaling Joker value (docs/SCALING_VALUES_DESIGN.md): exactly
+-- { kind, value, step? }; xmult in hundredths.
+local CURRENT_RANGE = { mult = { 0, 100000 }, chips = { 0, 100000 }, xmult = { 100, 1000000 } }
+
+local function read_current(t)
+	if not is_plain_table(t) then
+		return nil
+	end
+	for key in next, t do
+		if key ~= "kind" and key ~= "value" and key ~= "step" then
+			return nil
+		end
+	end
+	local kind = rawget(t, "kind")
+	local range = type(kind) == "string" and CURRENT_RANGE[kind] or nil
+	if range == nil then
+		return nil
+	end
+	local code, value = read_int(t, "value", range[1], range[2])
+	if code ~= nil or value == nil then
+		return nil
+	end
+	local step_code, step = read_int(t, "step", 0, 100000)
+	if step_code ~= nil then
+		return nil
+	end
+	return { kind = kind, value = value, step = step }
+end
+
 local function convert_entity(kind, zone, add_ref)
 	return function(item, ordinal)
 		if not is_plain_table(item) then
@@ -343,6 +372,13 @@ local function convert_entity(kind, zone, add_ref)
 			if value ~= nil then
 				out[name] = value
 			end
+		end
+		if kind == "joker" and rawget(item, "current") ~= nil then
+			local current = read_current(rawget(item, "current"))
+			if current == nil then
+				return CODE.BAD_ENTITY
+			end
+			out.current = current
 		end
 		return nil, out
 	end

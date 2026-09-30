@@ -201,6 +201,8 @@ local MIN_CARDS = 0
 -- type but those played. nil when no such boss is active.
 local EYE_PLAYED = nil
 local MOUTH_ONLY = nil
+-- Effects derived from owned scaling Jokers' shown values, per decision.
+local CURRENT_EFF = {}
 
 local function blocked_hand(name)
 	if EYE_PLAYED ~= nil and EYE_PLAYED[name] then
@@ -601,6 +603,31 @@ local SCALING = {
 	j_wee = { "chips", 24 }, j_castle = { "chips", 30 }, j_square = { "chips", 8 },
 	j_hologram = { "xmult", 1.15 }, j_constellation = { "xmult", 1.3 },
 }
+-- Owned scaling Jokers use the value their card shows (`current`, from the
+-- trusted pipeline; xmult in hundredths). These also grow while the hand
+-- scores, before Jokers apply: Ride the Bus resets on a scoring face card.
+local GROW = {
+	j_ride_the_bus = "ride", j_green_joker = "each", j_trousers = "two_pair", j_runner = "straight",
+	j_square = "four_cards", j_wee = "twos",
+}
+
+local function effect_of(j)
+	local e = JOKER_EFFECTS[j.center] or (j.offered and j.proxy)
+	if e then
+		return e
+	end
+	local c = j.current
+	if type(c) ~= "table" then
+		return nil
+	end
+	e = CURRENT_EFF[j]
+	if e == nil then
+		e = { c.kind, c.kind == "xmult" and c.value / 100 or c.value, nil, GROW[j.center], c.step or 0 }
+		CURRENT_EFF[j] = e
+	end
+	return e
+end
+
 -- Joker kinds that score face cards: they reset Ride the Bus.
 local FACE_KINDS = { face_chips = true, face_mult = true, photo = true, kq_xmult = true }
 
@@ -662,7 +689,7 @@ local function estimate_score(played, held, jokers)
 				joker_count = joker_count + 1
 			end
 			if type(j) == "table" and j.debuff ~= true then
-				local e = JOKER_EFFECTS[j.center] or (j.offered and j.proxy) or nil
+				local e = effect_of(j)
 				if e ~= nil then
 					effects[#effects + 1] = { e = e, edition = j.edition }
 				else
@@ -671,6 +698,7 @@ local function estimate_score(played, held, jokers)
 			end
 		end
 	end
+	local face_scored, twos = false, 0
 	-- Photograph: x2 whenever the first scoring face card scores (each retrigger).
 	local photo_index = nil
 	for i = 1, #played do
@@ -689,6 +717,11 @@ local function estimate_score(played, held, jokers)
 				rv = rank_value(c.rank)
 			end
 			local sk = suit_key(c.suit)
+			if rv == 2 then
+				twos = twos + reps
+			elseif rv ~= nil and rv >= 11 and rv <= 13 then
+				face_scored = true
+			end
 			for _ = 1, reps do
 				if rv ~= nil then
 					chips = chips + card_chip_value(rv)
@@ -782,12 +815,24 @@ local function estimate_score(played, held, jokers)
 		end
 		if e then
 			local kind = e[1]
-			if kind == "mult" then
-				mult = mult + e[2]
-			elseif kind == "chips" then
-				chips = chips + e[2]
-			elseif kind == "xmult" then
-				mult = mult * e[2]
+			if kind == "mult" or kind == "chips" or kind == "xmult" then
+				local v = e[2]
+				local r = e[4]
+				if r == "ride" then
+					v = face_scored and 0 or v + e[5]
+				elseif r == "twos" then
+					v = v + e[5] * twos
+				elseif r == "each" or (r == "two_pair" and CONTAINS.two_pair[name]) or (r == "straight" and CONTAINS.straight[name])
+					or (r == "four_cards" and #played == 4) then
+					v = v + e[5]
+				end
+				if kind == "mult" then
+					mult = mult + v
+				elseif kind == "chips" then
+					chips = chips + v
+				else
+					mult = mult * v
+				end
 			elseif kind == "hand_mult" and CONTAINS[e[3]][name] then
 				mult = mult + e[2]
 			elseif kind == "hand_chips" and CONTAINS[e[3]][name] then
@@ -1662,7 +1707,7 @@ local function joker_gain(observation, center, edition)
 	local slot = #owned + 1
 	local movable = e ~= nil and #owned + 1 <= REORDER_EST_MAX_JOKERS and not PINNED[center]
 	for i = 1, #owned do
-		if JOKER_EFFECTS[owned[i].center] == nil or joker_pinned(owned[i]) then
+		if effect_of(owned[i]) == nil or joker_pinned(owned[i]) then
 			movable = false
 		end
 	end
@@ -1671,7 +1716,7 @@ local function joker_gain(observation, center, edition)
 		-- offers adjacent swaps, and each of those swaps is a clear gain, while
 		-- a neutral Joker in between would stop the move.
 		for i = #owned, 1, -1 do
-			local o = JOKER_EFFECTS[owned[i].center]
+			local o = effect_of(owned[i])
 			if owned[i].edition == "polychrome" or (o ~= nil and MULTIPLICATIVE[o[1]]) then
 				slot = i
 			else
@@ -2342,7 +2387,7 @@ local function reorder_score(observation, action)
 		local reordered = {}
 		for i = 1, n do
 			local joker = jokers[i]
-			if RULE_JOKERS[joker.center] or JOKER_EFFECTS[joker.center] == nil or pinned[i] then
+			if RULE_JOKERS[joker.center] or effect_of(joker) == nil or pinned[i] then
 				known = false
 			end
 			reordered[i] = find_by_id(jokers, order[i])
@@ -2389,7 +2434,8 @@ local function reorder_score(observation, action)
 	return CONF.reorder + gain
 end
 
--- Jokers whose built-up value a sale resets: never sold for a fresh copy.
+-- Jokers whose built-up value a sale resets: never sold for a fresh copy
+-- unless their shown value is still the base.
 local GROWS = {
 	j_ride_the_bus = true, j_green_joker = true, j_trousers = true, j_hologram = true, j_constellation = true,
 	j_obelisk = true, j_yorick = true, j_campfire = true, j_glass = true, j_madness = true, j_loyalty_card = true,
@@ -2465,7 +2511,9 @@ local function sell_score(observation, action)
 		return nil
 	end
 	local center = owned.center
-	if not recognized_joker(center) or GROWS[center] then
+	local c = owned.current
+	-- A grown one (or one whose value is not shown) keeps its value.
+	if not recognized_joker(center) or (GROWS[center] and not (type(c) == "table" and c.value <= (c.kind == "xmult" and 100 or 0))) then
 		return nil
 	end
 	local spend = spendable(observation)
@@ -2592,6 +2640,7 @@ return function(observation, actions)
 	MIN_CARDS = 0
 	EYE_PLAYED = nil
 	MOUTH_ONLY = nil
+	CURRENT_EFF = {}
 	local match = observation.match
 	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
 	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and type(levels) == "table"

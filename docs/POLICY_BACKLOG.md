@@ -27,9 +27,10 @@ Constraints on all of it:
 - **Fixed:** the slot-pressure sale could sell a grown scaling Joker (for
   example a ×2.5 Hologram) to buy a fresh editioned copy, resetting it.
   `GROWS` Jokers are never sold that way.
-- **Next:** use the
-  displayed current value of owned scaling Jokers if the adapter can export
-  it as UI-visible card text (needs a boundary review).
+- **Done:** owned scaling Jokers use their shown current value, with vanilla's
+  before-scoring growth (docs/SCALING_VALUES_DESIGN.md, architecture-reviewed).
+  `GROWS` sales are allowed again when the shown value is still the base.
+  Re-certification is required.
 
 ## Harder benchmarks and Gauntlet metrics (in progress)
 
@@ -71,8 +72,8 @@ Constraints on all of it:
   - The Psychic: a play of fewer than five cards is estimated at 0 (paired
     A/B +0.7% overall);
   - The Eye and The Mouth (paired A/B +0.7% / +0.4% overall).
-- **Source size:** 50.5 KB after the render-time space squeeze: about 7 KB
-  under `SOURCE_GUARD` and 15 KB under the hard cap.
+- **Source size:** 51.4 KB after the render-time space squeeze: about 6 KB
+  under `SOURCE_GUARD` and 14 KB under the hard cap.
 - **Open (review Lows):**
   - ~~the adapter offers few five-card plays under The Psychic~~: fixed with
     padded rank groups and two pair (Psychic clears 68% → 74–84% on 19

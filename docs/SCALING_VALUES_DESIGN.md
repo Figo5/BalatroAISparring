@@ -1,6 +1,34 @@
 # Design: current values of owned scaling Jokers
 
-Status: **proposed**, awaiting architecture review.
+Status: **implemented.** The architecture review approved it with changes,
+all applied:
+
+- **Critical:** the codec accepts integers only, so ×Mult values are sent in
+  hundredths (`value` 100..1,000,000 for `xmult`). A fractional engine value
+  is rounded the same way in the adapter and in the reader.
+- **High:**
+  - several values change in the hand's "before" step, before Jokers score.
+    The policy models that growth, and in particular Ride the Bus resetting
+    to 0 when a face card scores. The per-hand step is exported (`step`),
+    because rulesets can change it. Obelisk is dropped, because its reset
+    depends on lifetime hand counts;
+  - one helper, `effect_of`, gives the effect of an owned or offered Joker to
+    the estimate, `joker_gain` and the estimate-based reorder.
+- **Medium:**
+  - the reader takes the allowlist row from the engine card's own center and
+    compares `kind`, `value` and `step` with the engine fields; anything else
+    is `reader_bad_view`;
+  - the observation reads `current` with a dedicated nested reader, and a bad
+    value is `observation_invalid_entity`;
+  - the `joker_gain` tests were corrected (see below).
+- **Low:**
+  - the decision signature needs no change: `current` is part of the view,
+    so the epoch moves with it;
+  - the out-of-scope reasons are corrected.
+
+Re-certification is required: the adapter, reader, observation and policy
+all changed. `schema_version` stays 1.
+
 
 ## Why
 
@@ -29,67 +57,84 @@ number stay out.
 
 ## Change
 
-1. **Adapter** (`engine_adapter.lua`, `build_joker`): for a face-up owned Joker
-   whose center is in a fixed allowlist, export
-   `current = { kind = <"mult"|"chips"|"xmult">, value = <number> }`, read
-   from the one engine field the card text displays:
+1. **Adapter** (`engine_adapter.lua`, `build_joker`): for a face-up owned
+   Joker whose center is in a fixed allowlist, export
+   `current = { kind, value, step? }`, with `shown.current = true`:
 
-   | Center | Kind | Engine field |
-   |---|---|---|
-   | `j_green_joker`, `j_ride_the_bus`, `j_trousers`, `j_flash` | mult | `ability.mult` |
-   | `j_runner`, `j_wee`, `j_castle`, `j_square` | chips | `ability.extra.chips` |
-   | `j_hologram`, `j_constellation`, `j_obelisk`, `j_campfire`, `j_glass`, `j_madness`, `j_lucky_cat` | xmult | `ability.x_mult` |
+   | Center | Kind | Value field | Step field (per hand) |
+   |---|---|---|---|
+   | `j_green_joker` | mult | `ability.mult` | `ability.extra.hand_add` |
+   | `j_ride_the_bus` | mult | `ability.mult` | `ability.extra` |
+   | `j_trousers` | mult | `ability.mult` | `ability.extra` |
+   | `j_flash`, `j_red_card`, `j_ceremonial` | mult | `ability.mult` | none |
+   | `j_runner`, `j_square`, `j_wee` | chips | `ability.extra.chips` | `ability.extra.chip_mod` |
+   | `j_castle` | chips | `ability.extra.chips` | none |
+   | `j_hologram`, `j_constellation`, `j_campfire`, `j_glass`, `j_madness`, `j_lucky_cat` | xmult | `ability.x_mult` ×100, rounded | none |
 
-   It is fail-soft: `current` is omitted when the field is missing, not a
-   finite number, or out of range (mult and chips: integers 0..100000; xmult:
-   1..10000). The `shown` attestation for jokers gains `current`. Shop items
-   never carry it.
-2. **Reader** (`state_reader.lua`): copy `current` only for an allowlisted
-   center, with `kind` matching that center's row. It must also be a finite
-   number in range and, like the adapter's, equal to the engine's own field
-   (as `blind_disabled` does). Anything else is `reader_bad_view`.
-3. **Observation** (`observation.lua`): an optional `current` table on owned
-   Jokers (`kind` enum, `value` number). `schema_version` stays 1 (an
-   additive optional field). Update `docs/AI_OBSERVATION.md`,
-   `docs/STATE_READER.md` and `docs/ENGINE_ADAPTER.md` together.
-4. **Policy:** in `estimate_score`, an owned Joker with no `JOKER_EFFECTS`
-   entry uses `{ current.kind, current.value }` as its effect. Flat `mult`,
-   `chips` and `xmult` are already handled. Consequences:
-   - the play estimate and the blind-requirement check see the real value;
-   - `joker_gain` prices new Jokers against the real row;
-   - estimate-based reordering places an owned scaling ×Mult correctly;
-   - `GROWS` (never sold for a fresh copy) stays as it is.
-
-   Castle's suit and Lucky Cat's triggers are not modelled beyond the
-   displayed value. The value is what the card shows, and it applies to
-   every hand.
+   - `mult` and `chips` values are integers 0..100000.
+   - `xmult` values are integers 100..1000000.
+   - `step` is an integer 0..100000.
+   - The adapter is fail-soft: `current` is omitted when a field is missing,
+     non-finite, fractional (for `mult` and `chips`) or out of range. Shop
+     items, booster cards and redacted Jokers never carry it.
+2. **Reader** (`state_reader.lua`): for a joker record with
+   `shown.current == true` and a `current` table, look up the row by the
+   **engine card's** `config.center.key`. Recompute the expected
+   `{kind, value, step}` from the engine fields, with the same rounding, and
+   copy `current` only if it matches exactly. Otherwise (an unlisted center,
+   a mismatch, a bad shape) the result is `reader_bad_view`.
+3. **Observation** (`observation.lua`): an optional `current` on joker
+   entities. `kind` is one of `mult`, `chips`, `xmult`; `value` and `step`
+   are integers in the ranges above; no other keys. Anything else is
+   `observation_invalid_entity`. `schema_version` stays 1 (an additive
+   optional field).
+4. **Policy:**
+   - `effect_of(j)` returns `JOKER_EFFECTS[center]`, then the offered proxy,
+     then an effect derived from `current` (×Mult divided by 100);
+   - `estimate_score` applies the before-step growth:
+     - **Ride the Bus:** 0 if a scoring, non-debuffed face card is played,
+       otherwise value + step;
+     - **Green Joker:** value + step;
+     - **Spare Trousers:** + step if the hand contains Two Pair;
+     - **Runner:** + step if the hand contains a Straight;
+     - **Square Joker:** + step if exactly four cards are played;
+     - **Wee Joker:** + step for each scoring 2, retriggers included;
+   - `joker_gain` placement and `reorder_score` use `effect_of`, so an owned
+     grown ×Mult Joker counts as ×Mult and a grown +Mult one as additive;
+   - Lucky Cat, Flash Card, Castle and the other Jokers without a step use
+     the shown value (they grow from other events).
 
 ## Tests
 
-- **Adapter fixture:** each kind is exported from its field. A missing,
-  non-finite or out-of-range value, an unlisted center and a face-down Joker
-  export nothing.
-- **Reader:** a kind mismatch, an unlisted center, a mismatch with the engine
-  field and an out-of-range value are each `reader_bad_view`.
-- **Observation:** a bad `kind` or `value` is `observation_invalid_field`.
+- **Adapter:** each kind is exported from its fields, and ×Mult is rounded
+  to hundredths (1.25 → 125; 1.7000000000000004 → 170). A missing,
+  non-finite or out-of-range value, an unlisted center, a face-down Joker and
+  a shop item export nothing. The codec encodes the view.
+- **Reader:**
+  - a kind, value or step mismatch with the engine is `reader_bad_view`;
+  - so is an unlisted engine center;
+  - without `shown.current` the value is not copied.
+- **Observation:** a bad `kind`, `value`, `step` or an extra key is
+  `observation_invalid_entity`.
 - **Policy:**
-  - a Green Joker at +30 Mult makes a pair clear a requirement that it
-    would miss without the Joker;
-  - an owned ×3 Hologram lowers `joker_gain` for a new ×Mult Joker compared
-    with a ×1 Hologram;
+  - Green Joker at +30 Mult makes a pair clear a requirement it would
+    otherwise miss;
+  - Green Joker at +30 lowers the gain of a new +Mult Joker;
+  - an owned ×3 Hologram puts a new additive Joker before it;
+  - Ride the Bus scores +0 with a face card;
+  - a debuffed scaling Joker contributes nothing;
   - estimates are unchanged when `current` is absent.
-- **Budget:** `test_budget.lua` cases with scaling Jokers stay within limits
-  (there is no new search).
-- **Benchmarks:** the `scaling` stress family can give owned scaling Jokers a
-  `current` value in both the policy's input and the reference scorer.
+- **Budget:** existing budget cases pass (there is no new search).
 - **Isolation certificate / cross-service:** re-run and re-certify.
 
 ## Out of scope
 
+- Obelisk: its reset depends on lifetime hand counts, which are not
+  exported.
 - Throwback: its value comes from the run's skip count, not a card field.
 - Supernova: it depends on per-hand lifetime counts.
 - Loyalty Card: a countdown, not a value.
-- Ramen, Ice Cream, Popcorn: decaying values could follow later with the same
-  mechanism.
-- Swashbuckler, Ceremonial Dagger, Red Card: they grow from actions the
-  policy does not take.
+- Yorick, Hit the Road, Ramen, Ice Cream, Popcorn and Swashbuckler could
+  follow later with the same mechanism.
+- Before-step growth of offered copies is not modelled: they keep the
+  `SCALING` proxy.

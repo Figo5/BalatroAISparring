@@ -195,8 +195,34 @@ def classify(cards):
     return "high_card", stones
 
 
-def reference_score(played, held, jokers, levels=None):
-    """Expected score of playing ``played`` with ``held`` left in hand."""
+# Owned scaling Jokers (docs/SCALING_VALUES_DESIGN.md): vanilla grows these in
+# the hand's "before" step (Wee Joker: per scoring 2), before Jokers score.
+SCALED_GROWTH = {
+    "j_ride_the_bus": "ride", "j_green_joker": "each", "j_trousers": "two_pair",
+    "j_runner": "straight", "j_square": "four_cards", "j_wee": "twos",
+}
+
+
+def scaled_value(key, kind, value, step, hand, played, face, twos):
+    rule = SCALED_GROWTH.get(key)
+    if rule == "ride":
+        return 0 if face else value + step
+    if rule == "twos":
+        return value + step * twos
+    if (rule == "each" or (rule == "two_pair" and hand in CONTAINS["two_pair"])
+            or (rule == "straight" and hand in CONTAINS["straight"])
+            or (rule == "four_cards" and len(played) == 4)):
+        return value + step
+    return value
+
+
+def reference_score(played, held, jokers, levels=None, scaled=None):
+    """Expected score of playing ``played`` with ``held`` left in hand.
+
+    ``scaled`` maps an owned scaling Joker key to (kind, value, step), with
+    ``xmult`` as a real multiplier.
+    """
+    scaled = scaled or {}
     hand, scoring = classify(played)
     chips, mult = HAND_BASE[hand]
     if levels and hand in levels:
@@ -212,11 +238,15 @@ def reference_score(played, held, jokers, levels=None):
         ):
             photo_index = index
             break
+    face, twos = False, 0
     for index in sorted(scoring):
         card = played[index]
         if card.get("debuff"):
             continue
         repeats = 2 if card.get("seal") == "Red" else 1
+        if card.get("center") != "m_stone":
+            face = face or card["rank"] in ("Jack", "Queen", "King")
+            twos += repeats if card["rank"] == "2" else 0
         for _ in range(repeats):
             chips += card_chips(card)
             center = card.get("center")
@@ -241,6 +271,8 @@ def reference_score(played, held, jokers, levels=None):
             rank = card.get("rank") if center != "m_stone" else None
             is_face = rank in ("Jack", "Queen", "King")
             for key in jokers:
+                if key in scaled:
+                    continue
                 effect, value, condition = JOKERS[key]
                 if effect == "suit_mult" and rank is not None and (card["suit"] == condition or center == "m_wild"):
                     mult += value
@@ -277,6 +309,16 @@ def reference_score(played, held, jokers, levels=None):
                 if card["rank"] == "Queen" and "j_shoot_the_moon" in jokers:
                     mult += 13
     for key in jokers:
+        if key in scaled:
+            kind, value, step = scaled[key]
+            value = scaled_value(key, kind, value, step, hand, played, face, twos)
+            if kind == "mult":
+                mult += value
+            elif kind == "chips":
+                chips += value
+            else:
+                mult *= value
+            continue
         effect, value, condition = JOKERS[key]
         if effect == "mult":
             mult += value
@@ -422,6 +464,13 @@ return function(repo, scenarios, difficulties)
 		local jokers = {}
 		for i = 1, #sc.jokers do
 			jokers[i] = support.card({ center = sc.jokers[i], center_set = "Joker", set = "Joker" })
+			-- Optional engine ability fields (scaling Jokers' current values).
+			local ab = sc.abilities ~= nil and sc.abilities[sc.jokers[i]] or nil
+			if ab ~= nil then
+				for k, v in pairs(ab) do
+					jokers[i].ability[k] = v
+				end
+			end
 		end
 		local engine = support.engine({
 			state = support.STATES.SELECTING_HAND,

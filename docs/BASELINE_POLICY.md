@@ -154,8 +154,7 @@ candidates are first analysed once per decision (`analyse_plays`):
   +mult is modelled.
 
 Unknowns count as neutral: boss-blind effects (for example The Flint halving
-base chips and mult), scaling Jokers' current values, boss
-effects, probabilities beyond Lucky's expectation and any Joker not in the table.
+base chips and mult), boss effects, probabilities beyond Lucky's expectation and any Joker not in the table.
 Abstract Joker counts every Joker, debuffed included. When a Joker that changes
 what a hand is (Four Fingers, Shortcut, Smeared, Splash, Pareidolia) is present,
 the estimate is not used at all and the category ranking decides. Estimates are
@@ -259,10 +258,23 @@ grow only from actions the policy never takes (skipping blinds or packs,
 selling, avoiding its most-played hand, Lucky cards): Throwback, Red Card,
 Campfire, Obelisk and Lucky Cat. They get no proxy. Neither do Vampire, which
 strips enhancements the estimate values, and Madness and Ceremonial Dagger,
-which destroy Jokers. The proxies never enter play estimates, and owned
-scaling Jokers still count as no effect there. An owned scaling Joker has no
-known effect, so it also turns off estimate-based Joker reordering for that
-row. Proxies depend on the public ante, because a Joker bought early has more
+which destroy Jokers. The proxies never enter play estimates. An **owned** scaling Joker uses the
+value its card shows (`current`, docs/SCALING_VALUES_DESIGN.md: Green Joker,
+Ride the Bus, Spare Trousers, Flash, Red Card, Ceremonial Dagger, Runner,
+Square, Wee, Castle, Hologram, Constellation, Campfire, Glass, Madness, Lucky
+Cat). It also grows the way vanilla grows it before Jokers score:
+
+- Ride the Bus resets to 0 when a scoring face card is played, and otherwise
+  gains its step;
+- Green Joker gains its step every hand;
+- Spare Trousers gains on hands containing Two Pair;
+- Runner gains on hands containing a Straight;
+- Square gains when exactly four cards are played;
+- Wee gains per scoring 2.
+
+One helper (`effect_of`) serves the estimate, `joker_gain` and the
+estimate-based reorder. An owned scaling Joker without a shown value still
+counts as no effect and turns off estimate-based reordering for its row. Proxies depend on the public ante, because a Joker bought early has more
 rounds to grow: the growth is ×1.25 at antes 1–2, ×1 at 3–4 and ×0.75 from
 ante 5 (for ×mult proxies only the part above ×1 is scaled). Flash is +2
 (it grows only in rich runs that reroll). An additive Joker (+mult, +chips, hand bonuses, Half,

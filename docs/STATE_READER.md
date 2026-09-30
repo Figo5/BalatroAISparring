@@ -120,7 +120,9 @@ ui_view = {
     current_score = "<display>", blind_requirement = "<display>",
     cards = {
       hand = { <card record>, ... },                 -- positional
-      joker = { <joker record>, ... },               -- positional
+      joker = { <joker record>, ... },               -- positional; optional current = { kind, value, step? }:
+                                                     -- row from the engine card's center, value/step recomputed
+                                                     -- from its ability fields and must match, else reader_bad_view
       consumable = { <consumable record>, ... },     -- positional
     },
     deck = { total = int },        -- total ONLY; by_suit/by_rank unsupported and never read
@@ -237,6 +239,7 @@ fields are never traversed.
 | `G.hand.cards`, `G.jokers.cards`, `G.consumeables.cards`, `G.shop_jokers.cards`, `G.shop_booster.cards`, `G.shop_vouchers.cards`, `G.pack_cards.cards` | existence/facing/masking backing only |
 | `card.facing`, `card.sprite_facing` | face-up gate; `M2_SOURCE_MAP.md` §6 (`card.lua:52-54`) |
 | `card.ability.effect` | Stone Card rank/suit masking (`m_stone` enhancement) |
+| `card.config.center.key`, `card.ability.mult` / `.x_mult` / `.extra` / `.extra.chips` / `.extra.chip_mod` / `.extra.hand_add` | cross-check for an owned scaling Joker's `current` (allowlisted centers only); `docs/SCALING_VALUES_DESIGN.md` |
 | `card.config.center.no_rank`, `.no_suit`, `.replace_base_card` | base-replacement rank/suit masking; §6 |
 | `MP.GAME.enemy.info_received`, `.score_text`, `.hands_text` | opponent projection, §3 |
 | `MP.LOBBY.code`, `MP.LOBBY.config.hide_score_until_played`, `.enemy_location_disabled`, `.timer`, `.disable_live_and_timer_hud` | visibility certificates, §3/§4/§5 |

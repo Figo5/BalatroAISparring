@@ -344,6 +344,83 @@ local function center_masks(card)
 	return stone or replace or no_rank, stone or replace or no_suit
 end
 
+-- Owned scaling Jokers (docs/SCALING_VALUES_DESIGN.md): identical to the
+-- adapter's table. The row comes from the engine card's own center, and the
+-- value and step are recomputed from its fields; the view must match exactly.
+local SCALING_CURRENT = {
+	j_green_joker = { "mult", { "mult" }, { "extra", "hand_add" } },
+	j_ride_the_bus = { "mult", { "mult" }, { "extra" } },
+	j_trousers = { "mult", { "mult" }, { "extra" } },
+	j_flash = { "mult", { "mult" } },
+	j_red_card = { "mult", { "mult" } },
+	j_ceremonial = { "mult", { "mult" } },
+	j_runner = { "chips", { "extra", "chips" }, { "extra", "chip_mod" } },
+	j_square = { "chips", { "extra", "chips" }, { "extra", "chip_mod" } },
+	j_wee = { "chips", { "extra", "chips" }, { "extra", "chip_mod" } },
+	j_castle = { "chips", { "extra", "chips" } },
+	j_hologram = { "xmult", { "x_mult" } },
+	j_constellation = { "xmult", { "x_mult" } },
+	j_campfire = { "xmult", { "x_mult" } },
+	j_glass = { "xmult", { "x_mult" } },
+	j_madness = { "xmult", { "x_mult" } },
+	j_lucky_cat = { "xmult", { "x_mult" } },
+}
+
+local function scaling_number(value, kind)
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return nil
+	end
+	if kind == "xmult" then
+		value = math.floor(value * 100 + 0.5)
+		if value < 100 or value > 1000000 then
+			return nil
+		end
+		return value
+	end
+	if value % 1 ~= 0 or value < 0 or value > 100000 then
+		return nil
+	end
+	return value
+end
+
+local function engine_path(obj, path)
+	local value = rget(obj, path[1])
+	if path[2] ~= nil then
+		value = rget(value, path[2])
+	end
+	return value
+end
+
+-- Returns the verified copy, or nil, false when the view disagrees.
+local function copy_current(view, card)
+	if not is_plain(view) then
+		return nil, false
+	end
+	for key in next, view do
+		if key ~= "kind" and key ~= "value" and key ~= "step" then
+			return nil, false
+		end
+	end
+	local spec = SCALING_CURRENT[rget(rget(rget(card, "config"), "center"), "key")]
+	if spec == nil then
+		return nil, false
+	end
+	local ability = rget(card, "ability")
+	local value = scaling_number(engine_path(ability, spec[2]), spec[1])
+	local step = nil
+	if spec[3] ~= nil then
+		step = scaling_number(engine_path(ability, spec[3]), "step")
+		if step == nil then
+			return nil, false
+		end
+	end
+	if value == nil or rawget(view, "kind") ~= spec[1] or rawget(view, "value") ~= value
+		or rawget(view, "step") ~= step then
+		return nil, false
+	end
+	return { kind = spec[1], value = value, step = step }, true
+end
+
 local function build_entity(record, card, kind)
 	local face_down = rawget(record, "face_down")
 	local facing = rget(card, "facing")
@@ -370,6 +447,16 @@ local function build_entity(record, card, kind)
 					out[name] = projected
 				end
 			end
+		end
+	end
+	if kind == "joker" and shown ~= nil and rawget(shown, "current") == true then
+		local view = rawget(record, "current")
+		if view ~= nil then
+			local current, ok = copy_current(view, card)
+			if not ok then
+				return nil
+			end
+			out.current = current
 		end
 	end
 	return out

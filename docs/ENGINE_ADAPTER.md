@@ -497,6 +497,13 @@ acceptance:
   either `MP.GAME.won == true` or the engine state is `GAME_OVER`. No observation
   field is added (M2 schema kept intact); the coordinator reads the signal directly.
 - **Deck total and tags** remain unsupported, as in M2.
+- **Owned scaling Jokers** (allowlisted centers) carry `current = { kind,
+  value, step? }`, the value their card text shows. `xmult` is in rounded
+  hundredths, because the codec carries integers only. `step` is the
+  per-hand growth where one exists. It is fail-soft: omitted when a field is
+  missing, non-finite, fractional or out of range
+  (docs/SCALING_VALUES_DESIGN.md). The view is already part of the revision
+  fingerprint, so a changed value moves the epoch.
 - **`match.blind_disabled`** is exported, only alongside `match.blind`, from
   `G.GAME.blind.disabled` (a boolean). It is also part of the decision
   signature (docs/BLIND_DISABLED_DESIGN.md).

@@ -252,11 +252,22 @@ engine id or `sort_ID` is ever read; unknown keys are ignored without traversal.
 | Kind | Zones | Allowed fields |
 |---|---|---|
 | `card` | `hand`, `booster`, `target` | `kind`, `rank`, `suit`, `center`, `edition`, `seal`, `debuff`, `face_down` |
-| `joker` | `joker` | `center`, `edition`, `seal`, `debuff`, `visible_text` |
+| `joker` | `joker` | `center`, `edition`, `seal`, `debuff`, `visible_text`, optional `current` |
 | `consumable` | `consumable`, `source` | `center`, `edition`, `debuff`, `visible_text` |
 | `shop_item` | `shop`, `shop_booster` | `kind`, `rank`, `suit`, `center`, `edition`, `seal`, `debuff`, `cost`, `sell_cost` |
 | `voucher` | `shop_voucher` | `center`, `cost` |
 | `tag` | `tag` | `center` |
+
+`current` (owned Jokers only, docs/SCALING_VALUES_DESIGN.md) is exactly
+`{ kind, value, step? }`:
+
+- `kind` is `mult`, `chips` or `xmult`;
+- `value` is an integer: 0..100000 for `mult` and `chips`, or 100..1000000
+  for `xmult`, given in hundredths (×1.25 is 125);
+- `step` is the per-hand growth, an integer 0..100000.
+
+It is the value the Joker's card text shows ("Currently …"). Anything else,
+including an extra key, is `observation_invalid_entity`.
 
 - `kind`, `rank`, `suit`, `center`, `edition`, `seal` are bounded public token
   strings; `cost`/`sell_cost` are ints `>= 0`; `debuff`/`face_down` are bools.

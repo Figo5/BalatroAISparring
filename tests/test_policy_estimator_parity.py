@@ -50,6 +50,34 @@ EDGE_JOKERS = {
     "wild_flush": ["j_droll", "j_lusty_joker"],
 }
 
+# Owned scaling Jokers with shown values (docs/SCALING_VALUES_DESIGN.md):
+# engine ability fields for the harness, and (kind, value, step) for the
+# reference. Each hand offers a choice the growth rule changes.
+SCALED = {
+    "ride_the_bus_face_resets": (
+        [card("King", "Clubs"), card("King", "Diamonds"), card("7", "Hearts"), card("7", "Spades"),
+         card("Ace", "Clubs"), card("3", "Diamonds"), card("9", "Hearts"), card("5", "Spades")],
+        {"j_ride_the_bus": ({"mult": 20, "extra": 1}, ("mult", 20, 1))}),
+    "wee_counts_scoring_twos": (
+        [card("2", "Clubs"), card("2", "Diamonds"), card("3", "Hearts"), card("3", "Spades"),
+         card("Jack", "Clubs"), card("8", "Diamonds"), card("9", "Hearts"), card("5", "Spades")],
+        {"j_wee": ({"extra": {"chips": 40, "chip_mod": 8}}, ("chips", 40, 8))}),
+    "runner_on_straights": (
+        [card("5", "Clubs"), card("6", "Diamonds"), card("7", "Hearts"), card("8", "Spades"),
+         card("9", "Clubs"), card("Ace", "Diamonds"), card("Ace", "Hearts"), card("2", "Spades")],
+        {"j_runner": ({"extra": {"chips": 60, "chip_mod": 15}}, ("chips", 60, 15))}),
+    "square_on_four_cards": (
+        [card("4", "Clubs"), card("4", "Diamonds"), card("6", "Hearts"), card("6", "Spades"),
+         card("King", "Clubs"), card("King", "Diamonds"), card("9", "Hearts"), card("2", "Spades")],
+        {"j_square": ({"extra": {"chips": 16, "chip_mod": 4}}, ("chips", 16, 4))}),
+    "trousers_and_green_and_fractional_hologram": (
+        [card("10", "Clubs"), card("10", "Diamonds"), card("Queen", "Hearts"), card("Queen", "Spades"),
+         card("Ace", "Clubs"), card("Ace", "Diamonds"), card("3", "Hearts"), card("5", "Spades")],
+        {"j_trousers": ({"mult": 6, "extra": 2}, ("mult", 6, 2)),
+         "j_green_joker": ({"mult": 4, "extra": {"hand_add": 1, "discard_sub": 1}}, ("mult", 4, 1)),
+         "j_hologram": ({"x_mult": 1.25}, ("xmult", 1.25, 0))}),
+}
+
 
 def test_reference_pins():
     # Pair of Kings: (10 + 10 + 10) chips x 2 mult.
@@ -63,6 +91,16 @@ def test_reference_pins():
     # Red seal + Photograph: the first face card scores twice, x2 each time.
     photo = bench.reference_score([card("King", "Hearts", seal="Red")], [], ["j_photograph"])
     assert photo == (5 + 10 + 10) * (1 * 2 * 2), photo
+    # Ride the Bus: +1 then scores, unless a face card scores (reset to 0).
+    bus = {"j_ride_the_bus": ("mult", 20, 1)}
+    sevens = bench.reference_score([card("7", "Hearts"), card("7", "Spades")], [], ["j_ride_the_bus"], scaled=bus)
+    assert sevens == (10 + 14) * (2 + 21), sevens
+    kings = bench.reference_score([card("King", "Clubs"), card("King", "Hearts")], [], ["j_ride_the_bus"], scaled=bus)
+    assert kings == 60, kings
+    # Wee Joker grows per scoring 2, each retrigger included.
+    wee = bench.reference_score([card("2", "Hearts", seal="Red"), card("2", "Spades")], [], ["j_wee"],
+                                scaled={"j_wee": ("chips", 40, 8)})
+    assert wee == (10 + 2 * 3 + 40 + 3 * 8) * 2, wee
     # Stone inside four of a kind scores its 50 chips, never its rank.
     quads = bench.reference_score(
         [card("8", "Hearts"), card("8", "Spades"), card("8", "Clubs"), card("8", "Diamonds"), card("Ace", "Clubs", "m_stone")],
@@ -86,18 +124,33 @@ def test_policy_matches_reference_on_edge_hands():
             "pvp": False,
             "name": name,
         })
+    for name, (hand, spec) in SCALED.items():
+        scenarios.append({
+            "hand": hand,
+            "jokers": list(spec),
+            "abilities": {key: fields for key, (fields, _) in spec.items()},
+            "scaled": {key: ref for key, (_, ref) in spec.items()},
+            "hands_left": 3,
+            "discards_left": 0,
+            "chips": 0,
+            "requirement": 100000,
+            "pvp": False,
+            "name": name,
+        })
     rows = bench.from_lua(harness(str(bench.REPO), bench.to_lua(lua, scenarios),
                                   bench.to_lua(lua, ["competitive", "major_league"])))
+    assert len(rows) == len(scenarios), (len(rows), len(scenarios))
     for row in rows:
         scenario = scenarios[row["scenario"] - 1]
         hand, jokers = scenario["hand"], scenario["jokers"]
+        scaled = scenario.get("scaled")
         values = {}
         for candidate in row["candidates"]:
             if candidate["type"] == "PLAY_CARDS":
                 idx = bench.refs_to_indices(candidate["refs"])
                 played = [hand[i] for i in idx]
                 held = [hand[i] for i in range(len(hand)) if i not in idx]
-                values[candidate["id"]] = bench.reference_score(played, held, jokers)
+                values[candidate["id"]] = bench.reference_score(played, held, jokers, scaled=scaled)
         best = max(values.values())
         for choice in row["choices"]:
             assert choice["ok"], (scenario["name"], choice)

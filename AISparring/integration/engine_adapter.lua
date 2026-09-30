@@ -528,6 +528,71 @@ local function build_play_card(card)
 	return record
 end
 
+-- Owned scaling Jokers: the current value the card text shows ("Currently
+-- +X Mult"), and the per-hand growth step where it grows while a hand scores
+-- (docs/SCALING_VALUES_DESIGN.md). The state reader keeps an identical table
+-- and recomputes the value from the engine card.
+local SCALING_CURRENT = {
+	j_green_joker = { "mult", { "mult" }, { "extra", "hand_add" } },
+	j_ride_the_bus = { "mult", { "mult" }, { "extra" } },
+	j_trousers = { "mult", { "mult" }, { "extra" } },
+	j_flash = { "mult", { "mult" } },
+	j_red_card = { "mult", { "mult" } },
+	j_ceremonial = { "mult", { "mult" } },
+	j_runner = { "chips", { "extra", "chips" }, { "extra", "chip_mod" } },
+	j_square = { "chips", { "extra", "chips" }, { "extra", "chip_mod" } },
+	j_wee = { "chips", { "extra", "chips" }, { "extra", "chip_mod" } },
+	j_castle = { "chips", { "extra", "chips" } },
+	j_hologram = { "xmult", { "x_mult" } },
+	j_constellation = { "xmult", { "x_mult" } },
+	j_campfire = { "xmult", { "x_mult" } },
+	j_glass = { "xmult", { "x_mult" } },
+	j_madness = { "xmult", { "x_mult" } },
+	j_lucky_cat = { "xmult", { "x_mult" } },
+}
+
+-- Integer projection: mult/chips/step 0..100000; xmult in hundredths,
+-- 100..1000000 (the codec carries integers only).
+local function scaling_number(value, kind)
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return nil
+	end
+	if kind == "xmult" then
+		value = math.floor(value * 100 + 0.5)
+		if value < 100 or value > 1000000 then
+			return nil
+		end
+		return value
+	end
+	if value % 1 ~= 0 or value < 0 or value > 100000 then
+		return nil
+	end
+	return value
+end
+
+local function scaling_current(card)
+	local key = rpath(card, "config", "center", "key")
+	local spec = type(key) == "string" and SCALING_CURRENT[key] or nil
+	if spec == nil then
+		return nil
+	end
+	local ability = rget(card, "ability")
+	local path = spec[2]
+	local value = scaling_number(rpath(ability, path[1], path[2]), spec[1])
+	if value == nil then
+		return nil
+	end
+	local out = { kind = spec[1], value = value }
+	if spec[3] ~= nil then
+		local step = scaling_number(rpath(ability, spec[3][1], spec[3][2]), "step")
+		if step == nil then
+			return nil
+		end
+		out.step = step
+	end
+	return out
+end
+
 local function build_joker(card)
 	if not is_face_up(card) then
 		return redacted()
@@ -537,6 +602,11 @@ local function build_joker(card)
 	put(record, "edition", token_of(edition_type(card), 32))
 	put(record, "seal", seal_of(card))
 	put(record, "debuff", debuff_of(card))
+	local current = scaling_current(card)
+	if current ~= nil then
+		record.current = current
+		record.shown.current = true
+	end
 	return record
 end
 
