@@ -54,6 +54,19 @@ Constraints on all of it:
     (held-out ≈ +0.33 / +0.51 blinds per run) they match Competitive in run metrics, so
     their play-side difference is still unproven.
 
+## Consumable reasoning (in progress)
+
+- **Done:**
+  - consumables that need hand targets are never bought, and a held one is
+    sold: no target port is wired live, and a test guards that;
+  - Arcana and Spectral packs are discounted;
+  - The Hermit is held until $20.
+- **Next:**
+  - Temperance timing needs owned Joker sell values, which are not in the
+    observation yet;
+  - wiring the target-selection port would unlock targeted Tarots, but it is
+    a trusted-integration change that needs its own design review.
+
 ## Open observations from the Batch 2 review (lower priority)
 
 From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
