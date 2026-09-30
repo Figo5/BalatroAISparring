@@ -226,8 +226,15 @@ panel of representative hands, given the Jokers already owned and the displayed
 hand levels. The panel weights: pair ×4, two pair ×2, and three of a kind,
 flush, straight and high card ×1 each. For example, with nothing owned a +4-mult
 Joker beats The Duo on this pair-heavy panel. With Gros Michel (+15 mult) owned,
-The Duo's ×2 wins. Unknown or scaling Jokers keep the flat kind value, and
-rule-changing Jokers switch this off. An additive Joker (+mult, +chips, hand bonuses, Half,
+The Duo's ×2 wins. Unknown Jokers keep the flat kind value, and
+rule-changing Jokers switch this off. Scaling Jokers grow over a run, and their
+current value is not in the observation, so an **offered** one (shop or pack)
+is priced as a conservative mid-life proxy of its public card text (`SCALING`):
+for example Green Joker and Ride the Bus +5 mult, Obelisk ×1.4, Hologram ×1.3,
+Runner +45 chips on straights. The proxies never enter play estimates, and
+owned scaling Jokers still count as no effect there. Madness and Ceremonial
+Dagger destroy Jokers, so they get no proxy. The proxies are not
+ante-dependent yet: early-ante scaling is worth more. An additive Joker (+mult, +chips, hand bonuses, Half,
 Abstract) is priced before the **trailing run** of owned ×mult or Polychrome
 Jokers. The adapter's reorder offers only a reversal and adjacent swaps, each
 taken only above a 0.5% panel gain. Passing a ×mult Joker is such a gain,

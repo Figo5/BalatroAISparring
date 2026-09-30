@@ -18,6 +18,14 @@ Constraints on all of it:
 - meter any new search with `WORK`;
 - add budget cases to `tests/policy/test_budget.lua`.
 
+## Economy and long-term scaling (in progress)
+
+- **Done:** offered scaling Jokers use mid-life proxies (`SCALING`, §4.2).
+- **Next:** make the proxies depend on the ante (more value early); use the
+  displayed current value of owned scaling Jokers if the adapter can export
+  it as UI-visible card text (needs a boundary review); export owned
+  vouchers (Seed Money / Money Tree interest cap).
+
 ## Open observations from the Batch 2 review (lower priority)
 
 From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in

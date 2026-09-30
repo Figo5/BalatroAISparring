@@ -582,6 +582,18 @@ local JOKER_EFFECTS = {
 local ADDITIVE = { mult = true, chips = true, hand_mult = true, hand_chips = true, half = true, abstract = true }
 local MULTIPLICATIVE = { xmult = true, hand_xmult = true }
 
+-- Scaling Jokers grow over a run, so their current value is not visible when
+-- offered. For shop and pack valuation only (never play estimates), an offered
+-- one is priced as a conservative mid-life effect from its public card text.
+local SCALING = {
+	j_green_joker = { "mult", 5 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
+	j_flash = { "mult", 4 }, j_red_card = { "mult", 3 }, j_spare_trousers = { "hand_mult", 6, "two_pair" },
+	j_runner = { "hand_chips", 45, "straight" }, j_wee = { "chips", 24 }, j_castle = { "chips", 30 },
+	j_square = { "chips", 8 }, j_obelisk = { "xmult", 1.4 }, j_hologram = { "xmult", 1.3 },
+	j_constellation = { "xmult", 1.3 }, j_lucky_cat = { "xmult", 1.2 }, j_throwback = { "xmult", 1.2 },
+	j_campfire = { "xmult", 1.25 }, j_vampire = { "xmult", 1.2 },
+}
+
 local RULE_JOKERS = {
 	j_four_fingers = true, j_shortcut = true, j_smeared = true, j_splash = true, j_pareidolia = true,
 }
@@ -766,7 +778,7 @@ local function estimate_score(played, held, jokers)
 				joker_count = joker_count + 1
 			end
 			if type(j) == "table" and j.debuff ~= true then
-				local e = JOKER_EFFECTS[j.center]
+				local e = JOKER_EFFECTS[j.center] or (j.offered and SCALING[j.center]) or nil
 				if e ~= nil then
 					effects[#effects + 1] = { e = e, edition = j.edition }
 				else
@@ -1772,7 +1784,7 @@ local function joker_gain(observation, center, edition)
 	for i = 1, #owned do
 		with[i] = owned[i]
 	end
-	table.insert(with, slot, { center = center, edition = edition })
+	table.insert(with, slot, { center = center, edition = edition, offered = true })
 	local before = panel_total(owned)
 	local after = panel_total(with)
 	if before <= 0 or after <= before then
