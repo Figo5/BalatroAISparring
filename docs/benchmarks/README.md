@@ -84,7 +84,7 @@ runtime:
 | Family | What it adds | What is trustworthy |
 |---|---|---|
 | `large_hand` | 9–12 card hands (Juggler, Paint Brush, Turtle Bean), 2–5 Jokers | reliability and budget; agreement stays within the shared model |
-| `scaling` | one scaling Joker (Ride the Bus, Green Joker, Obelisk, Hologram, …); those with a shown value (docs/SCALING_VALUES_DESIGN.md) get a random current value | agreement for Jokers with a shown value, where both sides apply it with vanilla's before-scoring growth; reliability only for the rest (Supernova, Obelisk), which both sides treat as no effect |
+| `scaling` | one scaling Joker (Ride the Bus, Green Joker, Obelisk, Hologram, …); those with a shown value (docs/SCALING_VALUES_DESIGN.md) get a random current value | agreement for Jokers with a shown value, where both sides apply it with vanilla's before-scoring growth; reliability only for the rest (Supernova, Obelisk), which both sides treat as no effect (Abstract Joker still counts them on both sides) |
 | `rule` | one rule-changing Joker (Four Fingers, Shortcut, Smeared, Splash, Pareidolia) | reliability only: the policy falls back to category ranking and the reference ignores the rule |
 | `boss` | a boss blind key; suit bosses and The Plant debuff their cards | reliability only: rule-changing boss effects are not modelled |
 
@@ -94,15 +94,17 @@ runtime:
 |---|---|---|---|---|
 | failures / illegal | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
 | max sandbox instructions (budget 2,000,000) | 161k | 808k | 832k | 925k |
-| mean / p95 latency, LuaJIT | 13 / 20 ms | 14 / 24 ms | 14 / 25 ms | 15 / 26 ms |
+| mean / p95 latency, LuaJIT | 14 / 23 ms | 15 / 26 ms | 15 / 24 ms | 16 / 30 ms |
 
 The `boss` family still shows about 100% agreement. That is exactly the shared
 blind spot: neither side models those effects, so this agreement means nothing
 about play quality there. In the `scaling` family both sides now apply shown
-values. With the policy's shown-value lookup switched off, Competitive's
-agreement there falls from 100% to 96.9% and Expert's to 96.4%. So the
-family does exercise the feature, but only as a consistency check against the
-same model.
+values, but that is only a consistency check against the same model, on a
+small sample: 44 decisions per difficulty. With the policy's shown-value
+lookup switched off, agreement there stays at 100% on the current stream. An
+earlier stream moved by one or two decisions. The feature's real checks are
+the policy tests and the parity scenarios (`tests/policy/test_scaling_current.lua`,
+`tests/test_policy_estimator_parity.py`), which fail without it.
 
 ## Blind simulator (`tests/benchmark_blinds.py`)
 

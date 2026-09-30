@@ -216,11 +216,12 @@ def scaled_value(key, kind, value, step, hand, played, face, twos):
     return value
 
 
-def reference_score(played, held, jokers, levels=None, scaled=None):
+def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=None):
     """Expected score of playing ``played`` with ``held`` left in hand.
 
     ``scaled`` maps an owned scaling Joker key to (kind, value, step), with
-    ``xmult`` as a real multiplier.
+    ``xmult`` as a real multiplier. ``joker_count`` is every owned Joker, for
+    Abstract Joker (unmodelled ones included, as in the policy).
     """
     scaled = scaled or {}
     hand, scoring = classify(played)
@@ -335,7 +336,7 @@ def reference_score(played, held, jokers, levels=None, scaled=None):
         elif effect == "half" and len(played) <= 3:
             mult += value
         elif effect == "abstract":
-            mult += value * len(jokers)
+            mult += value * (len(jokers) if joker_count is None else joker_count)
     return chips * mult
 
 
@@ -407,9 +408,11 @@ def make_scenario(rng, family="mixed"):
     jokers = rng.sample(JOKER_KEYS, rng.choice(shape["jokers"]))
     abilities, scaled = None, None
     if shape.get("extra"):
+        # Same draw order as before (position, then Joker), so the other
+        # families' streams are unchanged; only the scaling family draws more.
+        position = rng.randrange(len(jokers) + 1)
         extra = rng.choice(shape["extra"])
-        jokers.insert(rng.randrange(len(jokers) + 1), extra)
-        # Only the scaling family draws here, so other streams are unchanged.
+        jokers.insert(position, extra)
         if family == "scaling" and extra in SHOWN_SCALING:
             kind, values, step, fields = SHOWN_SCALING[extra]
             value = rng.choice(values)
@@ -618,24 +621,24 @@ def refs_to_indices(refs):
     return [int(ref.split(":")[1]) - 1 for ref in refs]
 
 
-def best_possible(hand, jokers, levels=None, scaled=None):
+def best_possible(hand, jokers, levels=None, scaled=None, joker_count=None):
     best = 0.0
     indices = range(len(hand))
     for size in range(1, 6):
         for combo in itertools.combinations(indices, size):
             played = [hand[i] for i in combo]
             held = [hand[i] for i in indices if i not in combo]
-            best = max(best, reference_score(played, held, jokers, levels, scaled))
+            best = max(best, reference_score(played, held, jokers, levels, scaled, joker_count))
     return best
 
 
-def discard_ev(hand, jokers, discard_idx, draws, levels=None, scaled=None):
+def discard_ev(hand, jokers, discard_idx, draws, levels=None, scaled=None, joker_count=None):
     """Mean best reference play after discarding and drawing, over ``draws``."""
     kept = [hand[i] for i in range(len(hand)) if i not in discard_idx]
     total = 0.0
     for order in draws:
         new_hand = kept + order[: len(discard_idx)]
-        total += best_possible(new_hand, jokers, levels, scaled)
+        total += best_possible(new_hand, jokers, levels, scaled, joker_count)
     return total / len(draws)
 
 
@@ -661,6 +664,7 @@ def evaluate(rows, scenarios, discard_samples=0):
         # except scaling Jokers with a shown value (`scaled`).
         scaled = scenario.get("scaled") or {}
         jokers = [key for key in scenario["jokers"] if key in JOKERS or key in scaled]
+        count = len(scenario["jokers"])
         levels = scenario.get("levels")
         play_scores = {}
         for candidate in row["candidates"]:
@@ -668,9 +672,9 @@ def evaluate(rows, scenarios, discard_samples=0):
                 idx = refs_to_indices(candidate["refs"])
                 played = [hand[i] for i in idx]
                 held = [hand[i] for i in range(len(hand)) if i not in idx]
-                play_scores[candidate["id"]] = reference_score(played, held, jokers, levels, scaled)
+                play_scores[candidate["id"]] = reference_score(played, held, jokers, levels, scaled, count)
         best_offered = max(play_scores.values()) if play_scores else 0.0
-        possible = best_possible(hand, jokers, levels, scaled)
+        possible = best_possible(hand, jokers, levels, scaled, count)
         if possible > 0:
             coverage.append(best_offered / possible)
         remaining = scenario["requirement"] - scenario["chips"]
@@ -690,7 +694,7 @@ def evaluate(rows, scenarios, discard_samples=0):
             for candidate in row["candidates"]:
                 if candidate["type"] == "DISCARD_CARDS":
                     discard_values[candidate["id"]] = discard_ev(
-                        hand, jokers, set(refs_to_indices(candidate["refs"])), draws, levels, scaled
+                        hand, jokers, set(refs_to_indices(candidate["refs"])), draws, levels, scaled, count
                     )
         if discard_values:
             best_discard = max(discard_values.values())
