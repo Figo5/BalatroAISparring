@@ -335,5 +335,94 @@ return function(ctx)
 		ctx.is_true(only.ok == true)
 		ctx.truthy(Support.same_refs(only.action.card_refs, { "hand:4", "hand:5", "hand:6", "hand:7", "hand:8" }), "keeps 6-7-8")
 	end)
+
+	local function use_frame(centers, money, jokers)
+		local frame = Support.shop_frame()
+		frame.shop.items = {}
+		frame.self.money = money
+		frame.self.jokers = {}
+		for i = 1, jokers do
+			frame.self.jokers[i] = Support.joker("j_joker")
+		end
+		frame.self.consumables = {}
+		local items = {}
+		for i = 1, #centers do
+			frame.self.consumables[i] = { kind = "consumable", center = centers[i], face_down = false }
+			items[#items + 1] = { type = "USE_CONSUMABLE", certified = true, source_ref = "consumable:" .. i, target_refs = {} }
+		end
+		items[#items + 1] = { type = "LEAVE_SHOP", certified = true }
+		frame.certificates.items = items
+		return frame
+	end
+
+	test("harmful_spectrals_are_not_used_blindly", function()
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			-- Wraith zeroes $30; Ankh/Hex would destroy two other Jokers;
+			-- Ectoplasm/Ouija cost hand size.
+			for _, case in ipairs({
+				{ "c_wraith", 30, 1 }, { "c_ankh", 5, 3 }, { "c_hex", 5, 3 },
+				{ "c_ectoplasm", 5, 1 }, { "c_ouija", 5, 1 },
+			}) do
+				local result = Support.run(env, difficulty, use_frame({ case[1] }, case[2], case[3]))
+				ctx.eq(result.action.type, "LEAVE_SHOP", difficulty .. " " .. case[1])
+			end
+			-- Harmless situations are still allowed.
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_wraith" }, 3, 1)).action.type, "USE_CONSUMABLE")
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_ankh" }, 5, 1)).action.type, "USE_CONSUMABLE")
+		end
+	end)
+
+	test("planets_are_used_before_other_consumables", function()
+		local result = Support.run(env, "competitive", use_frame({ "c_fool", "c_jupiter" }, 5, 0))
+		ctx.eq(result.action.type, "USE_CONSUMABLE")
+		ctx.eq(result.action.source_ref, "consumable:2")
+	end)
+
+	test("harmful_spectrals_are_not_picked_from_packs", function()
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			-- A Spectral pick is used at once: with three Jokers owned, Hex
+			-- and Ectoplasm are refused, so the pack is skipped...
+			local frame = Support.booster_frame()
+			frame.self.jokers = { Support.joker("j_joker"), Support.joker("j_joker"), Support.joker("j_joker") }
+			frame.booster.kind = "spectral"
+			frame.booster.cards = {
+				{ kind = "consumable", center = "c_hex", face_down = false },
+				{ kind = "consumable", center = "c_ectoplasm", face_down = false },
+			}
+			frame.certificates.items = {
+				{ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:1" }, capacity_ok = true },
+				{ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:2" }, capacity_ok = true },
+				{ type = "SKIP_BOOSTER", certified = true },
+			}
+			ctx.eq(Support.run(env, difficulty, frame).action.type, "SKIP_BOOSTER", difficulty)
+			-- ...but a harmless card in the same pack is still taken.
+			frame.booster.cards[3] = { kind = "consumable", center = "c_sigil", face_down = false }
+			table.insert(frame.certificates.items, 3, { type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:3" }, capacity_ok = true })
+			local pick = Support.run(env, difficulty, frame)
+			ctx.eq(pick.action.type, "SELECT_BOOSTER_ITEM", difficulty)
+			ctx.truthy(Support.same_refs(pick.action.card_refs, { "booster:3" }), difficulty .. " picks sigil")
+		end
+	end)
+
+	test("harmful_consumables_are_not_bought_and_are_sold", function()
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			local shop = use_frame({}, 20, 1)
+			shop.shop.items = { { kind = "consumable", center = "c_ouija", cost = 4, sell_cost = 2, face_down = false } }
+			shop.certificates.items = {
+				{ type = "BUY_ITEM", certified = true, item_ref = "shop:1", capacity_ok = true },
+				{ type = "LEAVE_SHOP", certified = true },
+			}
+			ctx.eq(Support.run(env, difficulty, shop).action.type, "LEAVE_SHOP", difficulty .. " no ouija")
+			-- A held Ectoplasm frees its slot; a held planet is kept.
+			for _, case in ipairs({ { "c_ectoplasm", "SELL_CONSUMABLE" }, { "c_jupiter", "LEAVE_SHOP" } }) do
+				local held = use_frame({ case[1] }, 20, 1)
+				held.certificates.items = {
+					{ type = "SELL_CONSUMABLE", certified = true, consumable_ref = "consumable:1" },
+					{ type = "LEAVE_SHOP", certified = true },
+				}
+				ctx.eq(Support.run(env, difficulty, held).action.type, case[2], difficulty .. " " .. case[1])
+			end
+		end
+	end)
 end
 

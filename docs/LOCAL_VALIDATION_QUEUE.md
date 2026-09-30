@@ -217,3 +217,35 @@ needs the full re-certification and a companion reinstall, not
 - **Risk if it fails:** `companion_marker_enums_mismatch` means host and
   companion builds differ, so reinstall both. If the menu layout clips, shorten
   the labels. Failure is fail-closed: the menu reports it cannot start.
+
+## LV-9 Consumable safety floor (use, buy, pack pick, sell)
+
+- **Commit:** see `git log --grep "consumable safety floor"`.
+- **Change:** at every difficulty the policy refuses to use, buy or pick from a
+  pack these cards:
+  - Wraith with $10 or more;
+  - Ankh or Hex with two or more Jokers;
+  - Ectoplasm or Ouija, always.
+
+  It sells such a card when one is already held. Planets are used before other
+  consumables. The change is policy-only (`baseline_policy.lua`, certified), so
+  it needs re-certification and a reinstall.
+- **Local test:** play practice matches until the AI opens a Spectral pack or
+  holds a Spectral card. A debug seed with an early Spectral pack helps. Also
+  confirm that an Arcana or Celestial pick, and planet use, still happen.
+- **Expected:** a Spectral pack offering only refused cards is skipped
+  (`SKIP_BOOSTER`), and a harmless card in the same pack is picked. A held
+  Ectoplasm or Ouija is sold on the next shop visit. Planets are used promptly.
+  There are no rejected decisions.
+- **Evidence to capture:** the `decisions.jsonl` rows around the pack or shop
+  (action type and refs), and `results.jsonl` accepted flags.
+- **Risk if it fails:**
+  - The AI might skip packs it should take. That is a mild weakness, not a
+    stall, because `SKIP_BOOSTER` and `LEAVE_SHOP` are always legal.
+  - If the game rejects `SELL_CONSUMABLE`, the result shows as a rejected
+    decision and the loop continues.
+  - Real Balatro lets you pick an Arcana or Spectral card with full consumable
+    slots, because it is used at once. The action generator
+    (`actions.lua` `capacity_ok`) still requires a free slot, which is
+    conservative. Check whether that blocks picks in a live pack.
+

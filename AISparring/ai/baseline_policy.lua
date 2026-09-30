@@ -82,6 +82,8 @@ local BASE = {
 	negative = 150,
 	buy_edition = 40,
 	slot_sell = 220,
+	-- Selling a held consumable the safety floor refuses: points over leave_shop.
+	sell_harmful = 30,
 	reroll_base = 55,
 	reroll_surplus_cap = 120,
 	leave_shop = 90,
@@ -1641,6 +1643,43 @@ local function joker_gain(observation, center, edition)
 	return gain
 end
 
+-- Consumables whose downside can wreck the run when used blindly, with the
+-- condition under which they are refused (all difficulties: a safety floor).
+-- The same rule refuses buying them, picking them from a pack (Arcana and
+-- Spectral picks are used at once) and makes a held one worth selling.
+local PLANETS = {
+	c_pluto = true, c_mercury = true, c_uranus = true, c_venus = true, c_saturn = true,
+	c_jupiter = true, c_earth = true, c_mars = true, c_neptune = true, c_planet_x = true,
+	c_ceres = true, c_eris = true, c_black_hole = true,
+}
+
+local function harmful_use(observation, center)
+	local s = observation.self
+	local jokers = 0
+	local money = 0
+	if type(s) == "table" then
+		if type(s.jokers) == "table" then
+			jokers = #s.jokers
+		end
+		if type(s.money) == "number" then
+			money = s.money
+		end
+	end
+	if center == "c_wraith" then
+		-- Rare Joker, but money is set to $0.
+		return money >= 10
+	end
+	if center == "c_ankh" or center == "c_hex" then
+		-- Destroy every other Joker.
+		return jokers >= 2
+	end
+	if center == "c_ectoplasm" or center == "c_ouija" then
+		-- Permanently -1 hand size.
+		return true
+	end
+	return false
+end
+
 local function kind_value(kind)
 	if kind == "joker" then
 		return CONF.item_joker
@@ -1672,6 +1711,9 @@ local function buy_score(observation, action)
 	end
 	local spend = spendable(observation)
 	if spend == nil or spend < cost then
+		return nil
+	end
+	if item.kind == "consumable" and harmful_use(observation, item.center) then
 		return nil
 	end
 	local score = kind_value(item.kind)
@@ -1780,6 +1822,9 @@ local function booster_select_score(observation, action)
 	if card == nil then
 		return nil
 	end
+	if card.redacted ~= true and card.kind == "consumable" and harmful_use(observation, card.center) then
+		return nil
+	end
 	local score = CONF.booster_good
 	if card.redacted ~= true then
 		if card.kind == "joker" then
@@ -1809,6 +1854,21 @@ local function target_or_use_score(observation, action)
 	if action.type == "SELECT_TARGETS" then
 		return CONF.select_targets
 	end
+	local source = nil
+	if type(observation.self) == "table" and type(action.source_ref) == "string" then
+		source = find_by_id(observation.self.consumables, action.source_ref)
+	end
+	if source == nil and type(observation.consumable_target) == "table" then
+		source = observation.consumable_target.source
+	end
+	local center = type(source) == "table" and source.center or nil
+	if type(center) == "string" and harmful_use(observation, center) then
+		return nil
+	end
+	local planet_bonus = 0
+	if PLANETS[center] then
+		planet_bonus = 1000
+	end
 	local refs = action.target_refs
 	local count = 0
 	if type(refs) == "table" then
@@ -1819,12 +1879,12 @@ local function target_or_use_score(observation, action)
 		if minimum == nil or count < minimum then
 			return nil
 		end
-		return CONF.use_consumable
+		return CONF.use_consumable + planet_bonus
 	end
 	if count > 0 then
 		return nil
 	end
-	return CONF.use_consumable
+	return CONF.use_consumable + planet_bonus
 end
 
 local ADD_MULT = {
@@ -2052,7 +2112,25 @@ end
 -- unaffordable price, non-full board) yields no score, so a sell is never a
 -- fallback and the board is never dumped. Selling one copy drops the board below
 -- full, so no further sale can score in the following frame.
+local function sell_consumable_score(observation, action)
+	-- Only a held card the safety floor would never use is worth its slot back.
+	if observation.phase ~= "SHOP" or type(observation.self) ~= "table" then
+		return nil
+	end
+	local held = find_by_id(observation.self.consumables, action.consumable_ref)
+	if held == nil or held.redacted == true or type(held.center) ~= "string" then
+		return nil
+	end
+	if not harmful_use(observation, held.center) then
+		return nil
+	end
+	return CONF.leave_shop + CONF.sell_harmful
+end
+
 local function sell_score(observation, action)
+	if action.type == "SELL_CONSUMABLE" then
+		return sell_consumable_score(observation, action)
+	end
 	if action.type ~= "SELL_JOKER" then
 		return nil
 	end

@@ -234,6 +234,26 @@ Jokers and scores at most 20 reorder candidates per decision, which keeps the
 instruction budget. Otherwise the tier rule below applies. A shop Joker's gain
 is halved when buying it would drop money below the reserve.
 
+### 4.3 Consumable safety floor (all difficulties)
+
+A consumable use is refused when its visible downside would wreck the run:
+
+- Wraith (sets money to $0) while money is $10 or more;
+- Ankh or Hex (destroy other Jokers) with two or more Jokers owned;
+- Ectoplasm or Ouija (permanent -1 hand size), always.
+
+The same rule applies wherever the card could hurt or waste a slot:
+
+- a refused card is never **bought** from the shop;
+- it is never **picked from a pack**, because Arcana and Spectral picks are used
+  at once. If every card in the pack is refused, the pack is skipped;
+- a refused card already **held** is sold in the shop
+  (`leave_shop + sell_harmful`, 30), which frees the slot for planets and
+  tarots. Cards that pass the rule are kept.
+
+Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
+first. Every other consumable keeps the flat `use_consumable` score.
+
 Purchases are scored by item kind plus a small edition weight: a recognized
 non-negative edition (`foil`/`holo`/`polychrome`) adds a fixed bonus over an
 un-editioned copy and the `negative` edition keeps its bounded slot-saving bonus.
