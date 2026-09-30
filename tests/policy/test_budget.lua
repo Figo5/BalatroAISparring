@@ -201,6 +201,40 @@ return function(ctx)
 		end
 	end)
 
+	test("budget_holds_for_crowded_shops", function()
+		-- Beyond the real 4-card shop: 16 certified Jokers, packs and vouchers
+		-- with a long owned row. Each Joker's buy score is computed once.
+		local JK = { "j_greedy_joker", "j_scary_face", "j_smiley", "j_even_steven", "j_fibonacci", "j_triboulet",
+			"j_photograph", "j_baron", "j_shoot_the_moon", "j_jolly", "j_duo", "j_abstract", "j_half", "j_cavendish",
+			"j_joker", "j_walkie_talkie" }
+		for _, owned in ipairs({ 16, 40 }) do
+			local frame = Support.voucher_frame()
+			frame.self.money = 200
+			frame.match.joker_slots = owned + 1
+			frame.self.jokers = {}
+			for i = 1, owned do
+				frame.self.jokers[i] = { kind = "joker", center = JK[(i - 1) % #JK + 1], face_down = false }
+			end
+			frame.shop.items, frame.shop.boosters, frame.shop.vouchers = {}, {}, {}
+			local certs = {}
+			for i = 1, 16 do
+				frame.shop.items[i] = { kind = "joker", center = JK[(i + 3) % #JK + 1], cost = 5, sell_cost = 2, face_down = false }
+				certs[#certs + 1] = { type = "BUY_ITEM", certified = true, item_ref = "shop:" .. i, capacity_ok = true }
+				frame.shop.boosters[i] = { kind = "booster", center = "p_buffoon_mega_1", cost = 4, sell_cost = 2, face_down = false }
+				certs[#certs + 1] = { type = "OPEN_BOOSTER", certified = true, item_ref = "shop_booster:" .. i, capacity_ok = true }
+				frame.shop.vouchers[i] = { center = "v_overstock_norm", cost = 10, face_down = false }
+				certs[#certs + 1] = { type = "BUY_VOUCHER", certified = true, voucher_ref = "shop_voucher:" .. i }
+			end
+			certs[#certs + 1] = { type = "LEAVE_SHOP", certified = true }
+			frame.certificates.items = certs
+			for _, difficulty in ipairs({ "competitive", "expert" }) do
+				local label = "shop_" .. owned .. "_" .. difficulty
+				local action = decide(label, difficulty, frame)
+				ctx.vector("budget_" .. label, action.type .. ":" .. tostring(action.id))
+			end
+		end
+	end)
+
 	test("budget_worst_case_recorded", function()
 		ctx.truthy(worst > 0, "measured")
 		ctx.truthy(worst <= GUARD, "worst:" .. worst)

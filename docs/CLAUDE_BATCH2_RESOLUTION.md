@@ -23,10 +23,12 @@ create these states.
 
 **Resolution.** A deterministic work meter, a cheap heuristic first pass, and
 metered draw-aware evaluation (`docs/BASELINE_POLICY.md` §4.5). The global
-limit was not raised. Worst measured cases are now 1.33M instructions (66%) for
-12 cards and 16 Jokers with enhanced, sealed cards on both runtimes, and
-0 failures. Absurd sizes up to 48 cards / 64 Jokers stay under 0.25M through
-the category fallback.
+limit was not raised. On the original review's 30-hand grid (9–12 cards, 5 and
+8 Jokers, PvP and no-clear, all three strong tiers, 5,760 decisions per runtime)
+the worst cases are 1.337M instructions on Lua 5.1 and 1.356M on LuaJIT (68%),
+with 0 failures. A wider sweep up to 20 Jokers peaks at 1.43M. Oversized shapes
+below `PLAY_WORK` measured at most 1.22M. Shapes past it, up to 48 cards /
+64 Jokers, fall back to category ranking and stay under 0.25M.
 
 `tests/policy/test_budget.lua` covers:
 
@@ -45,8 +47,9 @@ With the meter disabled, 18 of its cases fail.
 
 **Resolution.** Comments, indentation and blank lines are stripped at render
 time. The repository template stays readable. The rendered source went from
-64,303–64,310 bytes to 50,859–50,866 bytes, including this batch's new code:
-14.7 KB (22%) of headroom. A 56 KiB practical guard (`SOURCE_GUARD`) is
+64,303–64,310 bytes to 51,544–51,551 bytes, including this batch's new code:
+about 14.0 KB (21%) of headroom. LuaJIT bytecode of the stripped and readable
+renders was verified byte-identical. A 56 KiB practical guard (`SOURCE_GUARD`) is
 enforced by `tests/policy/test_source.lua`, together with stripped-vs-readable
 decision equivalence. Rendering is deterministic, and behaviour is the same on
 Lua 5.1 and LuaJIT.
@@ -112,6 +115,20 @@ LV-7 through LV-10 were corrected:
   exactly one Joker). Negative cases are kept.
 - **LV-10:** scoped to Competitive and above. Adds Negative Joker and full-slot
   validation. Moves valuation and crowd-out checks to repository tests.
+
+## Fresh-context re-review
+
+An independent fresh-context Claude review of `a33ce99..ca02b7b` found no
+Critical, High or Medium issues. It raised three Lows, all addressed in the
+follow-up commit:
+
+- **L1:** `best_joker` recomputed every shop Joker's buy score, doubling shop
+  cost. At 40 owned and 16 shop Jokers, far beyond the real 4-card shop, that
+  exceeded the budget. Scores are now cached per decision, so that shape costs
+  1.10M, the same as before Batch 2. `budget_holds_for_crowded_shops` pins it.
+- **L2:** stale size and instruction figures were refreshed.
+- **L3:** the work meter under-counts Red-seal retriggers. This is now
+  documented in §4.5.
 
 ## Lower-priority observations
 

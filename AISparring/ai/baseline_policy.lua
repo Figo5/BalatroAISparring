@@ -188,6 +188,8 @@ local LEVELS = nil
 local WORK = 0
 -- The best certified Joker purchase in this shop decision (best_joker), or false.
 local SHOP_BEST = false
+-- BUY_ITEM Joker scores computed by best_joker, reused by score_of (per decision).
+local BUY_SCORES = {}
 
 local function byte_less(a, b)
 	local na = #a
@@ -1886,6 +1888,9 @@ local function best_joker(observation, actions, count)
 		if type(a) == "table" and a.type == "BUY_ITEM" then
 			local item = find_by_id(observation.shop.items, a.item_ref)
 			local score = item ~= nil and item.kind == "joker" and buy_score(observation, a) or nil
+			if score ~= nil and type(a.id) == "string" then
+				BUY_SCORES[a.id] = score
+			end
 			if score ~= nil and score > CONF.leave_shop and (not best or score > best.score) then
 				best = { score = score, cost = item.cost, intrinsic = score - economy_bonus(spend - item.cost) }
 			end
@@ -2448,6 +2453,9 @@ local function score_of(observation, action)
 		return nil
 	end
 	if kind == "BUY_ITEM" then
+		if type(action.id) == "string" and BUY_SCORES[action.id] ~= nil then
+			return BUY_SCORES[action.id]
+		end
 		return buy_score(observation, action)
 	end
 	if kind == "BUY_VOUCHER" then
@@ -2496,6 +2504,7 @@ return function(observation, actions)
 	LEVELS = nil
 	WORK = 0
 	SHOP_BEST = false
+	BUY_SCORES = {}
 	if CONF.use_levels and type(observation.self) == "table" and type(observation.self.hand_levels) == "table" then
 		LEVELS = observation.self.hand_levels
 	end

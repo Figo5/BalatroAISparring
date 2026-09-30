@@ -353,7 +353,10 @@ part, so it is bounded deterministically:
 - **Work meter.** Every score estimate charges (cards read) × (Jokers applied
   \+ 2) to `WORK`, which is reset per decision. Each draw-aware discard evaluation
   also charges its structural cost, `kept × (110 + 20 × discarded)`. Measured on
-  Lua 5.1, one unit costs about 50 VM instructions.
+  Lua 5.1, one unit costs about 50 VM instructions. The charge counts each
+  played card once, so Red-seal retriggers cost more than they are charged. The
+  limits were calibrated on Red-seal-heavy hands; re-measure before raising
+  either one.
 - **Cheap first pass.** Discard candidates are ranked by the per-card heuristic
   (`discard_score`), with the id breaking ties. The best ones get the draw-aware
   evaluation until 40 candidates or `DISCARD_WORK` (24000) units are used.
@@ -374,7 +377,7 @@ editions. Instructions are counted by the sandbox hook (`PolicyEnv.last_instruct
 | 9 / 5–16 | 1.44–1.89M | ≤ 1.05M | ≤ 1.14M | ≤ 0.19M |
 | 10 / 5–16 | 1.75M – **fail** | ≤ 1.13M | ≤ 1.21M | ≤ 0.20M |
 | 11 / 5–16 | **fails most cases** | ≤ 1.16M | ≤ 1.26M | ≤ 0.22M |
-| 12 / 5–16 | **fails almost always** (Comp/ML also fail) | ≤ 1.28M | ≤ 1.33M | ≤ 0.23M |
+| 12 / 5–16 | **fails almost always** (Comp/ML also fail) | ≤ 1.28M | ≤ 1.36M | ≤ 0.23M |
 | 16 / 16, 24 / 24 (no discard search) | 0.41M, 0.71M | same | same | — |
 | 32 / 40, 48 / 64 (category fallback) | 1.19M, **fail** | ≤ 0.23M | ≤ 0.23M | — |
 
@@ -382,7 +385,14 @@ The "before" column used plain cards with 5 or 8 Jokers (8 seeded deals per
 cell); "after" used 10 enhanced deals per cell with 5, 8 and 16 Jokers.
 These ranges hold for PvP and for non-PvP states where no play clears, on
 Lua 5.1 and on LuaJIT (the sandbox turns the JIT off, so both count
-interpreted instructions). Decision latency in these cases is 35–100 ms
+interpreted instructions). An independent re-review reran the original
+review's grid: 30 seeded hands per cell, 9–12 cards, 5 and 8 Jokers, PvP and
+no-clear, 1 or 3 hands left, plain and enhanced cards, 5,760 decisions per
+runtime. It found 0 failures, with peaks of 1.337M on Lua 5.1 and 1.356M on
+LuaJIT. A wider sweep with 20 Jokers peaked at 1.43M. Shapes below
+`PLAY_WORK`, such as 30 cards / 31 Jokers or 50 / 18, run the full play
+estimate and measured at most 1.22M. Shapes past it fall back.
+Decision latency in these cases is 35–100 ms
 on Lua 5.1 in the cloud container. Failures after the change: 0.
 `tests/policy/test_budget.lua` runs all of these through the real adapter and
 fails any decision above 1.6M instructions. It records the chosen action ids as
@@ -407,8 +417,8 @@ stripped copy, which:
 | | Rendered size |
 |---|---|
 | Before (`97358b8`, comments included) | 64,303–64,310 bytes (≈230 bytes of headroom) |
-| This change, if unstripped | 65,248–65,255 bytes (over the cap) |
-| This change, stripped | **50,859–50,866 bytes** (14.7 KB, 22%, under the cap) |
+| This change, if unstripped | 66,538–66,545 bytes (over the cap) |
+| This change, stripped | **51,544–51,551 bytes** (≈14.0 KB, 21%, under the cap) |
 
 `BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).
 `tests/policy/test_source.lua` fails when a rendered source exceeds it or when
