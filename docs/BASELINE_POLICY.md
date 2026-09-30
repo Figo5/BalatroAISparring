@@ -226,8 +226,14 @@ flush, straight and high card ×1 each. For example, with nothing owned a +4-mul
 Joker beats The Duo on this pair-heavy panel. With Gros Michel (+15 mult) owned,
 The Duo's ×2 wins. Unknown or scaling Jokers keep the flat kind value, and
 rule-changing Jokers switch this off. An additive Joker (+mult, +chips, hand bonuses, Half,
-Abstract) is priced before the first owned ×mult or Polychrome Joker, where the
-reorder step puts it, not at the end of the row.
+Abstract) is priced before the first owned ×mult or Polychrome Joker. That is
+where the estimate-based reorder puts it, so this applies only when the row
+after purchase qualifies for that reorder: every Joker has a known effect, none
+is pinned, debuffed or redacted, and there are at most 8. Otherwise, for
+example with an unknown Joker or Misprint owned, the reorder never moves it,
+so it is priced at the end of the row. The greedy reorder takes a swap only
+above a 0.5% panel gain, so a ×mult Joker that affects only a low-weight panel
+hand may not be passed; this is not reproduced, but it is a known risk.
 
 A `REORDER_JOKERS` candidate is judged by the same panel when every owned Joker
 has a known effect and none is pinned. It is taken only if it improves the panel
@@ -399,7 +405,11 @@ no-clear, 1 or 3 hands left, plain and enhanced cards, 5,760 decisions per
 runtime. It found 0 failures, with peaks of 1.337M on Lua 5.1 and 1.356M on
 LuaJIT. A wider sweep with 20 Jokers peaked at 1.43M. Shapes below
 `PLAY_WORK`, such as 30 cards / 31 Jokers or 50 / 18, run the full play
-estimate and measured at most 1.22M. Shapes past it fall back.
+estimate and measured at most 1.22M. Shapes past it fall back. After held-card pricing (Steel, Baron,
+Shoot the Moon) was added, a stress run found a peak of 1.295M over 2,304
+decisions per runtime. It used 9–12 card hands of Steel cards, Kings and
+Queens, with Red seals and Polychrome, 2–16 Jokers including Baron and Shoot
+the Moon, and PvP and no-clear blinds.
 Decision latency in these cases is 35–100 ms
 on Lua 5.1 in the cloud container. Failures after the change: 0.
 `tests/policy/test_budget.lua` runs all of these through the real adapter and
@@ -427,6 +437,7 @@ stripped copy, which:
 | Before (`97358b8`, comments included) | 64,303–64,310 bytes (≈230 bytes of headroom) |
 | This change, if unstripped | 66,538–66,545 bytes (over the cap) |
 | This change, stripped | **51,544–51,551 bytes** (≈14.0 KB, 21%, under the cap) |
+| After the follow-up backlog commits | 52,991–52,998 bytes (≈12.5 KB under the cap, 4.3 KB under the guard) |
 
 `BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).
 `tests/policy/test_source.lua` fails when a rendered source exceeds it or when

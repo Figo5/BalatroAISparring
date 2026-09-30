@@ -1677,6 +1677,23 @@ local function panel_total(jokers)
 	return total
 end
 
+local PINNED = {
+	j_blueprint = true,
+	j_brainstorm = true,
+	j_misprint = true,
+}
+
+local function joker_pinned(joker)
+	if type(joker) ~= "table" or joker.redacted == true or joker.debuff == true then
+		return true
+	end
+	local center = joker.center
+	if type(center) ~= "string" then
+		return true
+	end
+	return PINNED[center] == true
+end
+
 local function joker_gain(observation, center, edition)
 	if type(center) ~= "string" then
 		return 0
@@ -1699,10 +1716,18 @@ local function joker_gain(observation, center, edition)
 	end
 	-- Place the new Joker where the reorder step would: an additive
 	-- (+mult/+chips) Joker goes before the first owned x-mult Joker or
-	-- Polychrome, so it is not undervalued by end-of-row placement.
+	-- Polychrome. Only when the row after purchase qualifies for the
+	-- estimate-based reorder (reorder_score): every Joker known, none pinned,
+	-- at most REORDER_EST_MAX_JOKERS. Otherwise it stays at the end.
 	local e = JOKER_EFFECTS[center]
 	local slot = #owned + 1
-	if e ~= nil and ADDITIVE[e[1]] and edition ~= "polychrome" then
+	local movable = e ~= nil and #owned + 1 <= REORDER_EST_MAX_JOKERS and not PINNED[center]
+	for i = 1, #owned do
+		if JOKER_EFFECTS[owned[i].center] == nil or joker_pinned(owned[i]) then
+			movable = false
+		end
+	end
+	if movable and ADDITIVE[e[1]] then
 		for i = #owned, 1, -1 do
 			local o = JOKER_EFFECTS[owned[i].center]
 			if owned[i].edition == "polychrome" or (o ~= nil and MULTIPLICATIVE[o[1]]) then
@@ -2213,11 +2238,6 @@ local X_MULT = {
 	j_photograph = true,
 }
 
-local PINNED = {
-	j_blueprint = true,
-	j_brainstorm = true,
-	j_misprint = true,
-}
 
 local function joker_tier(joker)
 	if type(joker) ~= "table" or joker.redacted == true or joker.debuff == true then
@@ -2236,16 +2256,6 @@ local function joker_tier(joker)
 	return nil
 end
 
-local function joker_pinned(joker)
-	if type(joker) ~= "table" or joker.redacted == true or joker.debuff == true then
-		return true
-	end
-	local center = joker.center
-	if type(center) ~= "string" then
-		return true
-	end
-	return PINNED[center] == true
-end
 
 local function inversions(tiers, n)
 	local count = 0

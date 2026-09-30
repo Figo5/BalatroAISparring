@@ -39,6 +39,15 @@ return function(ctx)
 				ctx.vector("joker_slot_" .. difficulty .. "_" .. k, result.action.item_ref)
 			end
 		end
+		-- When the reorder step would never move the new Joker (an unknown or
+		-- pinned Joker owned), it is priced at the end, as before.
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			for k, owned in ipairs({ { "j_cavendish", "j_space" }, { "j_cavendish", "j_misprint" } }) do
+				local result = Support.run(env, difficulty, shop(owned, { "j_scary_face", "j_jolly" }))
+				ctx.eq(result.action.item_ref, "shop:1", difficulty .. " anchored " .. owned[2])
+				ctx.vector("joker_slot_anchored_" .. difficulty .. "_" .. k, result.action.item_ref)
+			end
+		end
 		-- Without a x-mult Joker owned, placement changes nothing.
 		local plain = Support.run(env, "competitive", shop({ "j_joker" }, { "j_scary_face", "j_joker" }))
 		ctx.vector("joker_slot_plain", plain.action.item_ref)
