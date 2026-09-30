@@ -482,12 +482,12 @@ information or authority differences).
 
 | Constant | rookie | competitive | major_league |
 |---|---|---|---|
-| `reserve` (money kept) | 6 | 10 | 16 |
+| `reserve` (money kept) | 6 | 10 | 12 |
 | play junk penalty / extra card | 250 | 400 | 550 |
 | discard junk value / card | 5000 | 6000 | 7000 |
 | discard pair-preservation penalty | 16000 | 20000 | 24000 |
-| `reroll_base` / surplus cap | 70 / 160 | 55 / 120 | 45 / 100 |
-| `leave_shop` | 80 | 90 | 100 |
+| `reroll_base` / surplus cap | 70 / 160 | 55 / 120 | 55 / 120 |
+| `leave_shop` | 80 | 90 | 90 |
 | `reorder` / max improvement bonus | 105 / 10 | 105 / 10 | 105 / 10 |
 | negative-edition bonus | 120 | 150 | 180 |
 | recognized-edition buy bonus / `slot_sell` | 40 / 220 | 40 / 220 | 40 / 220 |
@@ -500,6 +500,16 @@ information or authority differences).
 | `joker_gain_value` (panel-based shop Joker value; order by panel) | used only with `est_jokers` (off) | 400 | 400 |
 | `voucher_values` (per-voucher values, §4.4) | off | on | on |
 | `smart_packs` (pack kind preference and value-aware picks, §4.4) | off | on | on |
+
+**Shop economy (run-level evidence).** `tests/benchmark_runs.py` showed Major
+League and Expert hoarding money above the $25 interest cap, where it earns
+nothing, and clearing fewer blinds than Competitive. Their shop settings now
+use Competitive's reroll and leave values with a reserve of 12, still graded
+above Competitive's 10. Over 150 paired runs this gained 0.69 blinds per run for
+Major League (t = 4.9) and 0.24 for Expert (t = 1.8). Rerolls also count any
+money above the interest cap as surplus (`min(2 × reserve, 5 × interest cap)`).
+The simulator has no packs or vouchers, so LV-10 should watch whether they now
+save too little for a $10 voucher.
 
 **Expert** (`expert`, fourth tier) is Major League with a deeper draw search and a more
 willing discard and shop profile. It adds two draw targets: full house from two

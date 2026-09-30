@@ -35,7 +35,9 @@ Constraints on all of it:
   - add hand levels and more boss effects to the simulator;
   - chain blinds with a simple shop (money, interest, Joker buys) into a
     run-level metric;
-  - give Major League a play-side difference if the run metric shows none.
+  - give Major League and Expert a real edge: after the economy retune
+    (+0.69 / +0.24 blinds per run) they match Competitive in run metrics, so
+    their play-side difference is still unproven.
 
 ## Open observations from the Batch 2 review (lower priority)
 

@@ -136,16 +136,16 @@ local CONFIGS = {
 	competitive = make_config("competitive", {}),
 	major_league = make_config("major_league", {
 		discard_need_pct = 100,
-		reserve = 16,
+		reserve = 12,
 		play_junk = 550,
 		discard_junk = 7000,
 		discard_pair_pen = 24000,
 		discard_flush_pen = 18000,
 		discard_seal_pen = 14000,
 		negative = 180,
-		reroll_base = 45,
-		reroll_surplus_cap = 100,
-		leave_shop = 100,
+		reroll_base = 55,
+		reroll_surplus_cap = 120,
+		leave_shop = 90,
 		blind_skip = 30,
 		booster_good = 150,
 	}),
@@ -155,16 +155,16 @@ local CONFIGS = {
 		deep_draws = true,
 		discard_gain_pct = 130,
 		joker_gain_value = 500,
-		reserve = 16,
+		reserve = 12,
 		play_junk = 550,
 		discard_junk = 7000,
 		discard_pair_pen = 24000,
 		discard_flush_pen = 18000,
 		discard_seal_pen = 14000,
 		negative = 180,
-		reroll_base = 45,
-		reroll_surplus_cap = 100,
-		leave_shop = 100,
+		reroll_base = 55,
+		reroll_surplus_cap = 120,
+		leave_shop = 90,
 		blind_skip = 30,
 		booster_good = 150,
 	}),
@@ -2153,7 +2153,13 @@ local function reroll_score(observation, action)
 	end
 	local left = spend - cost
 	local score = CONF.reroll_base
-	local surplus = left - CONF.reserve * 2
+	-- Money above the interest cap earns nothing, so it counts as surplus
+	-- even when twice the reserve is higher.
+	local threshold = CONF.reserve * 2
+	if 5 * INTEREST_CAP < threshold then
+		threshold = 5 * INTEREST_CAP
+	end
+	local surplus = left - threshold
 	if surplus > 0 then
 		local extra = surplus * 2
 		if extra > CONF.reroll_surplus_cap then

@@ -132,7 +132,10 @@ return function(ctx)
 		local poor = Support.poor_reroll_frame()
 		choose("rookie", rich, "REROLL", "rich_reroll")
 		choose("competitive", rich, "REROLL", "rich_reroll")
-		choose("major_league", rich, "LEAVE_SHOP", "rich_leave")
+		-- $60 is far above the $25 interest cap, where money earns nothing:
+		-- Major League also rerolls (tests/benchmark_runs.py: holding it cost
+		-- 0.69 blinds per run, paired t = 4.9).
+		choose("major_league", rich, "REROLL", "rich_reroll")
 		for _, difficulty in ipairs(Support.DIFFICULTIES) do
 			choose(difficulty, poor, "LEAVE_SHOP", "poor_leave")
 		end

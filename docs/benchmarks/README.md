@@ -148,6 +148,49 @@ hardest boss with a real sample; for Rookie it is The Needle. Rows with 12–21
 blinds are noisy: one blind moves them by 5–8 points. No difficulty adapts its play to bosses beyond what the observation
 already shows (hands and discards left, debuffed cards).
 
+## Run simulator (`tests/benchmark_runs.py`)
+
+A first run-level metric:
+
+- **Runs:** antes 1–6, each with small, big and boss blinds. A run ends at the
+  first failed blind.
+- **Money:** a $4 start, blind rewards ($3 / $4 / $5), $1 per unused hand, and
+  interest ($1 per $5, at most $5).
+- **Shop** after each cleared blind:
+  - two offers, each a Joker ($4–8) or a planet ($3);
+  - rerolls from $5, rising by $1;
+  - five Joker slots;
+  - a bought planet levels its hand at once.
+- **Pipeline:** every decision goes through the real adapter → reader →
+  sandbox pipeline, with the same seeds for every difficulty.
+
+Scored with the shared reference model. There are no packs, vouchers, tags,
+scaling Jokers or opponents, so this is **not** a Balatro win rate.
+
+```
+python tests/benchmark_runs.py --runs 60 --json docs/benchmarks/runs_report.json
+```
+
+60 runs (seed 11, LuaJIT), from `runs_report.json`:
+
+| | Rookie | Competitive | Major League | Expert |
+|---|---|---|---|---|
+| mean blinds cleared (of 18) | 5.8 | 11.7 | 11.7 | 10.9 |
+| mean ante reached | 2.6 | 4.5 | 4.5 | 4.2 |
+| reached ante 4 / 6 | 35 / 3% | 83 / 20% | 83 / 23% | 80 / 20% |
+| planets / rerolls per run | 4.2 / 1.1 | 9.0 / 2.9 | 8.6 / 2.8 | 7.9 / 2.5 |
+| money at the end | $5 | $27 | $31 | $29 |
+| failures | 0 | 0 | 0 | 0 |
+| max sandbox instructions | 151k | 863k | 896k | 1,006k |
+
+This simulator exposed Major League and Expert hoarding money above the
+interest cap. Their economy was retuned on 150 paired runs (Major League
++0.69 blinds per run, t = 4.9; Expert +0.24, t = 1.8; see
+`docs/BASELINE_POLICY.md` §5). Major League now matches Competitive, and
+Expert still trails slightly. With 60 runs the standard error is about 0.6
+blinds, so differences under about 1 blind between strong tiers are within
+noise.
+
 ### Not yet covered (prepared, continuing)
 
 These need a model that differs from the policy's, or multi-decision

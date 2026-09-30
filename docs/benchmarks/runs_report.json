@@ -20,41 +20,41 @@
       }
     },
     "expert": {
-      "decisions": 3292,
+      "decisions": 3493,
       "failures": 0,
       "max_instructions": 1006000,
-      "mean_ante_reached": 4.05,
-      "mean_blinds_cleared": 10.483,
-      "mean_jokers_bought": 4.233,
-      "mean_money_end": 40.22,
-      "mean_planets_bought": 6.05,
-      "mean_rerolls": 1.433,
-      "reached_ante": {
-        "2": 0.817,
-        "3": 0.8,
-        "4": 0.767,
-        "5": 0.45,
-        "6": 0.15,
-        "7": 0.067
-      }
-    },
-    "major_league": {
-      "decisions": 3311,
-      "failures": 0,
-      "max_instructions": 896000,
-      "mean_ante_reached": 4.133,
-      "mean_blinds_cleared": 10.767,
-      "mean_jokers_bought": 4.367,
-      "mean_money_end": 39.18,
-      "mean_planets_bought": 6.233,
-      "mean_rerolls": 1.467,
+      "mean_ante_reached": 4.2,
+      "mean_blinds_cleared": 10.85,
+      "mean_jokers_bought": 4.333,
+      "mean_money_end": 29.48,
+      "mean_planets_bought": 7.933,
+      "mean_rerolls": 2.467,
       "reached_ante": {
         "2": 0.85,
         "3": 0.833,
-        "4": 0.75,
-        "5": 0.45,
-        "6": 0.183,
-        "7": 0.067
+        "4": 0.8,
+        "5": 0.467,
+        "6": 0.2,
+        "7": 0.05
+      }
+    },
+    "major_league": {
+      "decisions": 3732,
+      "failures": 0,
+      "max_instructions": 896000,
+      "mean_ante_reached": 4.483,
+      "mean_blinds_cleared": 11.733,
+      "mean_jokers_bought": 4.5,
+      "mean_money_end": 30.8,
+      "mean_planets_bought": 8.633,
+      "mean_rerolls": 2.783,
+      "reached_ante": {
+        "2": 0.883,
+        "3": 0.867,
+        "4": 0.833,
+        "5": 0.55,
+        "6": 0.233,
+        "7": 0.117
       }
     },
     "rookie": {
@@ -82,5 +82,5 @@
   "runs": 60,
   "runtime": "lupa.luajit21",
   "seed": 11,
-  "wall_seconds": 213.04
+  "wall_seconds": 218.85
 }
