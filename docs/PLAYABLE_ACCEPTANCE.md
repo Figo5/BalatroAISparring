@@ -1,6 +1,6 @@
 # Playable build acceptance evidence
 
-Status: **in development, not installed, not yet playable**. Fixture and local-server evidence do not satisfy the user's actual Balatro acceptance criteria.
+Status: **dev build 0.1.0-dev installed in live Mods (September 29, commit c33bab6, certificate e9bc994a…); live boot smoke passed; first human playtest pending**. Fixture and local-server evidence do not satisfy the user's actual Balatro acceptance criteria.
 
 | Requirement | Evidence and remaining gate |
 |---|---|
@@ -13,7 +13,7 @@ Status: **in development, not installed, not yet playable**. Fixture and local-s
 | Lives, PvP/Nemesis, both result orientations, completion | Original server handlers and real local TCP lifecycle pass; complete engine lifecycle pending |
 | Failure recovery, local decisions and match summaries | Service/runtime fixtures pass; controlled engine failure check pending |
 | Claude safety/playability verdict | Cache correction accepted and native-verified; exact P2 launch-role correction under implementation/review; gameplay verdict pending |
-| Installed build ready for user | Pending review, backups, actual isolation gates and controlled live smoke |
+| Installed build ready for user | Installed after verified backup `20260930T001526Z`; live boot smoke passed (see NATIVE_TEST_PROGRESS.md). Menu click-through, live-to-staged hand-off and a human-played PvP/result pass remain for the user's first playtest |
 
 ## Current review status — September 28
 

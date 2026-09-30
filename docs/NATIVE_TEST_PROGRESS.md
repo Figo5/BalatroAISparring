@@ -114,3 +114,24 @@ The commit includes the reviewed coordinator diagnostics. The Claude Opus 5.5 Hi
 - The send guard blocks Handy's `handyMPExtensionDisable` and Multiplayer's `streamLogLines`, which is intended for private practice. Handy/MP compatibility remains an in-game acceptance item.
 - The AI does not use the Multiplayer PvP timer against a slow opponent.
 - PvP resolution, lives, match end and results cannot be exercised without a human actually playing to the PvP blind. Per AGENTS.md, a full human run is not played by the orchestrator, so this remains for the controlled live smoke with the user.
+
+## Live installation and live smoke (September 29, ~20:15–20:22 ET)
+
+User-approved in chat. Balatro was confirmed closed immediately before each live step.
+
+- **Backup:** fresh verified backup `backups/20260930T001526Z`: AppData 983 files including Mods and saves, install 15 files, Steam userdata 1 file. All three entries re-verified against their manifests.
+- **Package:** `work/aisparring-package` `0.1.0-dev`, digest `9bf386381d507730ee89a45b8bc04b582a8d85acb0251d471681ef9dcd5408ee`. The live body is byte-identical to repo `AISparring/` at `c33bab6`, apart from the generated `config.lua` (`role="live"`, discovery path to `work/aisparring-host/practice_host.json`).
+- **Install:** acceptance record `work/install-acceptance.json` binds the package digest and certificate `e9bc994a…`. The dry run returned `install_planned`, and `--execute` returned `installed` with receipt `work/install-receipts/aisparring-install-20260930T001746Z-a3877191.json`.
+- **Target:** `%APPDATA%\Balatro\Mods\AISparring`. An independent diff against the backup showed the only change was that new folder, identical to the package. The install directory was unchanged.
+- **Live smoke:**
+  - The practice host daemon was started (`practice_host.py serve --match-port 8788`, loopback, discovery marker written). Live Balatro was launched once through Steam.
+  - Lovely log `lovely-2026.09.29-20.18.32.log` showed `bootstrap_ready`, Multiplayer 0.5.5 satisfied and `companion_boot ok` (live role: practice menu and controller installed). There were no errors or tracebacks. The main menu screenshot showed Steamodded, Multiplayer 0.5.5 and "Connected to Service".
+  - The `ai_mode_resolved ... ai_gates_not_implemented` line is the legacy M1 resolver logged before the companion boot. It is misleading but harmless (cleanup item).
+  - The game was closed normally (WM_CLOSE on the instance launched for the smoke test).
+  - Afterwards only the game's own `1/profile.jkr` and `settings.jkr`, a new Lovely log and Steam's `remotecache.vdf` differed from the backup. That is normal launch/exit behaviour; the companion contains no save-writing calls.
+  - With the mod installed, the host's pre-acknowledgement start gates (`default_start_gate` with the real certificate API) return `practice_host_ok`.
+- **Not verified by the orchestrator:**
+  - Clicking **Play → AI Sparring** in the live UI. A synthetic click could not take foreground focus, and no further desktop input was attempted.
+  - The live-to-staged hand-off, and any human-played match through PvP, lives and results.
+  - These are the user's first playtest.
+- **Left running for the user:** practice host daemon (session `host-ffddc17b…`). Restart scripts are `work/aisparring-host/dev/start_practice_host.cmd` and `.ps1`.
