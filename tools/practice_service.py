@@ -1009,6 +1009,11 @@ class PracticeService:
         self._clock = clock or time.monotonic
         self._lock = threading.RLock()
         self._state = _SessionState()
+        # Hand-off milestones (first occurrence only), seconds since service
+        # creation on a private perf_counter clock. Instrumentation only: never
+        # read by any decision and independent of the injectable clock.
+        self._milestone_origin = time.perf_counter()
+        self._milestones: dict = {}
         self._pending: Optional[_DecisionJob] = None
         self._closed = False
         self._watchdog_stop: Optional[threading.Event] = None
@@ -1033,6 +1038,16 @@ class PracticeService:
     @property
     def gauntlet_seed(self) -> Optional[str]:
         return self.config.gauntlet_seed
+
+    def _milestone(self, name: str) -> None:
+        with self._lock:
+            if name not in self._milestones and len(self._milestones) < 32:
+                self._milestones[name] = round(time.perf_counter() - self._milestone_origin, 6)
+
+    def milestones(self) -> dict:
+        """Copy of the first-occurrence hand-off milestones (seconds since creation)."""
+        with self._lock:
+            return dict(self._milestones)
 
     @property
     def started(self) -> bool:
@@ -1518,6 +1533,7 @@ class PracticeService:
             if self._state.started:
                 return {"ok": False, "code": CODE_FROZEN}
             self._state.hello[role] = {"version": version, "content_digest": digest}
+        self._milestone(f"hello_{role}")
         return {"ok": True, "code": CODE_OK, "role": role, "ruleset": RULESET}
 
     def _op_lobby_code(self, payload) -> dict:
@@ -1531,6 +1547,7 @@ class PracticeService:
             if self._state.started:
                 return {"ok": False, "code": CODE_FROZEN}
             self._state.lobby_code = code
+        self._milestone("lobby_code")
         return {"ok": True, "code": CODE_OK}
 
     def _op_join_code(self) -> dict:
@@ -1540,6 +1557,7 @@ class PracticeService:
             code = self._state.lobby_code
         if code is None:
             return {"ok": False, "code": CODE_NO_LOBBY}
+        self._milestone("join_code_served")
         return {"ok": True, "code": CODE_OK, "lobby_code": code}
 
     def _op_ready(self, role: str, payload) -> dict:
@@ -1557,6 +1575,7 @@ class PracticeService:
             if self._state.started:
                 return {"ok": False, "code": CODE_FROZEN}
             self._state.ready[role] = {"config_digest": digest}
+        self._milestone(f"ready_{role}")
         return {"ok": True, "code": CODE_OK, "role": role}
 
     def _op_start(self) -> dict:
@@ -1573,6 +1592,7 @@ class PracticeService:
             return {"ok": False, "code": CODE_CONFIG_MISMATCH}
         with self._lock:
             self._state.started = True
+        self._milestone("match_started")
         return {"ok": True, "code": CODE_OK, "started": True}
 
     def _op_status(self, role: str, payload) -> dict:

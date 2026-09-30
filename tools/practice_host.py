@@ -58,6 +58,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
@@ -92,6 +93,11 @@ DEFAULT_LIVE_EXIT_TIMEOUT = 300.0
 DEFAULT_MATCH_TIMEOUT = 7200.0
 DEFAULT_PRESTART_TIMEOUT = 120.0
 DEFAULT_POLL_INTERVAL = 1.0
+# Poll cadence of the two hand-off waits the user sits through (the live game's
+# own exit and the staged roles' startup attestations). Each poll is a
+# query-only handle read or a small file read, so a shorter cadence only
+# removes idle time; the match supervision loop keeps DEFAULT_POLL_INTERVAL.
+DEFAULT_HANDOFF_POLL_INTERVAL = 0.25
 SERVER_ENTRY = "dist/main.js"
 SERVER_SOURCE_ENTRY = "src/main.ts"
 # Shared, colon-free session grammar owned by the certificate module (NM7/M6).
@@ -379,6 +385,7 @@ class HostConfig:
     # from the two-hour match timeout (H3/M9).
     prestart_timeout: float = DEFAULT_PRESTART_TIMEOUT
     poll_interval: float = DEFAULT_POLL_INTERVAL
+    handoff_poll_interval: float = DEFAULT_HANDOFF_POLL_INTERVAL
     server_start_timeout: float = 15.0
     quiescence_seconds: float = DEFAULT_QUIESCENCE_SECONDS
     attestation_timeout: float = DEFAULT_ATTESTATION_TIMEOUT
@@ -423,7 +430,13 @@ def validate_config(config: HostConfig) -> None:
             raise HostError(CODE_BAD_REQUEST)
     if config.match_port is not None and _bounded_int(config.match_port, 1, 65535) is None:
         raise HostError(CODE_BAD_REQUEST)
-    for value in (config.live_exit_timeout, config.match_timeout, config.prestart_timeout, config.poll_interval):
+    for value in (
+        config.live_exit_timeout,
+        config.match_timeout,
+        config.prestart_timeout,
+        config.poll_interval,
+        config.handoff_poll_interval,
+    ):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise HostError(CODE_BAD_REQUEST)
 
@@ -531,6 +544,7 @@ def wait_for_live_exit(
     interval = float(poll_interval if poll_interval is not None else config.poll_interval)
     enumerator = enumerator or launch_practice.default_enumerator()
     while True:
+        delay = interval
         identity = read_live_identity(live_pid, opener=opener)
         if identity is None:
             observed = _confirm_absent(enumerator, live_pid, live_create_time)
@@ -540,7 +554,11 @@ def wait_for_live_exit(
                 return {"ok": True, "code": CODE_LIVE_EXITED, "pid": int(live_pid), "pid_reused": True}
             if observed["ok"]:
                 return {"ok": True, "code": CODE_LIVE_EXITED, "pid": int(live_pid), "pid_reused": False}
-            # still running per enumeration but the handle is gone: keep waiting
+            # still running per enumeration but the handle is gone: keep waiting.
+            # That path runs a full process listing (PowerShell on Windows) each
+            # time, so it never repeats faster than the general poll interval
+            # while the game is still shutting down.
+            delay = max(interval, float(config.poll_interval))
         else:
             create_time = identity.get("create_time")
             if create_time is None:
@@ -556,7 +574,7 @@ def wait_for_live_exit(
                 return {"ok": False, "code": CODE_LIVE_UNVERIFIED, "pid": int(live_pid)}
         if clock() >= deadline:
             return {"ok": False, "code": CODE_LIVE_TIMEOUT, "pid": int(live_pid), "terminated": False}
-        sleeper(interval)
+        sleeper(delay)
 
 
 def _confirm_absent(enumerator, live_pid: int, live_create_time: float) -> dict:
@@ -1347,7 +1365,18 @@ def _is_content_id(value) -> bool:
     return isinstance(value, str) and bool(_SHA256_RE.match(value))
 
 
-def prepare_live_baseline(config: HostConfig, live_map, *, api=None, backup_runner=None, sleeper=None, label=None) -> dict:
+@contextmanager
+def _maybe_stage(timer, name: str):
+    if timer is None:
+        yield {}
+        return
+    with timer.stage(name) as result:
+        yield result
+
+
+def prepare_live_baseline(
+    config: HostConfig, live_map, *, api=None, backup_runner=None, sleeper=None, label=None, timer=None
+) -> dict:
     """Quiescence, a fresh verified full byte backup, then the fresh before-manifest.
 
     R1/the backup contract: the returned ``backup_id`` is **only** the
@@ -1362,14 +1391,20 @@ def prepare_live_baseline(config: HostConfig, live_map, *, api=None, backup_runn
     api = api if api is not None else isolation_certificate
     if api is None:
         return {"ok": False, "code": CODE_CERTIFICATE_API_MISSING}
-    quiet = check_quiescence(config, live_map, api=api, sleeper=sleeper)
+    with _maybe_stage(timer, "baseline_quiescence") as timed:
+        quiet = check_quiescence(config, live_map, api=api, sleeper=sleeper)
+        _timed_ok(timed, quiet)
     if not quiet.get("ok"):
         return quiet
     backup_runner = backup_runner or _default_backup_runner
-    backup = backup_runner(config, live_map, label)
+    with _maybe_stage(timer, "baseline_backup") as timed:
+        backup = backup_runner(config, live_map, label)
+        _timed_ok(timed, backup)
     if not isinstance(backup, dict) or not backup.get("ok"):
         return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "backup": backup}
-    verify = _verify_fresh_backup(config, live_map)
+    with _maybe_stage(timer, "baseline_verify_backup") as timed:
+        verify = _verify_fresh_backup(config, live_map)
+        _timed_ok(timed, verify)
     if not isinstance(verify, dict) or not verify.get("ok"):
         return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "backup": backup, "verify": verify}
     backup_id = verify.get("backup_id")
@@ -1390,14 +1425,14 @@ def prepare_live_baseline(config: HostConfig, live_map, *, api=None, backup_runn
     }
 
 
-def _default_backup_runner(config: HostConfig, live_map, label):
+def _default_backup_runner(config: HostConfig, live_map, label, enumerator=None):
     ensured_label = label if isinstance(label, str) and _SAFE_ID_RE.match(label) else "session-" + secrets.token_hex(8)
     result = launch_practice.create_live_backup(
         install_root=config.live_install_root,
         appdata_root=config.live_appdata_root,
         steam_root=config.steam_root,
         backup_root=config.backup_root,
-        enumerator=launch_practice.default_enumerator(),
+        enumerator=enumerator or launch_practice.default_enumerator(),
         live_install_root=config.live_install_root,
         label=ensured_label,
         execute=True,
@@ -1570,6 +1605,137 @@ class SessionWorkspace:
     server_dir: Path
     log_dir: Path
     report_path: Path
+
+
+class StageTimer:
+    """Wall-clock timings of the practice hand-off stages (instrumentation only).
+
+    Uses its own ``perf_counter`` clock, never the supervisor's injected clock, so
+    recording a stage cannot change any deadline or poll behaviour. Each finished
+    stage is kept in memory for the session report and, when a sink is given,
+    appended as one JSON line so a hand-off that never finishes still shows where
+    its time went. Recording failures are swallowed: timing never affects a
+    verdict.
+    """
+
+    MAX_STAGES = 256
+
+    def __init__(self, sink: Optional[Path] = None, counter: Callable[[], float] = time.perf_counter) -> None:
+        self._counter = counter
+        self._origin = counter()
+        self._sink = sink
+        self.stages: list = []
+        # Aggregated costs of repeated operations (e.g. process enumerations).
+        self.counters: dict = {}
+
+    def count(self, name: str, seconds: float) -> None:
+        try:
+            slot = self.counters.setdefault(str(name), {"calls": 0, "seconds": 0.0})
+            slot["calls"] += 1
+            slot["seconds"] = round(slot["seconds"] + float(seconds), 6)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def elapsed(self) -> float:
+        return round(self._counter() - self._origin, 6)
+
+    def _record(self, entry: dict) -> None:
+        if len(self.stages) >= self.MAX_STAGES:
+            return
+        self.stages.append(entry)
+        if self._sink is None:
+            return
+        try:
+            with open(self._sink, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        except Exception:  # noqa: BLE001
+            pass
+
+    @contextmanager
+    def stage(self, name: str):
+        """Time one stage. The body may set ``result["ok"]``/``result["code"]``."""
+        result: dict = {}
+        start = self._counter()
+        failed = False
+        try:
+            yield result
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            end = self._counter()
+            ok = result.get("ok")
+            if failed:
+                ok = False
+            entry = {
+                "stage": str(name),
+                "start": round(start - self._origin, 6),
+                "seconds": round(end - start, 6),
+                "ok": ok if isinstance(ok, bool) else None,
+            }
+            code = result.get("code")
+            if isinstance(code, str):
+                entry["code"] = code
+            try:
+                self._record(entry)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def mark(self, name: str, **fields) -> None:
+        """Record an instant milestone (no duration)."""
+        entry = {"stage": str(name), "start": self.elapsed(), "seconds": 0.0, "ok": True, "milestone": True}
+        for key, value in fields.items():
+            if isinstance(value, (bool, int, float, str)) or value is None:
+                entry[str(key)] = value
+        try:
+            self._record(entry)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def summary(self) -> dict:
+        totals: dict = {}
+        for entry in self.stages:
+            if entry.get("milestone"):
+                continue
+            totals[entry["stage"]] = round(totals.get(entry["stage"], 0.0) + float(entry["seconds"]), 6)
+        slowest = sorted(totals.items(), key=lambda item: item[1], reverse=True)[:5]
+        return {
+            "elapsed": self.elapsed(),
+            "stages": list(self.stages),
+            "totals": totals,
+            "slowest": [{"stage": name, "seconds": seconds} for name, seconds in slowest],
+            "counters": {key: dict(value) for key, value in self.counters.items()},
+        }
+
+
+class _TimedEnumerator(launch_practice.ProcessEnumerator):
+    """Pass-through process enumerator that only measures each listing.
+
+    Every call still performs a fresh listing (no caching, so no staleness); the
+    count and time land in the hand-off timings. On Windows each listing is a
+    PowerShell ``Get-Process`` run, which is expected to dominate small stages.
+    """
+
+    def __init__(self, inner, timer: "StageTimer", counter: Callable[[], float] = time.perf_counter) -> None:
+        self._inner = inner
+        self._timer = timer
+        self._counter = counter
+
+    def list(self):
+        start = self._counter()
+        try:
+            return self._inner.list()
+        finally:
+            self._timer.count("process_enumeration", self._counter() - start)
+
+
+def _timed_ok(result: dict, verdict) -> None:
+    """Copy a verdict's ok/code into a StageTimer result slot."""
+    if isinstance(verdict, Mapping):
+        if isinstance(verdict.get("ok"), bool):
+            result["ok"] = verdict.get("ok")
+        if isinstance(verdict.get("code"), str):
+            result["code"] = verdict.get("code")
 
 
 def mint_session_id() -> str:
@@ -1861,7 +2027,7 @@ class MatchSupervisor:
         self._launch_runner = launch_runner or _default_launch_runner
         self._server_runner = server_runner or default_server_runner
         self._listener_probe = listener_probe or default_listener_probe()
-        self._enumerator = enumerator or launch_practice.default_enumerator()
+        self._raw_enumerator = enumerator or launch_practice.default_enumerator()
         self._opener = opener
         self._gate_evaluator = gate_evaluator or self._evaluate_gates
         self._post_verifier = post_verifier
@@ -1881,6 +2047,12 @@ class MatchSupervisor:
         self._clock = clock
         self._sleeper = sleeper
         self.workspace = workspace or create_session_workspace(config, self.session_id)
+        # Hand-off instrumentation (never affects a verdict or deadline).
+        log_dir = getattr(self.workspace, "log_dir", None)
+        self.timer = StageTimer(sink=Path(log_dir) / "handoff.jsonl" if log_dir is not None else None)
+        self._enumerator = _TimedEnumerator(self._raw_enumerator, self.timer)
+        self._match_started_marked = False
+        self._service_milestones: dict = {}
 
         self.phase = "accepted"
         self.code = CODE_ACCEPTED
@@ -1922,12 +2094,17 @@ class MatchSupervisor:
     def run(self) -> dict:
         try:
             self._set_phase("waiting_live_exit")
-            exit_verdict = self._wait_live()
+            with self.timer.stage("wait_live_exit") as timed:
+                exit_verdict = self._wait_live()
+                _timed_ok(timed, exit_verdict)
             if not exit_verdict.get("ok"):
                 return self._fail(exit_verdict.get("code", CODE_LIVE_UNVERIFIED), live_exit=exit_verdict)
+            self.timer.mark("live_exited", pid_reused=bool(exit_verdict.get("pid_reused")))
 
             self._set_phase("launching")
-            gate_verdict = self._gate_evaluator()
+            with self.timer.stage("gates_total") as timed:
+                gate_verdict = self._gate_evaluator()
+                _timed_ok(timed, gate_verdict)
             self._gates = gate_verdict
             if not gate_verdict.get("ok"):
                 return self._fail(gate_verdict.get("code", CODE_STATIC_GATES_FAILED), gates=_gate_summary(gate_verdict))
@@ -2038,6 +2215,7 @@ class MatchSupervisor:
             self.config,
             int(self.request["live_pid"]),
             float(self.request["live_create_time"]),
+            poll_interval=float(self.config.handoff_poll_interval),
             enumerator=self._enumerator,
             opener=self._opener,
             clock=self._clock,
@@ -2057,22 +2235,28 @@ class MatchSupervisor:
             missing = measurement_api_problems(api)
             if missing:
                 return {"ok": False, "code": CODE_MEASUREMENT_API_MISSING, "problems": missing}
-        lockout = read_host_lockout(self.config)
+        timer = self.timer
+        with timer.stage("gate_lockouts"):
+            lockout = read_host_lockout(self.config)
+            open_records = certificate_open_records(api, self.config) if self.config.require_certificate else None
+            cert_lock = _certificate_lockout(api, self.config) if self.config.require_certificate else {}
         if lockout.get("locked"):
             return {"ok": False, "code": CODE_ACK_REQUIRED, "lockout": lockout}
         if self.config.require_certificate:
-            open_records = certificate_open_records(api, self.config)
             if open_records:
                 return {"ok": False, "code": CODE_OPEN_RECORD_BLOCKED, "open_records": open_records}
-            cert_lock = _certificate_lockout(api, self.config)
             if cert_lock.get("locked"):
                 return {"ok": False, "code": CODE_CERTIFICATE_LOCKED, "lockout": cert_lock}
         # Runtime/policy preflight: a missing Lua runtime, policy source or
         # canonicalizer is a refusal before any spawn, never a late policy failure.
-        preflight = runtime_preflight(self.config, checker=self._runtime_checker)
+        with timer.stage("gate_runtime_preflight") as timed:
+            preflight = runtime_preflight(self.config, checker=self._runtime_checker)
+            _timed_ok(timed, preflight)
         if not preflight.get("ok"):
             return {"ok": False, "code": CODE_RUNTIME_PREFLIGHT, "problems": preflight.get("problems")}
-        static = static_isolation_gates(self.config, enumerator=self._enumerator)
+        with timer.stage("gate_static_isolation") as timed:
+            static = static_isolation_gates(self.config, enumerator=self._enumerator)
+            _timed_ok(timed, static)
         if not static["ok"]:
             return {"ok": False, "code": CODE_STATIC_GATES_FAILED, "static": static}
         port = choose_match_port(self.config, port_free=self._port_free)
@@ -2085,23 +2269,33 @@ class MatchSupervisor:
         config_digest: Optional[str] = None
         ruleset: dict = {}
         if self.config.require_certificate:
-            cert = certificate_gate(self.config, live_map=live_map, port=self.match_port, api=api)
+            with timer.stage("gate_certificate") as timed:
+                cert = certificate_gate(self.config, live_map=live_map, port=self.match_port, api=api)
+                _timed_ok(timed, cert)
             if not cert.get("ok"):
                 return {"ok": False, "code": cert.get("code", CODE_CERTIFICATE_REQUIRED), "certificate": cert}
         # H-A: every check that does not need the game closed runs BEFORE the
         # exclusive open record is written, so a refusal here can never strand an
         # open record that nothing in the product can close.
-        server = verify_server_adaptation(self.config, which=self._which)
+        with timer.stage("gate_server_adaptation") as timed:
+            server = verify_server_adaptation(self.config, which=self._which)
+            _timed_ok(timed, server)
         if not server.get("ok"):
             return {"ok": False, "code": CODE_SERVER_ADAPTATION, "server": server}
-        endpoints = staging.verify_staged_endpoints(self.config.staging_root, port=self.match_port)
+        with timer.stage("gate_staged_endpoints") as timed:
+            endpoints = staging.verify_staged_endpoints(self.config.staging_root, port=self.match_port)
+            _timed_ok(timed, endpoints)
         if not endpoints.get("ok"):
             return {"ok": False, "code": CODE_STAGED_ENDPOINTS, "endpoints": endpoints}
         if self.config.require_certificate:
-            content_hash = certificate_content_hash(api, self.config.staging_root)
+            with timer.stage("gate_content_hash") as timed:
+                content_hash = certificate_content_hash(api, self.config.staging_root)
+                timed["ok"] = bool(content_hash)
             if not content_hash:
                 return {"ok": False, "code": CODE_CERTIFICATE_REQUIRED, "problems": ["role_parity_digest_unavailable"]}
-            ruleset = self._ruleset_reader(self.config.staging_root)
+            with timer.stage("gate_ruleset") as timed:
+                ruleset = self._ruleset_reader(self.config.staging_root)
+                _timed_ok(timed, ruleset)
             if not ruleset.get("ok"):
                 return {"ok": False, "code": CODE_CONFIG_DIGEST, "ruleset": ruleset}
             config_digest = _trusted_config_digest(ruleset.get("config_digest"))
@@ -2116,7 +2310,9 @@ class MatchSupervisor:
             if config_digest is None:
                 return {"ok": False, "code": CODE_CONFIG_DIGEST, "problems": ["config_digest_missing"]}
         if self.config.require_certificate:
-            prepared = self._prepare_session(live_map)
+            with timer.stage("prepare_session_total") as timed:
+                prepared = self._prepare_session(live_map)
+                _timed_ok(timed, prepared)
             if not prepared.get("ok"):
                 return {"ok": False, "code": prepared.get("code", CODE_CERTIFICATE_REQUIRED), "prepared": prepared}
         # `_prepare_session` records the persistent unmeasured state BEFORE any
@@ -2143,27 +2339,39 @@ class MatchSupervisor:
         if self._baseline_preparer is not None:
             baseline = self._baseline_preparer(self.config, live_map)
         else:
+            # The default runner shares the supervisor's timed enumerator so its
+            # closed-game listings are counted too (still a fresh listing each).
+            backup_runner = self._backup_runner or (
+                lambda cfg, roots, label: _default_backup_runner(cfg, roots, label, enumerator=self._enumerator)
+            )
             baseline = prepare_live_baseline(
-                self.config, live_map, api=api, backup_runner=self._backup_runner, sleeper=self._sleeper
+                self.config,
+                live_map,
+                api=api,
+                backup_runner=backup_runner,
+                sleeper=self._sleeper,
+                timer=self.timer,
             )
         if not baseline.get("ok"):
             return baseline
         if not _is_content_id(baseline.get("backup_id")):
             return {"ok": False, "code": CODE_FRESH_BACKUP_REQUIRED, "problems": ["backup_id_missing"]}
         try:
-            prepared = _call_prepare_session(
-                api,
-                self.config,
-                live_map,
-                session_id=self.session_id,
-                port=self.match_port,
-                backup_id=baseline.get("backup_id"),
-                # Re-run the real verifier so the certificate re-reads the current
-                # backup/live files itself (identity + full roots evidence), rather
-                # than binding a cached baseline verdict.
-                backup_verify=lambda: _verify_fresh_backup(self.config, live_map),
-                enumerator=self._enumerator,
-            )
+            with self.timer.stage("certificate_prepare_session") as timed:
+                prepared = _call_prepare_session(
+                    api,
+                    self.config,
+                    live_map,
+                    session_id=self.session_id,
+                    port=self.match_port,
+                    backup_id=baseline.get("backup_id"),
+                    # Re-run the real verifier so the certificate re-reads the current
+                    # backup/live files itself (identity + full roots evidence), rather
+                    # than binding a cached baseline verdict.
+                    backup_verify=lambda: _verify_fresh_backup(self.config, live_map),
+                    enumerator=self._enumerator,
+                )
+                _timed_ok(timed, prepared)
         except Exception:  # noqa: BLE001
             return {"ok": False, "code": CODE_CERTIFICATE_REQUIRED, "problems": ["prepare_session_failed"]}
         if not prepared.get("ok"):
@@ -2226,8 +2434,9 @@ class MatchSupervisor:
             forced_options=ruleset.get("forced_options"),
         )
         try:
-            self.service = self._service_factory(service_config)
-            self.service.start()
+            with self.timer.stage("service_start"):
+                self.service = self._service_factory(service_config)
+                self.service.start()
         except practice_service.PracticeError as error:
             return self._fail(error.code)
         except Exception:  # noqa: BLE001
@@ -2243,41 +2452,51 @@ class MatchSupervisor:
             # void/failure-closure path, exactly like an in-run reappearance, so a
             # never-spawned record can never be left open with no way to close it.
             return self._void(CODE_LIVE_APPEARED)
-        if self._attestation_rotator is not None:
-            self._attestation_rotator(self.config)
-        else:
-            rotate_role_attestations(self.config)
+        with self.timer.stage("attestation_rotate"):
+            if self._attestation_rotator is not None:
+                self._attestation_rotator(self.config)
+            else:
+                rotate_role_attestations(self.config)
 
         # H3: the verified server and its owning-PID listener proof come BEFORE the
         # roles spawn, so the MP client never starts against a missing server.
         self._set_phase("launching")
-        started = self._start_server()
+        with self.timer.stage("server_start") as timed:
+            started = self._start_server()
+            _timed_ok(timed, started)
         if not started.get("ok"):
             return self._fail(started.get("code", CODE_SERVER_FAILED), listener=_gate_summary(started.get("listener") or {}))
 
         open_session = self._gates.get("open_session") or self._open_session_record
         try:
-            session = self._launch_runner(
-                plan,
-                session_descriptors=descriptors,
-                nonce=nonce,
-                enumerator=self._enumerator,
-                open_session=open_session,
-            )
+            with self.timer.stage("roles_launch") as timed:
+                session = self._launch_runner(
+                    plan,
+                    session_descriptors=descriptors,
+                    nonce=nonce,
+                    enumerator=self._enumerator,
+                    open_session=open_session,
+                )
+                timed["ok"] = bool(getattr(session, "ok", False))
         except Exception:  # noqa: BLE001
             return self._fail(CODE_LAUNCH_FAILED)
         self.session = session
         if not getattr(session, "ok", False):
             code = getattr(session, "code", CODE_LAUNCH_FAILED) or CODE_LAUNCH_FAILED
             return self._fail(code)
+        self.timer.mark("roles_launched")
         self._role_records = _role_records(session)
-        bound = self._bind_open_record(session)
+        with self.timer.stage("certificate_bind_open_record") as timed:
+            bound = self._bind_open_record(session)
+            _timed_ok(timed, bound)
         if not bound.get("ok"):
             return self._fail(bound.get("code", CODE_CERTIFICATE_REQUIRED))
 
         if self.config.require_attestation:
             self._set_phase("attesting")
-            attestation = self._wait_attestation(nonce)
+            with self.timer.stage("attestation_wait") as timed:
+                attestation = self._wait_attestation(nonce)
+                _timed_ok(timed, attestation)
             self.attestation = attestation
             if not attestation.get("ok"):
                 return self._fail(attestation.get("code", CODE_ATTESTATION), attestation=_gate_summary(attestation))
@@ -2292,6 +2511,7 @@ class MatchSupervisor:
             # ``mark_attested``. A failure here is a no-op: the service keeps
             # its earlier clock and the timeout is never bypassed.
             self._start_prestart_window()
+            self.timer.mark("attested")
 
         self._set_phase("running")
         verdict = self._supervise_loop()
@@ -2344,6 +2564,7 @@ class MatchSupervisor:
             spawn_time=spawn_time,
             port=self.match_port,
             timeout=deadline,
+            poll_interval=float(self.config.handoff_poll_interval),
             clock=self._clock,
             sleeper=self._sleeper,
         )
@@ -2862,6 +3083,14 @@ class MatchSupervisor:
                 reason = getattr(self.service, "terminal_reason", None) or CODE_ROLE_EXITED
                 return {"ok": False, "code": "practice_service_aborted", "reason": reason}
             terminal = str(getattr(self.service, "terminal_phase", "none")) not in ("none", "", "None")
+            if not self._match_started_marked and self.service is not None:
+                try:
+                    started_flag = getattr(self.service, "started", False) is True
+                except Exception:  # noqa: BLE001
+                    started_flag = False
+                if started_flag:
+                    self._match_started_marked = True
+                    self.timer.mark("match_started")
             if self.session is not None:
                 statuses = self.session.is_running()
                 exited = [item["role"] for item in statuses if not item["running"]]
@@ -2893,6 +3122,21 @@ class MatchSupervisor:
                 return {"ok": False, "code": "practice_match_timeout"}
             self._sleeper(min(float(self.config.poll_interval), 1.0))
 
+    def _snapshot_service_milestones(self) -> None:
+        reader = getattr(self.service, "milestones", None)
+        if not callable(reader):
+            return
+        try:
+            value = reader()
+        except Exception:  # noqa: BLE001
+            return
+        if isinstance(value, dict):
+            self._service_milestones = {
+                str(key): float(item)
+                for key, item in value.items()
+                if isinstance(item, (int, float)) and not isinstance(item, bool)
+            }
+
     def _stop_server(self) -> None:
         if self.server is not None:
             try:
@@ -2903,6 +3147,7 @@ class MatchSupervisor:
 
     def _stop_service(self) -> None:
         if self.service is not None:
+            self._snapshot_service_milestones()
             try:
                 self.service.close()
             except Exception:  # noqa: BLE001
@@ -2994,6 +3239,18 @@ class MatchSupervisor:
             if not self._record_failure_closure(failure_code):
                 self._pending_closure = failure_code
 
+    def _timings_report(self) -> dict:
+        try:
+            if self.service is not None:
+                self._snapshot_service_milestones()
+            summary = self.timer.summary()
+            # Service milestones are seconds since the service object was
+            # created, which happens inside the host's "service_start" stage.
+            summary["service_milestones"] = dict(self._service_milestones)
+            return summary
+        except Exception:  # noqa: BLE001 - timing must never cost the report
+            return {}
+
     def _finalize(self, error_code: Optional[str] = None, **extra) -> dict:
         report = {
             "schema": REPORT_SCHEMA,
@@ -3024,6 +3281,7 @@ class MatchSupervisor:
             "after_digest": (self.live_verdict or {}).get("after_digest") if isinstance(self.live_verdict, dict) else None,
             "descriptor_env_unbound": list(self._descriptor_env_gap),
             "host_lockout": read_host_lockout(self.config),
+            "timings": self._timings_report(),
         }
         report.update(extra)
         try:

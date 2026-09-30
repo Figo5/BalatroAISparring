@@ -66,7 +66,7 @@ needs the full re-certification and a companion reinstall, not
   PvP round where the AI runs out of hands before you finish.
 - **Expected:** the AI waits and then plays its PvP round normally once you
   ready. The AI log shows exactly one `wait_begin`/`wait_end` pair per wait, with
-  `waited_seconds` close to your delay. `decisions.jsonl` has no
+  `seconds` close to your delay (`detail` names the wait kind). `decisions.jsonl` has no
   `policy_no_action` rows during the wait, and `summary.jsonl` shows `errors` 0
   (or only genuine errors) and a `no_action` field.
 - **Evidence to capture:** the AI runtime log lines with `wait_begin`/`wait_end`,
@@ -123,3 +123,23 @@ needs the full re-certification and a companion reinstall, not
 - **Risk if it fails:** logging only. The guard decision is unchanged and
   test-enforced.
 
+
+## LV-5 Hand-off stage timings
+
+- **Commit:** see `git log --grep "instrument practice handoff"`.
+- **Change:** `practice_host.py` records every hand-off stage (`StageTimer`),
+  every process listing (`counters.process_enumeration`) and the control
+  service milestones. They go into `<session>/host.json` `timings` and
+  `<session>/logs/handoff.jsonl`. The live-exit and attestation waits now poll
+  every 0.25 s instead of every 1 s. Nothing was removed from verification. See
+  `docs/HANDOFF_TIMING.md`.
+- **Local test:** full re-certification (host and launcher sources changed),
+  then one normal Play → AI Sparring, then play or quit.
+- **Expected:** the hand-off works exactly as before. `handoff.jsonl` exists from
+  the first stage on. `host.json` has `timings.slowest` and
+  `counters.process_enumeration.calls`.
+- **Evidence to capture:** both files, plus the wall-clock time from clicking Play
+  to the staged human window appearing.
+- **Risk if it fails:** instrumentation is exception-safe and uses its own clock,
+  so a failure should only lose timing data. A hand-off failure with a new code
+  would be a defect.

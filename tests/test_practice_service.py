@@ -622,6 +622,21 @@ def test_real_policy_failures_still_count_with_no_action():
         assert status["failures"] == 1 and status["error"] == "policy_bad_source", status
 
 
+def test_handoff_milestones_come_from_the_real_ops():
+    if not _lupa_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp)
+        session = Session(service)
+        session.handshake()
+        milestones = service.milestones()
+        # (The Session.handshake helper does not publish a lobby code.)
+        for name in ("hello_human", "hello_ai", "ready_human", "ready_ai", "match_started"):
+            assert name in milestones, (name, milestones)
+        assert milestones["hello_human"] <= milestones["match_started"]
+        assert milestones["ready_human"] <= milestones["match_started"]
+
+
 def test_cancel_decision_terminates_exact_child():
     if not _lupa_available():
         return

@@ -2029,6 +2029,211 @@ def _supervisor(config, request, **overrides):
     return practice_host.MatchSupervisor(config, request, **defaults)
 
 
+class _StepCounter:
+    def __init__(self, step=1.0):
+        self.t = 0.0
+        self.step = step
+
+    def __call__(self):
+        value = self.t
+        self.t += self.step
+        return value
+
+
+def test_stage_timer_records_stages_marks_and_failures():
+    with tempfile.TemporaryDirectory() as tmp:
+        sink = Path(tmp) / "handoff.jsonl"
+        timer = practice_host.StageTimer(sink=sink, counter=_StepCounter(1.0))
+        with timer.stage("a") as result:
+            result["ok"] = True
+            result["code"] = "fine"
+        with timer.stage("b") as result:
+            practice_host._timed_ok(result, {"ok": False, "code": "nope"})
+        try:
+            with timer.stage("c"):
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        timer.mark("milestone", pid_reused=False, ignored={"x": 1})
+        stages = timer.stages
+        assert [entry["stage"] for entry in stages] == ["a", "b", "c", "milestone"]
+        assert stages[0] == {"stage": "a", "start": 1.0, "seconds": 1.0, "ok": True, "code": "fine"}
+        assert stages[1]["ok"] is False and stages[1]["code"] == "nope"
+        assert stages[2]["ok"] is False, "an exception is a failed stage"
+        assert stages[3]["milestone"] is True and stages[3]["pid_reused"] is False
+        assert "ignored" not in stages[3]
+        lines = [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines()]
+        assert lines == stages
+        summary = timer.summary()
+        assert set(summary["totals"]) == {"a", "b", "c"}
+        assert summary["slowest"][0]["seconds"] == 1.0
+
+
+def test_stage_timer_is_bounded_and_never_raises_on_sink_failure():
+    timer = practice_host.StageTimer(sink=Path("/nonexistent-dir/for/sure/handoff.jsonl"))
+    for index in range(practice_host.StageTimer.MAX_STAGES + 10):
+        with timer.stage(f"s{index}"):
+            pass
+    assert len(timer.stages) == practice_host.StageTimer.MAX_STAGES
+
+
+def test_supervisor_report_carries_the_handoff_timeline():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        service = FakeService(None, ended=True, terminal_phase="closed")
+        service.milestones = lambda: {"hello_human": 1.5, "match_started": 9.0, "bogus": "x"}
+        supervisor = _supervisor(config, make_request(), service_factory=lambda cfg: service)
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        timings = result["report"]["timings"]
+        names = [entry["stage"] for entry in timings["stages"]]
+        for expected in (
+            "wait_live_exit",
+            "live_exited",
+            "gates_total",
+            "service_start",
+            "attestation_rotate",
+            "server_start",
+            "roles_launch",
+            "roles_launched",
+            "certificate_bind_open_record",
+        ):
+            assert expected in names, (expected, names)
+        assert names.index("wait_live_exit") < names.index("gates_total") < names.index("roles_launch")
+        assert timings["service_milestones"] == {"hello_human": 1.5, "match_started": 9.0}
+        written = json.loads(supervisor.workspace.report_path.read_text(encoding="utf-8"))
+        assert written["timings"]["stages"] == timings["stages"]
+        handoff = supervisor.workspace.log_dir / "handoff.jsonl"
+        assert handoff.is_file()
+        enumerations = timings["counters"].get("process_enumeration")
+        assert enumerations and enumerations["calls"] >= 1, timings["counters"]
+        assert "handoff.jsonl" in result["report"]["log_index"]["files"]
+
+
+def test_handoff_waits_use_the_handoff_poll_interval():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        assert config.handoff_poll_interval == practice_host.DEFAULT_HANDOFF_POLL_INTERVAL == 0.25
+        assert config.poll_interval == practice_host.DEFAULT_POLL_INTERVAL
+        sleeps = []
+        opener = SequenceOpener(
+            [FakeLiveHandle(1000.0, _live_image(config)), FakeLiveHandle(1000.0, _live_image(config))]
+        )
+        supervisor = _supervisor(config, make_request(), opener=opener, sleeper=sleeps.append)
+        verdict = supervisor._wait_live()
+        assert verdict["ok"] is True, verdict
+        assert sleeps and set(sleeps) == {0.25}, sleeps
+        for bad in (0, -1, True, "1"):
+            try:
+                practice_host.validate_config(make_config(tmp, handoff_poll_interval=bad))
+            except practice_host.HostError:
+                pass
+            else:
+                raise AssertionError(f"accepted handoff_poll_interval={bad!r}")
+
+
+def test_attestation_wait_uses_the_handoff_poll_interval():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        captured = {}
+
+        def fake_wait(cfg, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "code": practice_host.CODE_OK}
+
+        supervisor = _supervisor(config, make_request(), attestation_collector=None)
+        supervisor.match_port = 8788
+        with patched(practice_host, wait_for_attestation=fake_wait):
+            supervisor._wait_attestation("n" * 32)
+        assert captured["poll_interval"] == 0.25, captured
+
+
+def test_live_exit_fallback_listing_is_throttled_to_the_poll_interval():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        live = launch_practice.ProcessInfo(1632, 1000.0, _live_image(config), name="Balatro")
+        enumerator = SwitchEnumerator(0, [live])
+        calls = {"n": 0}
+
+        class Flip(launch_practice.ProcessEnumerator):
+            def list(self):
+                calls["n"] += 1
+                return [live] if calls["n"] <= 2 else []
+
+        sleeps = []
+        verdict = practice_host.wait_for_live_exit(
+            config,
+            1632,
+            1000.0,
+            poll_interval=0.25,
+            enumerator=Flip(),
+            opener=SequenceOpener([]),
+            clock=FakeClock(step=0.01),
+            sleeper=sleeps.append,
+        )
+        assert verdict["ok"] is True, verdict
+        assert sleeps == [1.0, 1.0], sleeps
+        del enumerator
+
+
+def test_timed_enumerator_propagates_listing_errors_and_still_counts():
+    timer = practice_host.StageTimer()
+    timed = practice_host._TimedEnumerator(
+        FakeEnumerator(error=staging.StagingError("process_enumeration_failed")), timer
+    )
+    try:
+        timed.list()
+    except staging.StagingError:
+        pass
+    else:
+        raise AssertionError("listing failure swallowed")
+    assert timer.counters["process_enumeration"]["calls"] == 1
+
+
+def test_gate_lockout_refusal_still_wins_over_open_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        practice_host.set_host_lockout(config, reason="session_unmeasured", session_id="s-old")
+        api = FakeCertificateApi(open_records=[{"session_id": "s-old"}])
+        supervisor = _supervisor(config, make_request(), certificate_api=api)
+        verdict = supervisor._evaluate_gates()
+        assert verdict["ok"] is False and verdict["code"] == practice_host.CODE_ACK_REQUIRED, verdict
+
+
+def test_real_gate_evaluator_times_each_gate():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, require_certificate=False)
+        supervisor = _supervisor(config, make_request(), gate_evaluator=None)
+        supervisor._gate_evaluator = supervisor._evaluate_gates
+        supervisor._evaluate_gates()
+        names = [entry["stage"] for entry in supervisor.timer.stages]
+        assert names[:3] == ["gate_lockouts", "gate_runtime_preflight", "gate_static_isolation"], names
+
+
+def test_service_milestones_are_first_occurrence_only():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = practice_service.PracticeService(
+            practice_service.ServiceConfig(
+                session_id="sess-1",
+                difficulty="competitive",
+                pacing="instant",
+                mode="normal",
+                match_port=8788,
+                log_root=Path(tmp) / "logs",
+                content_hash="c" * 64,
+                expected_config_digest="d" * 8,
+                gauntlet=None,
+            )
+        )
+        service._milestone("lobby_code")
+        first = service.milestones()["lobby_code"]
+        service._milestone("lobby_code")
+        assert service.milestones()["lobby_code"] == first
+        copy = service.milestones()
+        copy["lobby_code"] = -1
+        assert service.milestones()["lobby_code"] == first
+
+
 def test_supervisor_builds_typed_descriptors_and_service_config():
     with tempfile.TemporaryDirectory() as tmp:
         config = make_config(tmp)
