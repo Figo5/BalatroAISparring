@@ -790,8 +790,9 @@ local function owned_voucher_keys(G)
 	return keys
 end
 
--- Phases inside a round, where `played_this_round` is current. Booster and
--- consumable selection can happen in the shop, where it is last round's.
+-- Phases inside a round, where `played_this_round` is current. Booster
+-- selection happens in the shop, where it is last round's; consumable
+-- selection is left out too (no play decision needs it there).
 local ROUND_PHASES = { PLAY_HAND = true, DISCARD = true, MULTIPLAYER_PVP = true }
 
 local function build_self(G, phase, hand_cards)
