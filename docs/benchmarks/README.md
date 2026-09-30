@@ -110,7 +110,12 @@ A first step towards full-run (Gauntlet) metrics:
   hands remain.
 - **Same luck for everyone:** every difficulty sees the same deck order.
 - **Blinds:** antes 1–4 (base 300 / 800 / 2,000 / 5,000); small ×1, big ×1.5,
-  boss ×2, with no boss effects.
+  boss ×2.
+- **Boss effects** (only those the fixture can represent faithfully):
+  - The Club, Goad, Window and Head debuff their suit, and The Plant debuffs
+    face cards;
+  - The Needle allows one hand;
+  - The Water allows no discards.
 
 Plays are scored with the shared reference model. So this measures how well
 play and discard decisions are sequenced under real random draws within that
@@ -124,17 +129,19 @@ python tests/benchmark_blinds.py --blinds 360 --json docs/benchmarks/blinds_repo
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| blinds cleared | 63.3% | 83.1% | 82.8% | 83.6% |
-| cleared, ante 1 / 2 / 3 / 4 | 89 / 79 / 51 / 34% | 100 / 91 / 83 / 58% | 100 / 90 / 83 / 58% | 99 / 93 / 80 / 62% |
-| mean score ÷ requirement (capped at 3) | 1.21 | 1.41 | 1.41 | 1.42 |
-| mean discards per blind | 0.57 | 1.50 | 1.52 | 1.70 |
+| blinds cleared | 58.3% | 78.6% | 78.3% | 77.8% |
+| cleared, ante 1 / 2 / 3 / 4 | 82 / 64 / 53 / 33% | 89 / 83 / 80 / 62% | 88 / 83 / 79 / 63% | 87 / 83 / 79 / 62% |
+| small / big blinds cleared | 80 / 60% | 97 / 85% | 97 / 85% | 96 / 83% |
+| suit-debuff bosses cleared | 33–60% | 60–78% | 60–75% | 67–75% |
+| The Needle / The Water cleared | 10 / 23% | 24 / 23% | 24 / 23% | 24 / 23% |
 | failures | 0 | 0 | 0 | 0 |
-| max sandbox instructions | 155k | 830k | 823k | 972k |
+| max sandbox instructions | 157k | 891k | 889k | 1,032k |
 
-Major League is barely distinguishable from Competitive on blind clears. Its
-extra caution lives mostly in shop and reserve settings, which this simulator
-does not exercise. Expert's deeper draw search clears slightly more
-late-ante blinds.
+The strong tiers are close to each other here. Major League's differences are
+mostly in shop and reserve settings, which this simulator does not exercise.
+The Needle (one hand at ×2) and The Water (no discards) are the hardest
+bosses. No difficulty adapts its play to them beyond what the observation
+already shows (hands and discards left, debuffed cards).
 
 ### Not yet covered (prepared, continuing)
 

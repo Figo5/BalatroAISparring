@@ -4,7 +4,9 @@
 A step towards full-run (Gauntlet) metrics. Each simulated blind deals from a
 shuffled standard 52-card deck and lets the policy act repeatedly (play or
 discard, then draw back to the hand size) until the displayed requirement is
-reached or no hands remain. Every decision goes through the real trusted
+reached or no hands remain. Boss blinds apply the effects the fixture can
+represent (suit / face debuffs, The Needle, The Water). Every decision goes
+through the real trusted
 pipeline: engine fixture -> EngineAdapter -> StateReader -> AIObservation ->
 sandboxed policy (tools/lua/policy_env.lua).
 
@@ -14,8 +16,8 @@ numbers), so differences come from decisions, not luck.
 Plays are scored with the reference scorer in tests/benchmark_policy.py, which
 shares the policy's scoring model. So the metric measures how well discards and
 plays are *sequenced* under real random draws within that model. It is not a
-win rate against Balatro, and it does not model bosses, scaling Jokers, shops or
-opponents.
+win rate against Balatro, and it does not model other boss effects, scaling
+Jokers, shops or opponents.
 
 Usage: python tests/benchmark_blinds.py [--blinds N] [--seed S] [--runtime R] [--json PATH]
 """
@@ -43,6 +45,15 @@ MAX_STEPS = 16
 # Base chips per ante for small / big / boss blinds (vanilla 300-scaling table).
 ANTE_BASE = {1: 300, 2: 800, 3: 2000, 4: 5000}
 BLIND_MULT = {"small": 1.0, "big": 1.5, "boss": 2.0}
+# Boss effects the engine fixture can represent faithfully: suit bosses and The
+# Plant debuff their cards (vanilla: debuffed cards score nothing); The Needle
+# gives one hand; The Water gives no discards. Other bosses are not modelled.
+BOSSES = {
+    "bl_club": {"debuff": "Clubs"}, "bl_goad": {"debuff": "Spades"},
+    "bl_window": {"debuff": "Diamonds"}, "bl_head": {"debuff": "Hearts"},
+    "bl_plant": {"debuff": "face"}, "bl_needle": {"hands": 1}, "bl_water": {"discards": 0},
+}
+BOSS_KEYS = sorted(BOSSES)
 
 DECIDE = r'''
 return function(repo)
@@ -69,6 +80,7 @@ return function(repo)
 			hand[i] = support.card({
 				rank = c.rank, suit = c.suit, center = c.center or "c_base",
 				center_set = c.center and "Enhanced" or "Default", edition = c.edition, seal = c.seal,
+				debuff = c.debuff,
 			})
 		end
 		local jokers = {}
@@ -78,6 +90,7 @@ return function(repo)
 		local engine = support.engine({
 			state = support.STATES.SELECTING_HAND, hand = hand, jokers = jokers,
 			hands_left = state.hands_left, discards_left = state.discards_left, chips = state.chips,
+			blind_key = state.boss or "bl_small",
 		})
 		engine.G.GAME.blind.chips = state.requirement
 		local step, code = support.pipeline(bundle, engine, {}).adapter.step()
@@ -110,9 +123,11 @@ def make_blind(rng, index):
     rng.shuffle(deck)
     joker_count = min(5, ante + rng.choice([-1, 0, 0, 1]))
     jokers = rng.sample(bp.JOKER_KEYS, max(0, joker_count))
+    boss = rng.choice(BOSS_KEYS) if kind == "boss" else None
     return {
         "ante": ante,
         "kind": kind,
+        "boss": boss,
         "requirement": int(ANTE_BASE[ante] * BLIND_MULT[kind]),
         "deck": deck,
         "jokers": jokers,
@@ -120,9 +135,16 @@ def make_blind(rng, index):
 
 
 def simulate(decide, blind, difficulty):
-    deck = list(blind["deck"])
+    effect = BOSSES.get(blind.get("boss"), {})
+    target = effect.get("debuff")
+    deck = []
+    for card in blind["deck"]:
+        card = dict(card)
+        if target is not None and (card["suit"] == target or (target == "face" and card["rank"] in ("Jack", "Queen", "King"))):
+            card["debuff"] = True
+        deck.append(card)
     hand = [deck.pop(0) for _ in range(HAND_SIZE)]
-    chips, hands_left, discards_left = 0, HANDS, DISCARDS
+    chips, hands_left, discards_left = 0, effect.get("hands", HANDS), effect.get("discards", DISCARDS)
     stats = {"decisions": 0, "failures": 0, "discards": 0, "latency": [], "instructions": 0}
     for _ in range(MAX_STEPS):
         if chips >= blind["requirement"] or hands_left == 0:
@@ -130,6 +152,7 @@ def simulate(decide, blind, difficulty):
         state = {
             "hand": hand, "jokers": blind["jokers"], "hands_left": hands_left,
             "discards_left": discards_left, "chips": chips, "requirement": blind["requirement"],
+            "boss": blind.get("boss"),
         }
         result = bp.from_lua(decide(bp.to_lua(LUA, state), difficulty))
         stats["decisions"] += 1
@@ -152,7 +175,7 @@ def simulate(decide, blind, difficulty):
             hand.append(deck.pop(0))
     stats["cleared"] = chips >= blind["requirement"]
     stats["ratio"] = min(chips / blind["requirement"], 3.0)
-    stats["hands_used"] = HANDS - hands_left
+    stats["hands_used"] = effect.get("hands", HANDS) - hands_left
     return stats
 
 
@@ -176,12 +199,15 @@ def main(argv=None):
     for difficulty in DIFFICULTIES:
         runs = [simulate(decide, blind, difficulty) for blind in blinds]
         by_ante = {}
+        by_kind = {}
         for blind, run in zip(blinds, runs):
             by_ante.setdefault(blind["ante"], []).append(run["cleared"])
+            by_kind.setdefault(blind.get("boss") or blind["kind"], []).append(run["cleared"])
         latency = sorted(x for run in runs for x in run["latency"]) or [0.0]
         report["difficulties"][difficulty] = {
             "clear_rate": round(sum(r["cleared"] for r in runs) / len(runs), 4),
             "clear_rate_by_ante": {str(a): round(sum(v) / len(v), 4) for a, v in sorted(by_ante.items())},
+            "clear_rate_by_blind": {k: round(sum(v) / len(v), 4) for k, v in sorted(by_kind.items())},
             "mean_score_ratio": round(statistics.mean(r["ratio"] for r in runs), 4),
             "mean_hands_used": round(statistics.mean(r["hands_used"] for r in runs), 3),
             "mean_discards": round(statistics.mean(r["discards"] for r in runs), 3),
@@ -193,7 +219,7 @@ def main(argv=None):
     report["wall_seconds"] = round(time.perf_counter() - started, 2)
     report["interpretation"] = (
         "blind clears under real random draws, scored with the shared reference model; "
-        "not a Balatro win rate (no bosses, scaling Jokers, shops or opponents)"
+        "not a Balatro win rate (only debuff/hand/discard boss effects; no scaling Jokers, shops or opponents)"
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.json:

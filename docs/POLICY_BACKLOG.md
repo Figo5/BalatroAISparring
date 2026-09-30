@@ -28,11 +28,11 @@ Constraints on all of it:
 
 ## Harder benchmarks and Gauntlet metrics (in progress)
 
-- **Done:** blind simulator (`tests/benchmark_blinds.py`). Strong tiers clear
-  about 83% of antes 1–4 blinds, Rookie 63%. Major League ≈ Competitive on
-  blinds.
+- **Done:** blind simulator (`tests/benchmark_blinds.py`) with debuff, Needle
+  and Water bosses. Strong tiers clear about 78% of antes 1–4 blinds, Rookie
+  58%. Major League ≈ Competitive on blinds.
 - **Next:**
-  - add hand levels and boss effects to the simulator;
+  - add hand levels and more boss effects to the simulator;
   - chain blinds with a simple shop (money, interest, Joker buys) into a
     run-level metric;
   - give Major League a play-side difference if the run metric shows none.
