@@ -184,17 +184,18 @@ git show 5b0cd64:AISparring/ai/baseline_policy.lua > /tmp/old.lua     # pre-retu
 python tests/benchmark_runs.py --paired /tmp/old.lua --seed 37 --runs 150   # A/B on the same seeds
 ```
 
-60 runs (seed 11, LuaJIT), from `runs_report.json`:
+60 runs (seed 11, LuaJIT), from `runs_report.json`, with The Psychic
+included and the current policy:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| mean blinds cleared (of 18) | 5.5 | 11.4 | 11.8 | 11.3 |
-| mean ante reached | 2.5 | 4.4 | 4.6 | 4.4 |
-| reached ante 4 / 6 | 25 / 7% | 78 / 27% | 80 / 27% | 78 / 23% |
-| planets / rerolls per run | 3.4 / 1.2 | 7.9 / 3.4 | 7.7 / 3.6 | 7.4 / 3.7 |
-| money at the end | $8 | $31 | $36 | $35 |
+| mean blinds cleared (of 18) | 5.0 | 11.8 | 11.8 | 11.5 |
+| mean ante reached | 2.3 | 4.6 | 4.5 | 4.5 |
+| reached ante 4 / 6 | 20 / 7% | 78 / 32% | 77 / 32% | 78 / 30% |
+| planets / rerolls per run | 3.0 / 1.0 | 8.4 / 3.9 | 8.1 / 3.8 | 7.8 / 3.9 |
+| money at the end | $7 | $31 | $34 | $35 |
 | failures | 0 | 0 | 0 | 0 |
-| max sandbox instructions | 154k | 868k | 868k | 1,024k |
+| max sandbox instructions | 154k | 868k | 868k | 1,004k |
 
 This simulator exposed Major League and Expert hoarding money above the
 interest cap. Their economy was retuned and judged on held-out seeds

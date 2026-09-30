@@ -306,8 +306,8 @@ Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
 first. At Competitive and above (`hold_hermit`), **The Hermit** (double
 money, at most +$20) is held until money reaches $20. The exception is in the
 shop when the consumable slots are full of cards worth keeping: then it is used
-at once to free a slot. A harmful or targeted card does not count, because it
-is sold instead. Every other consumable keeps the flat `use_consumable` score.
+at once to free a slot. A harmful or targeted card is not counted as worth a
+slot; the shop can sell it instead (§4.3). Every other consumable keeps the flat `use_consumable` score.
 
 ### 4.4 Vouchers and packs (Competitive and above)
 

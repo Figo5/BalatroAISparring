@@ -48,7 +48,8 @@ ANTE_BASE = {1: 300, 2: 800, 3: 2000, 4: 5000}
 BLIND_MULT = {"small": 1.0, "big": 1.5, "boss": 2.0}
 # Boss effects the engine fixture can represent faithfully: suit bosses and The
 # Plant debuff their cards (vanilla: debuffed cards score nothing); The Needle
-# gives one hand; The Water gives no discards. Other bosses are not modelled.
+# gives one hand; The Water gives no discards; The Psychic scores only 5-card
+# hands. Other bosses are not modelled.
 # `req` is the requirement multiplier (vanilla: The Needle x1, others x2) and
 # `min_ante` the first ante the boss can appear at.
 BOSSES = {
@@ -254,7 +255,7 @@ def main(argv=None):
     report["wall_seconds"] = round(time.perf_counter() - started, 2)
     report["interpretation"] = (
         "blind clears under real random draws, scored with the shared reference model; "
-        "not a Balatro win rate (only debuff/hand/discard boss effects; no scaling Jokers, shops or opponents)"
+        "not a Balatro win rate (only debuff/hand/discard/Psychic boss effects; no scaling Jokers, shops or opponents)"
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.json:

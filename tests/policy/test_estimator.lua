@@ -413,8 +413,8 @@ return function(ctx)
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit" }, 20, 1)).action.type, "USE_CONSUMABLE", difficulty .. " use at $20")
 			-- Two held consumables fill the two shop slots: use it to free one.
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit", "c_fool" }, 8, 1)).action.source_ref, "consumable:1", difficulty .. " full slots")
-			-- A dead card (targeted Strength) fills the other slot: sell it
-			-- rather than spend the Hermit at $8.
+			-- A card that cannot be used live (targeted Strength) is not counted
+			-- as worth a slot, so the Hermit is not spent at $8.
 			-- (The adapter never offers USE for Strength without targets.)
 			local dead = use_frame({ "c_hermit", "c_strength" }, 8, 1)
 			table.remove(dead.certificates.items, 2)
@@ -438,7 +438,7 @@ return function(ctx)
 			frame.match.blind = "bl_psychic"
 			local boss = Support.run(env, difficulty, frame)
 			ctx.eq(#boss.action.card_refs, 5, difficulty .. " psychic five")
-			frame.match.blind = "Small Blind"
+			frame.match.blind = "bl_small"
 		end
 	end)
 

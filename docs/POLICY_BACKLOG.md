@@ -54,6 +54,20 @@ Constraints on all of it:
     (held-out ≈ +0.33 / +0.51 blinds per run) they match Competitive in run metrics, so
     their play-side difference is still unproven.
 
+## Boss awareness (in progress)
+
+- **Done:** The Psychic. A play of fewer than five cards is estimated at 0.
+  Paired A/B gave +0.7% overall.
+- **Open (review Lows):**
+  - the adapter offers few five-card plays (rank groups have no kickers), so
+    a split two pair has no five-card candidate under The Psychic;
+  - discard EV still counts plays of fewer than five cards under The Psychic;
+  - a boss disabled by Chicot or Luchador (`G.GAME.blind.disabled`) keeps its
+    key, so the rule still applies. Publishing a `blind_disabled` flag is an
+    adapter and observation change that needs review;
+  - The Eye and The Mouth need hand-type history this round, and The Flint
+    scales scoring uniformly.
+
 ## Consumable reasoning (in progress)
 
 - **Done:**
