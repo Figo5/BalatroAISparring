@@ -501,7 +501,9 @@ acceptance:
   (docs/OWNED_VOUCHERS_DESIGN.md):
   - keys of `G.GAME.used_vouchers` with value `true` whose raw
     `G.P_CENTERS[key].set` is `"Voucher"` (what Run Info lists);
-  - `^v_[a-z0-9_]+$`, ≤ 32 bytes, bytewise sorted, at most 32;
+  - `^v_[a-z0-9_]+$`, ≤ 32 bytes, bytewise sorted, at most 32. If more
+    qualify (only extra modded or Multiplayer keys can cause this), Seed Money
+    and Money Tree are kept first;
   - at most 256 entries inspected;
   - fail-soft: omitted when unreadable or empty.
 - **Targeted consumables (`CONSUMABLE_SELECTION`)** are implemented legally (M3)

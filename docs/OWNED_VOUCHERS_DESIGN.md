@@ -49,7 +49,8 @@ no binding to engine card objects.
      32 characters);
    - require raw `G.P_CENTERS[key].set == "Voucher"`, inspect at most 256
      entries;
-   - sort them bytewise (explicit byte comparator) and keep at most 32;
+   - sort them bytewise (explicit byte comparator) and keep at most 32,
+     keeping Seed Money and Money Tree first if more qualify;
    - emit `self_view.owned_vouchers = { "v_...", ... }`, or nothing when empty
      or unreadable. Never fail the frame for this field.
 2. **Reader** (`state_reader.lua`, `build_self`):
@@ -71,6 +72,17 @@ no binding to engine card objects.
 
    Green Deck, no-interest rulesets and To the Moon change the interest paid
    per $5, not the cap. They are out of scope.
+
+## Code review follow-ups
+
+- Truncation keeps the interest-cap vouchers (review Low 1).
+- The adversarial metatable, `__pairs`, non-string-key and non-table-center
+  cases are regression tests (Low 3).
+- The 256-entry scan follows hash order, so a pathological table could keep
+  different keys on different runs. Only malformed state can trigger this, so
+  it is accepted (Low 2).
+- `bytes_before` is duplicated in the adapter and the reader on purpose: the
+  two modules are isolated (Low 4).
 
 ## Bounds and failure
 

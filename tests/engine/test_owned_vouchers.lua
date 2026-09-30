@@ -85,6 +85,43 @@ return function(ctx)
 		eq(result.ui_view.self.owned_vouchers[32], "v_test_32")
 	end)
 
+	test("truncation_keeps_the_interest_cap_vouchers", function()
+		local used = keys(40)
+		used.v_seed_money = true
+		used.v_money_tree = true
+		local list = step(engine(used)).ui_view.self.owned_vouchers
+		eq(#list, 32)
+		local have = {}
+		for i = 1, #list do
+			have[list[i]] = true
+			if i > 1 then
+				is_true(list[i - 1] < list[i], "sorted")
+			end
+		end
+		is_true(have.v_seed_money and have.v_money_tree, "kept")
+	end)
+
+	test("adapter_never_invokes_metamethods_on_hostile_tables", function()
+		-- From the code review's adversarial probe: only raw reads, so
+		-- __index / __pairs are never called and the frame never fails.
+		local V = { set = "Voucher" }
+		local function owned(used, centers)
+			local e = support.engine({ state = STATES.SHOP, dollars = 10 })
+			e.G.GAME.used_vouchers = used
+			e.G.P_CENTERS = centers
+			local result = step(e)
+			local handle, code = capture(result)
+			is_true(handle ~= nil, "capture: " .. tostring(code))
+			return result.ui_view.self.owned_vouchers
+		end
+		eq(owned(setmetatable({}, { __index = function() return true end, __pairs = function() error("pairs") end }), { v_a = V }), nil, "proxy used")
+		eq(owned({ v_a = true, v_b = true, [1] = true, [true] = true }, { v_a = setmetatable({}, { __index = V }), v_b = "str" }), nil, "meta center")
+		eq(owned({ v_a = true }, setmetatable({}, { __index = function() return V end })), nil, "meta centers")
+		eq(#owned({ v_a = true }, { v_a = setmetatable({ set = "Voucher" }, { __index = function() error("x") end }) }), 1, "raw set")
+		eq(owned("x", {}), nil, "non-table")
+		eq(owned({ v_a = 1 }, { v_a = V }), nil, "non-true")
+	end)
+
 	test("observation_accepts_17_to_32_owned_vouchers", function()
 		-- Owned vouchers have their own bound (32); the shop's stays 16.
 		for _, n in ipairs({ 17, 32 }) do

@@ -759,8 +759,25 @@ local function owned_voucher_keys(G)
 		return nil
 	end
 	table.sort(keys, bytes_before)
-	while #keys > OWNED_VOUCHERS do
-		keys[#keys] = nil
+	if #keys > OWNED_VOUCHERS then
+		-- Only extra modded/Multiplayer keys can exceed the bound: keep the
+		-- interest-cap vouchers the policy models, then the first in byte order.
+		local kept = {}
+		for i = 1, #keys do
+			if keys[i] == "v_money_tree" or keys[i] == "v_seed_money" then
+				kept[#kept + 1] = keys[i]
+			end
+		end
+		for i = 1, #keys do
+			if #kept >= OWNED_VOUCHERS then
+				break
+			end
+			if keys[i] ~= "v_money_tree" and keys[i] ~= "v_seed_money" then
+				kept[#kept + 1] = keys[i]
+			end
+		end
+		table.sort(kept, bytes_before)
+		keys = kept
 	end
 	return keys
 end
