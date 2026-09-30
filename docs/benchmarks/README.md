@@ -110,37 +110,41 @@ A first step towards full-run (Gauntlet) metrics:
   hands remain.
 - **Same luck for everyone:** every difficulty sees the same deck order.
 - **Blinds:** antes 1–4 (base 300 / 800 / 2,000 / 5,000); small ×1, big ×1.5,
-  boss ×2.
-- **Boss effects** (only those the fixture can represent faithfully):
-  - The Club, Goad, Window and Head debuff their suit, and The Plant debuffs
-    face cards;
-  - The Needle allows one hand;
-  - The Water allows no discards.
+  bosses ×2 except The Needle ×1.
+- **Boss effects** (only those the fixture can represent faithfully), each from
+  its vanilla minimum ante:
+  - The Club, Goad, Window and Head debuff their suit (ante 1+);
+  - The Plant debuffs face cards (ante 4+);
+  - The Needle allows one hand, and The Water allows no discards (ante 2+).
 
 Plays are scored with the shared reference model. So this measures how well
 play and discard decisions are sequenced under real random draws within that
-model. It is **not** a Balatro win rate.
+model. It is **not** a Balatro win rate. Lucky cards score their average and
+Glass cards never break.
 
 ```
 python tests/benchmark_blinds.py --blinds 360 --json docs/benchmarks/blinds_report.json
 ```
 
-360 blinds (seed 7, LuaJIT), from `blinds_report.json`:
+360 blinds (seed 7, LuaJIT), from `blinds_report.json`. Blind counts are in
+brackets:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| blinds cleared | 58.3% | 78.6% | 78.3% | 77.8% |
-| cleared, ante 1 / 2 / 3 / 4 | 82 / 64 / 53 / 33% | 89 / 83 / 80 / 62% | 88 / 83 / 79 / 63% | 87 / 83 / 79 / 62% |
-| small / big blinds cleared | 80 / 60% | 97 / 85% | 97 / 85% | 96 / 83% |
-| suit-debuff bosses cleared | 33–60% | 60–78% | 60–75% | 67–75% |
-| The Needle / The Water cleared | 10 / 23% | 24 / 23% | 24 / 23% | 24 / 23% |
-| failures | 0 | 0 | 0 | 0 |
+| blinds cleared | 57.8% | 81.7% | 81.7% | 80.6% |
+| cleared, ante 1 / 2 / 3 / 4 | 79 / 67 / 49 / 37% | 98 / 86 / 81 / 62% | 98 / 87 / 80 / 62% | 97 / 84 / 80 / 61% |
+| small (120) / big (120) | 75 / 63% | 94 / 89% | 94 / 90% | 95 / 87% |
+| Club (20) / Goad (21) / Window (15) / Head (30) | 35 / 43 / 40 / 50% | 70 / 81 / 60 / 80% | 70 / 76 / 60 / 80% | 75 / 71 / 60 / 77% |
+| The Plant (4, ante 4 only) | 0% | 0% | 0% | 0% |
+| The Needle (18) / The Water (12) | 17 / 25% | 39 / 25% | 39 / 25% | 39 / 25% |
+| failures / step-cap stops | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
 | max sandbox instructions | 157k | 891k | 889k | 1,032k |
 
 The strong tiers are close to each other here. Major League's differences are
 mostly in shop and reserve settings, which this simulator does not exercise.
-The Needle (one hand at ×2) and The Water (no discards) are the hardest
-bosses. No difficulty adapts its play to them beyond what the observation
+The Plant appears only 4 times, all at ante 4 against 10,000 chips, so its row
+is not informative. The Water (no discards) is the hardest boss with a real
+sample. No difficulty adapts its play to bosses beyond what the observation
 already shows (hands and discards left, debuffed cards).
 
 ### Not yet covered (prepared, continuing)

@@ -29,7 +29,7 @@ Constraints on all of it:
 ## Harder benchmarks and Gauntlet metrics (in progress)
 
 - **Done:** blind simulator (`tests/benchmark_blinds.py`) with debuff, Needle
-  and Water bosses. Strong tiers clear about 78% of antes 1–4 blinds, Rookie
+  and Water bosses. Strong tiers clear about 81% of antes 1–4 blinds, Rookie
   58%. Major League ≈ Competitive on blinds.
 - **Next:**
   - add hand levels and more boss effects to the simulator;

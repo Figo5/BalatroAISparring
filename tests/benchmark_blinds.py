@@ -17,7 +17,8 @@ Plays are scored with the reference scorer in tests/benchmark_policy.py, which
 shares the policy's scoring model. So the metric measures how well discards and
 plays are *sequenced* under real random draws within that model. It is not a
 win rate against Balatro, and it does not model other boss effects, scaling
-Jokers, shops or opponents.
+Jokers, shops or opponents. Lucky cards score their average (+20 mult at 1 in
+5) and Glass cards never break.
 
 Usage: python tests/benchmark_blinds.py [--blinds N] [--seed S] [--runtime R] [--json PATH]
 """
@@ -48,10 +49,13 @@ BLIND_MULT = {"small": 1.0, "big": 1.5, "boss": 2.0}
 # Boss effects the engine fixture can represent faithfully: suit bosses and The
 # Plant debuff their cards (vanilla: debuffed cards score nothing); The Needle
 # gives one hand; The Water gives no discards. Other bosses are not modelled.
+# `req` is the requirement multiplier (vanilla: The Needle x1, others x2) and
+# `min_ante` the first ante the boss can appear at.
 BOSSES = {
-    "bl_club": {"debuff": "Clubs"}, "bl_goad": {"debuff": "Spades"},
-    "bl_window": {"debuff": "Diamonds"}, "bl_head": {"debuff": "Hearts"},
-    "bl_plant": {"debuff": "face"}, "bl_needle": {"hands": 1}, "bl_water": {"discards": 0},
+    "bl_club": {"debuff": "Clubs", "min_ante": 1}, "bl_goad": {"debuff": "Spades", "min_ante": 1},
+    "bl_window": {"debuff": "Diamonds", "min_ante": 1}, "bl_head": {"debuff": "Hearts", "min_ante": 1},
+    "bl_plant": {"debuff": "face", "min_ante": 4}, "bl_needle": {"hands": 1, "req": 1.0, "min_ante": 2},
+    "bl_water": {"discards": 0, "min_ante": 2},
 }
 BOSS_KEYS = sorted(BOSSES)
 
@@ -123,12 +127,13 @@ def make_blind(rng, index):
     rng.shuffle(deck)
     joker_count = min(5, ante + rng.choice([-1, 0, 0, 1]))
     jokers = rng.sample(bp.JOKER_KEYS, max(0, joker_count))
-    boss = rng.choice(BOSS_KEYS) if kind == "boss" else None
+    boss = rng.choice([k for k in BOSS_KEYS if BOSSES[k]["min_ante"] <= ante]) if kind == "boss" else None
+    mult = BOSSES[boss].get("req", BLIND_MULT["boss"]) if boss else BLIND_MULT[kind]
     return {
         "ante": ante,
         "kind": kind,
         "boss": boss,
-        "requirement": int(ANTE_BASE[ante] * BLIND_MULT[kind]),
+        "requirement": int(ANTE_BASE[ante] * mult),
         "deck": deck,
         "jokers": jokers,
     }
@@ -145,9 +150,12 @@ def simulate(decide, blind, difficulty):
         deck.append(card)
     hand = [deck.pop(0) for _ in range(HAND_SIZE)]
     chips, hands_left, discards_left = 0, effect.get("hands", HANDS), effect.get("discards", DISCARDS)
-    stats = {"decisions": 0, "failures": 0, "discards": 0, "latency": [], "instructions": 0}
-    for _ in range(MAX_STEPS):
+    stats = {"decisions": 0, "failures": 0, "discards": 0, "latency": [], "instructions": 0, "step_cap": 0}
+    for step in range(MAX_STEPS + 1):
         if chips >= blind["requirement"] or hands_left == 0:
+            break
+        if step == MAX_STEPS:
+            stats["step_cap"] = 1
             break
         state = {
             "hand": hand, "jokers": blind["jokers"], "hands_left": hands_left,
@@ -213,6 +221,7 @@ def main(argv=None):
             "mean_discards": round(statistics.mean(r["discards"] for r in runs), 3),
             "decisions": sum(r["decisions"] for r in runs),
             "failures": sum(r["failures"] for r in runs),
+            "step_cap_stops": sum(r["step_cap"] for r in runs),
             "max_instructions": max(r["instructions"] for r in runs),
             "latency_ms_p95": round(1000 * latency[int(0.95 * (len(latency) - 1))], 3),
         }
@@ -225,7 +234,7 @@ def main(argv=None):
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    failures = sum(d["failures"] for d in report["difficulties"].values())
+    failures = sum(d["failures"] + d["step_cap_stops"] for d in report["difficulties"].values())
     return 1 if failures else 0
 
 
