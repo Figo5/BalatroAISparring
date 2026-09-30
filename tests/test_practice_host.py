@@ -63,9 +63,10 @@ def patched(module, **attrs):
 class FakeLiveHandle:
     """Query-only stand-in. ``terminate`` must never be called by the host."""
 
-    def __init__(self, create_time, image_path):
+    def __init__(self, create_time, image_path, exited=False):
         self._create_time = create_time
         self._image_path = image_path
+        self._exited = exited
         self.closed = 0
         self.terminate_calls = 0
 
@@ -74,6 +75,9 @@ class FakeLiveHandle:
 
     def image_path(self):
         return self._image_path
+
+    def has_exited(self):
+        return self._exited
 
     def close(self):
         self.closed += 1
@@ -680,6 +684,30 @@ def test_daemon_refuses_live_duplicate_and_replaces_stale():
             raise AssertionError("expected host_foreign_discovery")
 
 
+def test_discovery_state_treats_exited_but_held_daemon_as_stale():
+    # Same "exited but still openable" case as the live exit: a crashed daemon
+    # whose process handle is still held elsewhere must not block a restart.
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        marker = {
+            "schema": practice_host.DISCOVERY_SCHEMA,
+            "module_sha256": practice_host.module_sha256(),
+            "daemon_id": "other",
+            "pid": 4321,
+            "create_time": 1000.0,
+        }
+        path = config.resolved_discovery_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(marker), encoding="utf-8")
+        held = SequenceOpener([FakeLiveHandle(1000.0, None, exited=True)])
+        state = practice_host.discovery_state(config, opener=held, enumerator=FakeEnumerator([]))
+        assert state["state"] == "stale" and state["code"] == practice_host.CODE_STALE_DISCOVERY
+
+        running = SequenceOpener([FakeLiveHandle(1000.0, None, exited=None)])
+        state = practice_host.discovery_state(config, opener=running, enumerator=FakeEnumerator([]))
+        assert state["state"] == "live" and state["code"] == practice_host.CODE_ALREADY_RUNNING
+
+
 def test_daemon_loopback_socket_round_trip():
     with tempfile.TemporaryDirectory() as tmp:
         config = make_config(tmp)
@@ -841,6 +869,112 @@ def test_wait_for_live_exit_observes_absence_and_pid_reuse():
             sleeper=lambda _seconds: None,
         )
         assert unverified["code"] == practice_host.CODE_LIVE_UNVERIFIED
+
+
+def test_wait_for_live_exit_accepts_exited_process_still_held_open():
+    # Live failure (September 29): after Balatro quit, another process (Steam)
+    # still held a handle, so OpenProcess succeeded with the matching create
+    # time but QueryFullProcessImageNameW returned nothing. The exact same
+    # process having exited must count as the live exit.
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        running = FakeLiveHandle(1000.0, _live_image(config))
+        exited = FakeLiveHandle(1000.0, None, exited=True)
+        verdict = practice_host.wait_for_live_exit(
+            config,
+            1632,
+            1000.0,
+            timeout=5.0,
+            poll_interval=0.0,
+            enumerator=FakeEnumerator(error=staging.StagingError("process_enumeration_unavailable")),
+            opener=SequenceOpener([running, exited]),
+            clock=FakeClock(step=0.1),
+            sleeper=lambda _seconds: None,
+        )
+        assert verdict["ok"] is True and verdict["code"] == practice_host.CODE_LIVE_EXITED
+        assert verdict["pid_reused"] is False
+        assert running.terminate_calls == 0 and exited.terminate_calls == 0
+
+
+def test_wait_for_live_exit_running_without_image_stays_unverified():
+    # A process that has not exited (or whose exit state is unknown) still
+    # needs the strict install-path check.
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        for exit_state in (False, None):
+            handle = FakeLiveHandle(1000.0, None, exited=exit_state)
+            verdict = practice_host.wait_for_live_exit(
+                config,
+                1632,
+                1000.0,
+                timeout=5.0,
+                poll_interval=0.0,
+                enumerator=FakeEnumerator([]),
+                opener=SequenceOpener([handle]),
+                clock=FakeClock(step=0.1),
+                sleeper=lambda _seconds: None,
+            )
+            assert verdict["code"] == practice_host.CODE_LIVE_UNVERIFIED, exit_state
+
+
+def test_wait_for_live_exit_exited_handle_with_other_create_time_is_reuse():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        handle = FakeLiveHandle(2000.0, None, exited=True)
+        verdict = practice_host.wait_for_live_exit(
+            config,
+            1632,
+            1000.0,
+            timeout=5.0,
+            poll_interval=0.0,
+            enumerator=FakeEnumerator([]),
+            opener=SequenceOpener([handle]),
+            clock=FakeClock(step=0.1),
+            sleeper=lambda _seconds: None,
+        )
+        assert verdict["ok"] is True and verdict["pid_reused"] is True
+
+
+def test_verify_live_target_rejects_exited_process():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        handle = FakeLiveHandle(1000.0, _live_image(config), exited=True)
+        verdict = practice_host.verify_live_target(config, 1632, 1000.0, opener=SequenceOpener([handle]))
+        assert verdict["ok"] is False
+        assert verdict["code"] == practice_host.CODE_LIVE_ALREADY_EXITED
+
+
+def test_native_query_handle_reports_exit_while_held_open():
+    # Real reproduction on Windows: keep a handle to a finished child open (as
+    # Steam does) and read it through the host's own query-only opener.
+    if os.name != "nt":
+        return
+    import subprocess
+
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        create_time = launch_practice.read_owned_create_time(child)
+        assert create_time is not None
+        child.wait(timeout=30)
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(tmp)
+            identity = practice_host.read_live_identity(child.pid)
+            assert identity is not None and identity["exited"] is True
+            verdict = practice_host.wait_for_live_exit(
+                config,
+                child.pid,
+                create_time,
+                timeout=5.0,
+                poll_interval=0.0,
+                enumerator=FakeEnumerator([]),
+                clock=FakeClock(step=0.1),
+                sleeper=lambda _seconds: None,
+            )
+            assert verdict["ok"] is True and verdict["code"] == practice_host.CODE_LIVE_EXITED
+    finally:
+        # Popen keeps its own process handle open until the object is dropped,
+        # which is exactly the "exited but still openable" state under test.
+        del child
 
 
 # ---------------------------------------------------------------------------

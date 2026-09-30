@@ -164,3 +164,23 @@ All tests use real engine shapes and failed first. Final verdict: READY to reins
 - Fresh backup, dry run `install_planned`, then `installed` with receipt `work/install-receipts/aisparring-install-20260930T011952Z-47f5e144.json`. The only live difference is the new `Mods/AISparring` folder, identical to the package.
 - The practice host daemon was restarted (`host-a137bd9d…`). Start gates: `practice_host_ok` in 41.1 s.
 - The user's first click-through of the new menu is the next live check.
+
+## Live start stopped at `practice_live_exit_unverified` (September 29–30)
+
+**What happened.** On the user's first start in the `9f7a8e1` build, the menu, start gates, acknowledgement and auto-quit all worked. The host then stopped safely with `practice_live_exit_unverified` and launched nothing.
+- **Cause:** after Balatro quit, another process (Steam) still held a handle to it. `OpenProcess` on the live PID (1632) therefore still succeeded with the matching create time, but `QueryFullProcessImageNameW` returned nothing. `wait_for_live_exit` read the empty image path as "cannot verify" and never recognised a normal quit.
+- **Why tests missed it:** the dev harness used a placeholder PID that was already fully gone.
+
+**Fix.**
+- `NativeProcessHandle.has_exited()` performs a non-terminating exit check on the same handle: `WaitForSingleObject(h, 0)`, falling back to `GetExitCodeProcess`. A `STILL_ACTIVE` result only ever means "unknown".
+- The host's query handle adds `SYNCHRONIZE`, which grants no termination right, and falls back to query-only if that is refused.
+- `wait_for_live_exit` accepts an exit only for the exact same process (matching create time). A running or unknown-state process still requires the strict install-path check.
+- The same case is fixed in `discovery_state` (a crashed daemon whose handle is still held is now stale, not `already_running`).
+- `verify_live_target` refuses an already-exited target with `practice_host_live_already_exited`.
+
+**Tests.** Five fake-handle tests and one real Windows reproduction (a finished child whose `Popen` handle is still held) failed first. On Linux: host 95/95, and every other runnable suite is unchanged. The Windows-only suites, the native reproduction and the Lua suites still need a run on the user's machine.
+
+**Still to do:**
+- Claude review of the diff.
+- Re-certification: the host and launcher sources are bound by the certificate and by the discovery marker's module hash.
+- Restart the practice host daemon, then have the user retry Play → AI Sparring.

@@ -113,6 +113,7 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SYNCHRONIZE = 0x00100000
 CREATE_SUSPENDED = 0x00000004
 WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
 STILL_ACTIVE = 259
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
@@ -916,6 +917,29 @@ class NativeProcessHandle:
         if not kernel32.QueryFullProcessImageNameW(self._handle, 0, buffer, ctypes.byref(size)):
             return None
         return buffer.value or None
+
+    def has_exited(self):
+        """Non-terminating exit check on this same handle.
+
+        True when the process has exited, False when it is still running, None
+        when that cannot be determined. A handle stays openable after exit while
+        anything (for example Steam) still holds one, and then the image path is
+        no longer readable, so callers must not infer "running" from the open.
+        """
+        kernel32 = _win_kernel32()
+        if kernel32 is None or not self._handle:
+            return None
+        wait = kernel32.WaitForSingleObject(self._handle, 0)
+        if wait == WAIT_OBJECT_0:
+            return True
+        if wait == WAIT_TIMEOUT:
+            return False
+        # No SYNCHRONIZE access: fall back to the exit code. STILL_ACTIVE can
+        # also be a real exit code, so it only ever yields "unknown".
+        code = ctypes.c_uint32()
+        if not kernel32.GetExitCodeProcess(self._handle, ctypes.byref(code)):
+            return None
+        return True if code.value != STILL_ACTIVE else None
 
     def terminate(self, timeout: float = 10.0) -> bool:
         kernel32 = _win_kernel32()

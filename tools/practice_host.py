@@ -146,6 +146,7 @@ CODE_BAD_ENUM = "practice_host_bad_enum"
 CODE_BAD_LIVE_PID = "practice_host_bad_live_pid"
 CODE_LIVE_IDENTITY_MISMATCH = "practice_host_live_identity_mismatch"
 CODE_LIVE_NOT_INSTALL = "practice_host_live_not_install"
+CODE_LIVE_ALREADY_EXITED = "practice_host_live_already_exited"
 CODE_ACCEPTED = "practice_host_start_accepted"
 CODE_TICKET_ACTIVE = "practice_host_ticket_active"
 CODE_TICKET_UNKNOWN = "practice_host_ticket_unknown"
@@ -425,8 +426,25 @@ def validate_config(config: HostConfig) -> None:
 # ---------------------------------------------------------------------------
 
 def _query_handle(pid: int):
+    # SYNCHRONIZE only lets the handle be waited on for the exit check; it
+    # grants no termination right. Fall back to query-only if it is refused.
     opener = getattr(launch_practice.NativeProcessHandle, "open")
-    return opener(int(pid), access=launch_practice.PROCESS_QUERY_LIMITED_INFORMATION)
+    query = launch_practice.PROCESS_QUERY_LIMITED_INFORMATION
+    handle = opener(int(pid), access=query | launch_practice.SYNCHRONIZE)
+    if handle is None:
+        handle = opener(int(pid), access=query)
+    return handle
+
+
+def _handle_exited(handle):
+    probe = getattr(handle, "has_exited", None)
+    if not callable(probe):
+        return None
+    try:
+        exited = probe()
+    except Exception:  # noqa: BLE001
+        return None
+    return exited if isinstance(exited, bool) else None
 
 
 def read_live_identity(pid: int, opener=None) -> Optional[dict]:
@@ -445,7 +463,12 @@ def read_live_identity(pid: int, opener=None) -> Optional[dict]:
             image_path = handle.image_path()
         except Exception:  # noqa: BLE001
             return None
-        return {"pid": int(pid), "create_time": create_time, "image_path": image_path}
+        return {
+            "pid": int(pid),
+            "create_time": create_time,
+            "image_path": image_path,
+            "exited": _handle_exited(handle),
+        }
     finally:
         try:
             handle.close()
@@ -463,6 +486,8 @@ def verify_live_target(config: HostConfig, live_pid: int, live_create_time, open
         return {"ok": False, "code": "practice_live_create_time_unavailable", "pid": int(live_pid)}
     if abs(float(create_time) - float(live_create_time)) > launch_practice.START_TIME_TOLERANCE:
         return {"ok": False, "code": CODE_LIVE_IDENTITY_MISMATCH, "pid": int(live_pid)}
+    if identity.get("exited") is True:
+        return {"ok": False, "code": CODE_LIVE_ALREADY_EXITED, "pid": int(live_pid)}
     image_path = identity.get("image_path")
     if not launch_practice.is_live_install_path(image_path, config.live_install_root):
         return {"ok": False, "code": CODE_LIVE_NOT_INSTALL, "pid": int(live_pid)}
@@ -515,6 +540,11 @@ def wait_for_live_exit(
                 return {"ok": False, "code": CODE_LIVE_UNVERIFIED, "pid": int(live_pid)}
             if abs(float(create_time) - float(live_create_time)) > launch_practice.START_TIME_TOLERANCE:
                 return {"ok": True, "code": CODE_LIVE_EXITED, "pid": int(live_pid), "pid_reused": True}
+            # The exact same process (matching create time) has exited while a
+            # handle to it is still held elsewhere; its image path is no longer
+            # readable, so the install-path check applies only while it runs.
+            if identity.get("exited") is True:
+                return {"ok": True, "code": CODE_LIVE_EXITED, "pid": int(live_pid), "pid_reused": False}
             if not launch_practice.is_live_install_path(identity.get("image_path"), config.live_install_root):
                 return {"ok": False, "code": CODE_LIVE_UNVERIFIED, "pid": int(live_pid)}
         if clock() >= deadline:
@@ -3105,6 +3135,8 @@ def discovery_state(config: HostConfig, *, opener=None, enumerator=None) -> dict
     identity = read_live_identity(pid, opener=opener)
     if identity is not None and identity.get("create_time") is not None:
         if abs(float(identity["create_time"]) - float(create_time)) <= launch_practice.START_TIME_TOLERANCE:
+            if identity.get("exited") is True:
+                return {"ok": True, "code": CODE_STALE_DISCOVERY, "state": "stale", "marker": marker}
             return {"ok": False, "code": CODE_ALREADY_RUNNING, "state": "live", "marker": marker}
         return {"ok": False, "code": CODE_STALE_DISCOVERY, "state": "stale_pid_reused", "marker": marker}
     absent = _confirm_absent(enumerator or launch_practice.default_enumerator(), pid, float(create_time))
