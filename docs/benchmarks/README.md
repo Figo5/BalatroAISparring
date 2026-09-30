@@ -115,6 +115,7 @@ A first step towards full-run (Gauntlet) metrics:
   its vanilla minimum ante:
   - The Club, Goad, Window and Head debuff their suit (ante 1+);
   - The Plant debuffs face cards (ante 4+);
+  - The Psychic scores only 5-card hands (ante 1+);
   - The Needle allows one hand, and The Water allows no discards (ante 2+).
 
 Plays are scored with the shared reference model. So this measures how well
@@ -132,22 +133,26 @@ brackets:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| blinds cleared | 57.8% | 81.7% | 81.7% | 80.6% |
-| cleared, ante 1 / 2 / 3 / 4 | 79 / 67 / 49 / 37% | 98 / 86 / 81 / 62% | 98 / 87 / 80 / 62% | 97 / 84 / 80 / 61% |
-| small (120) / big (120) | 75 / 63% | 94 / 89% | 94 / 90% | 95 / 87% |
-| Club (20) / Goad (21) / Window (15) / Head (30) | 35 / 43 / 40 / 50% | 70 / 81 / 60 / 80% | 70 / 76 / 60 / 80% | 75 / 71 / 60 / 77% |
-| The Plant (4, ante 4 only) | 0% | 0% | 0% | 0% |
-| The Needle (18) / The Water (12) | 17 / 25% | 39 / 25% | 39 / 25% | 39 / 25% |
+| blinds cleared | 58.6% | 81.1% | 80.6% | 80.6% |
+| cleared, ante 1 / 2 / 3 / 4 | 81 / 64 / 53 / 36% | 96 / 84 / 81 / 63% | 93 / 84 / 80 / 64% | 91 / 86 / 80 / 66% |
+| small (120) / big (120) | 78 / 61% | 96 / 85% | 96 / 85% | 95 / 84% |
+| Club (14) / Goad (19) / Window (23) / Head (19) | 36 / 47 / 57 / 37% | 71 / 74 / 57 / 79% | 71 / 74 / 57 / 68% | 64 / 74 / 65 / 68% |
+| The Psychic (19) | 37% | 68% | 68% | 68% |
+| The Needle (13) / The Water (11) | 8 / 0% | 62 / 0% | 62 / 0% | 69 / 0% |
+| The Plant (2, ante 4 only) | 100% | 100% | 100% | 100% |
 | failures / step-cap stops | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| max sandbox instructions | 157k | 891k | 889k | 1,032k |
+| max sandbox instructions | 157k | 867k | 864k | 990k |
 
 The strong tiers are close to each other here. Major League's differences are
 mostly in shop and reserve settings, which this simulator does not exercise.
-The Plant appears only 4 times, all at ante 4 against 10,000 chips, so its row
-is not informative. For the strong tiers, The Water (no discards) is the
-hardest boss with a real sample; for Rookie it is The Needle. Rows with 12–21
-blinds are noisy: one blind moves them by 5–8 points. No difficulty adapts its play to bosses beyond what the observation
-already shows (hands and discards left, debuffed cards).
+Per-boss rows rest on 2–23 blinds and are noisy. Adding The Psychic reshuffled
+which boss each seed draws, so these rows are not comparable with earlier
+reports. For example, The Water is 0 of 11 here but was 25% of 12 before.
+
+**Boss awareness under The Psychic** (`boss_aware`) is judged by paired A/B
+(720 blinds, seed 7): +0.7% overall for Competitive and Expert, from 7 changed
+blinds netting +5. The Psychic is about 4% of blinds, so its own clear rate
+rises by roughly 17 points.
 
 ## Run simulator (`tests/benchmark_runs.py`)
 

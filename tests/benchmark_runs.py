@@ -203,7 +203,8 @@ def play_blind(fn, run, blind, difficulty, stats):
         chosen = [hand[i] for i in idx]
         rest = [hand[i] for i in range(len(hand)) if i not in idx]
         if result["type"] == "PLAY_CARDS":
-            chips += int(bp.reference_score(chosen, rest, [j["center"] for j in run["jokers"]], levels))
+            if len(chosen) >= effect.get("min_cards", 0):
+                chips += int(bp.reference_score(chosen, rest, [j["center"] for j in run["jokers"]], levels))
             hands_left -= 1
         else:
             discards_left -= 1

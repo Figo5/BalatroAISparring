@@ -424,6 +424,24 @@ return function(ctx)
 		ctx.eq(Support.run(env, "rookie", use_frame({ "c_hermit" }, 8, 1)).action.type, "USE_CONSUMABLE", "rookie")
 	end)
 
+	test("psychic_boss_plays_five_cards", function()
+		-- A pair outscores a 5-card high card normally; under The Psychic a
+		-- hand of fewer than 5 cards scores nothing, so the 5-card play wins.
+		local frame = Support.pair_frame()
+		frame.certificates.items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2" } },
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2", "hand:3", "hand:4", "hand:5" } },
+		}
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			local normal = Support.run(env, difficulty, frame)
+			ctx.eq(#normal.action.card_refs, 2, difficulty .. " normal pair")
+			frame.match.blind = "bl_psychic"
+			local boss = Support.run(env, difficulty, frame)
+			ctx.eq(#boss.action.card_refs, 5, difficulty .. " psychic five")
+			frame.match.blind = "Small Blind"
+		end
+	end)
+
 	test("planets_are_used_before_other_consumables", function()
 		local result = Support.run(env, "competitive", use_frame({ "c_fool", "c_jupiter" }, 5, 0))
 		ctx.eq(result.action.type, "USE_CONSUMABLE")

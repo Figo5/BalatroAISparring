@@ -218,6 +218,13 @@ then gets +1000000, and the existing discard scoring picks which cards go. With
 enough hands left to clear the blind, the policy plays instead of wasting
 discards.
 
+**Boss awareness (`boss_aware`, Competitive and above).** The blind key in
+`match.blind` is public (shown on screen). Under **The Psychic** (`bl_psychic`,
+"must play 5 cards"), a play of fewer than five cards is estimated at 0, so
+five-card plays win and discard mode can trigger. Other bosses need history
+(The Eye, The Mouth) or change scoring uniformly (The Flint), and are not
+modelled yet.
+
 ### 4.2 Shop Jokers and Joker order (Competitive, Major League)
 
 A shop Joker adds `joker_gain_value` (400) × its **marginal gain**, capped at

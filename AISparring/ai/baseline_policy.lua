@@ -90,6 +90,8 @@ local BASE = {
 	smart_packs = true,
 	-- Hold The Hermit until money reaches $20 (its payout cap).
 	hold_hermit = true,
+	-- React to visible boss blind effects (The Psychic).
+	boss_aware = true,
 	-- Pack pick: points per displayed level of the hand a planet upgrades.
 	planet_level_pick = 6,
 	reroll_base = 55,
@@ -124,6 +126,7 @@ local CONFIGS = {
 		use_requirement = false,
 		discard_ev = false,
 		hold_hermit = false,
+		boss_aware = false,
 		use_levels = false,
 		reserve = 6,
 		play_junk = 250,
@@ -1560,6 +1563,8 @@ local function analyse_plays(observation, actions, count)
 	if plays * #s.hand * ((type(jokers) == "table" and #jokers or 0) + 2) > PLAY_WORK then
 		return info
 	end
+	-- Boss awareness (public blind key): The Psychic must play 5 cards.
+	local psychic = CONF.boss_aware and type(observation.match) == "table" and observation.match.blind == "bl_psychic"
 	local best = nil
 	local best_name = nil
 	for i = 1, count do
@@ -1570,6 +1575,10 @@ local function analyse_plays(observation, actions, count)
 				local value, name = estimate_score(cards, held_after(s.hand, a.card_refs), jokers)
 				if value ~= nil and (value ~= value or value >= ESTIMATE_CAP) then
 					value = ESTIMATE_CAP
+				end
+				if psychic and #cards < 5 then
+					-- The Psychic: a hand of fewer than 5 cards scores nothing.
+					value = 0
 				end
 				if value ~= nil then
 					info.est[a.id] = value

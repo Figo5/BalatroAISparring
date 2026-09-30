@@ -5,7 +5,7 @@ A step towards full-run (Gauntlet) metrics. Each simulated blind deals from a
 shuffled standard 52-card deck and lets the policy act repeatedly (play or
 discard, then draw back to the hand size) until the displayed requirement is
 reached or no hands remain. Boss blinds apply the effects the fixture can
-represent (suit / face debuffs, The Needle, The Water). Every decision goes
+represent (suit / face debuffs, The Needle, The Water, The Psychic). Every decision goes
 through the real trusted
 pipeline: engine fixture -> EngineAdapter -> StateReader -> AIObservation ->
 sandboxed policy (tools/lua/policy_env.lua).
@@ -56,6 +56,7 @@ BOSSES = {
     "bl_window": {"debuff": "Diamonds", "min_ante": 1}, "bl_head": {"debuff": "Hearts", "min_ante": 1},
     "bl_plant": {"debuff": "face", "min_ante": 4}, "bl_needle": {"hands": 1, "req": 1.0, "min_ante": 2},
     "bl_water": {"discards": 0, "min_ante": 2},
+    "bl_psychic": {"min_cards": 5, "min_ante": 1},
 }
 BOSS_KEYS = sorted(BOSSES)
 
@@ -173,7 +174,8 @@ def simulate(decide, blind, difficulty):
         chosen = [hand[i] for i in idx]
         rest = [hand[i] for i in range(len(hand)) if i not in idx]
         if result["type"] == "PLAY_CARDS":
-            chips += int(bp.reference_score(chosen, rest, blind["jokers"]))
+            if len(chosen) >= effect.get("min_cards", 0):
+                chips += int(bp.reference_score(chosen, rest, blind["jokers"]))
             hands_left -= 1
         else:
             discards_left -= 1
