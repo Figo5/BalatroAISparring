@@ -3,7 +3,7 @@
 ## Recovered state
 
 - Remote and feature worktree recovered to `9498cfa` (targeted Tarot WIP `0f48623`, followed by Batch 3 review).
-- Working feature checkout: existing `wt-feature` worktree listed by Git. A durable checkout path will be recorded before native certification.
+- Durable feature worktree (moved by Git, preserving changes): `C:\Users\ginom\Documents\Codex\2026-09-30\files-pasted-by-the-user-take\outputs\BalatroAISparring`. Original `main` checkout stays in its September 27 location.
 - Separate local `main` remains at `5d15bb0` with four pre-existing staged files. Do not alter its index or work. Initial staged-diff SHA256: `c7e11dec4d35d26e3e09d1bbf814f0f52825348a344ae6a7e78946e56bf94875`.
 - Verified installed mod: all 27 files exactly match the `9f7a8e1` package, SHA256 `1f6e2a6b6dc7b921a6b22975163129df7189187c1ec8cf6fe4f9f66c2d607c8b`.
 - Install receipt: original checkout `work/install-receipts/aisparring-install-20260930T011952Z-47f5e144.json`.
@@ -13,7 +13,7 @@
 
 ## Current work
 
-OpenCode Go `opencode-go/deepseek-v4.1-flash`, High, is implementing Batch 3 M1 Psychic, M2 Tarot churn and L1 stale test. Worker must not touch live files, saves, the main checkout, or Git history. Orchestrator independently verifies before Claude Code `claude-opus-5-5`, High, acceptance review.
+Current implementation checkpoint: `93147b7` (Phase A fixes, pushed). First DeepSeek Phase A batch is implemented and passes its selected suites; independent face-down padding reproduction passes after a follow-up guard. No-five-candidate exclusion, actual adapter-generated churn tests and Tarot finalization are in progress in a second fresh OpenCode Go `opencode-go/deepseek-v4.1-flash`, High, session. Worker must not touch live files, saves, the main checkout, or Git history. Orchestrator independently verifies before Claude Code `claude-opus-5-5`, High, acceptance review.
 
 ## Remaining sequence
 
@@ -29,3 +29,11 @@ OpenCode Go `opencode-go/deepseek-v4.1-flash`, High, is implementing Batch 3 M1 
 Ignored local evidence: `work/local-ownership/`. Initial recovery verification: `recovery-state.json`. Source/reference/server dependencies are local ignored copies; no proprietary sources or runtime logs are committed.
 
 No new acceptance, certification, installation or live-smoke pass is claimed by this recovery checkpoint.
+
+Independent pre-fix evidence reproduced both Medium findings on both runtimes using exact 9498cfa source. New face-down padding cases first reproduced a residual failure, then passed after the entry guard. Current rendered source is at most 54,749 bytes. Phase A worker reported policy/engine/service/host/decision/M2/estimator suites passing; consolidated independent final-source suite and review remain pending.
+
+
+## Phase A independent checkpoint (93147b7)
+
+An immutable source snapshot passed policy (176 unique cases, 343 executions), engine (165/165 on each runtime), service (61/61) and estimator parity (2/2). The initial snapshot engine invocation lacked work/reference/mp/ui/game/timer.lua; this verification-harness dependency was copied before the engine-only rerun passed. No source/test relaxation was used. All five Phase A files were byte-compared to that verified snapshot before the logical commit and push. Final Claude acceptance and native certification remain pending. Original main staged-diff checksum was rechecked unchanged after the worktree move.
+
