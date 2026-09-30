@@ -133,8 +133,8 @@ return function(ctx)
 		choose("rookie", rich, "REROLL", "rich_reroll")
 		choose("competitive", rich, "REROLL", "rich_reroll")
 		-- $60 is far above the $25 interest cap, where money earns nothing:
-		-- Major League also rerolls (tests/benchmark_runs.py: holding it cost
-		-- 0.69 blinds per run, paired t = 4.9).
+		-- Major League also rerolls (tests/benchmark_runs.py held-out paired
+		-- runs: about +0.33 blinds per run, docs/BASELINE_POLICY.md §5).
 		choose("major_league", rich, "REROLL", "rich_reroll")
 		for _, difficulty in ipairs(Support.DIFFICULTIES) do
 			choose(difficulty, poor, "LEAVE_SHOP", "poor_leave")

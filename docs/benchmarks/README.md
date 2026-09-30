@@ -155,41 +155,46 @@ A first run-level metric:
 - **Runs:** antes 1–6, each with small, big and boss blinds. A run ends at the
   first failed blind.
 - **Money:** a $4 start, blind rewards ($3 / $4 / $5), $1 per unused hand, and
-  interest ($1 per $5, at most $5).
+  interest ($1 per $5, at most $5). Money never goes below $0.
 - **Shop** after each cleared blind:
   - two offers, each a Joker ($4–8) or a planet ($3);
   - rerolls from $5, rising by $1;
   - five Joker slots;
+  - selling returns half the price;
   - a bought planet levels its hand at once.
 - **Pipeline:** every decision goes through the real adapter → reader →
-  sandbox pipeline, with the same seeds for every difficulty.
+  sandbox pipeline.
+- **Same seeds:** decks and shop offers depend only on the run seed and the
+  position, so every difficulty sees the same ones.
+- **Validation:** an illegal buy, reroll or reorder, or a no-action, counts as
+  a failure.
 
 Scored with the shared reference model. There are no packs, vouchers, tags,
 scaling Jokers or opponents, so this is **not** a Balatro win rate.
 
 ```
 python tests/benchmark_runs.py --runs 60 --json docs/benchmarks/runs_report.json
+python tests/benchmark_runs.py --paired OLD_baseline_policy.lua --seed 37 --runs 150   # A/B on the same seeds
 ```
 
 60 runs (seed 11, LuaJIT), from `runs_report.json`:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| mean blinds cleared (of 18) | 5.8 | 11.7 | 11.7 | 10.9 |
-| mean ante reached | 2.6 | 4.5 | 4.5 | 4.2 |
-| reached ante 4 / 6 | 35 / 3% | 83 / 20% | 83 / 23% | 80 / 20% |
-| planets / rerolls per run | 4.2 / 1.1 | 9.0 / 2.9 | 8.6 / 2.8 | 7.9 / 2.5 |
-| money at the end | $5 | $27 | $31 | $29 |
+| mean blinds cleared (of 18) | 5.5 | 11.4 | 11.8 | 11.3 |
+| mean ante reached | 2.5 | 4.4 | 4.6 | 4.4 |
+| reached ante 4 / 6 | 25 / 7% | 78 / 27% | 80 / 27% | 78 / 23% |
+| planets / rerolls per run | 3.4 / 1.2 | 7.9 / 3.4 | 7.7 / 3.6 | 7.4 / 3.7 |
+| money at the end | $8 | $31 | $36 | $35 |
 | failures | 0 | 0 | 0 | 0 |
-| max sandbox instructions | 151k | 863k | 896k | 1,006k |
+| max sandbox instructions | 154k | 868k | 868k | 1,024k |
 
 This simulator exposed Major League and Expert hoarding money above the
-interest cap. Their economy was retuned on 150 paired runs (Major League
-+0.69 blinds per run, t = 4.9; Expert +0.24, t = 1.8; see
-`docs/BASELINE_POLICY.md` §5). Major League now matches Competitive, and
-Expert still trails slightly. With 60 runs the standard error is about 0.6
-blinds, so differences under about 1 blind between strong tiers are within
-noise.
+interest cap. Their economy was retuned and judged on held-out seeds
+(`docs/BASELINE_POLICY.md` §5): pooled over 300 paired runs, Major League
+gained about +0.33 blinds per run and Expert about +0.51. With 60 runs the
+standard error of a mean is about 0.6 blinds, so the strong tiers are
+statistically tied here. Only paired comparisons resolve smaller differences.
 
 ### Not yet covered (prepared, continuing)
 

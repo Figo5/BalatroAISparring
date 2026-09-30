@@ -505,11 +505,20 @@ information or authority differences).
 League and Expert hoarding money above the $25 interest cap, where it earns
 nothing, and clearing fewer blinds than Competitive. Their shop settings now
 use Competitive's reroll and leave values with a reserve of 12, still graded
-above Competitive's 10. Over 150 paired runs this gained 0.69 blinds per run for
-Major League (t = 4.9) and 0.24 for Expert (t = 1.8). Rerolls also count any
-money above the interest cap as surplus (`min(2 × reserve, 5 × interest cap)`).
-The simulator has no packs or vouchers, so LV-10 should watch whether they now
-save too little for a $10 voucher.
+above Competitive's 10. The retune was chosen on seed 11. It was then judged
+on held-out seeds 37 and 41 (150 paired runs each, no credit,
+`python tests/benchmark_runs.py --paired <old policy> --seed 37 --runs 150`):
+
+| Held-out seed | Major League | Expert |
+|---|---|---|
+| 37 | +0.25 blinds per run (t = 1.7) | +0.35 (t = 1.8) |
+| 41 | +0.41 (t = 1.9) | +0.67 (t = 2.8) |
+| Pooled, 300 runs | ≈ +0.33 (t ≈ 2.5) | ≈ +0.51 (t ≈ 3.3) |
+
+The first in-sample figures (+0.69 and +0.24) were measured with a simulator
+that allowed $5 of credit, and are superseded. The simulator has no packs or
+vouchers, so LV-10 should watch whether these tiers now save too little for a
+$10 voucher.
 
 **Expert** (`expert`, fourth tier) is Major League with a deeper draw search and a more
 willing discard and shop profile. It adds two draw targets: full house from two
