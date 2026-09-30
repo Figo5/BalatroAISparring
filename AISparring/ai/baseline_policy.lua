@@ -54,6 +54,20 @@ local BASE = {
 	-- Press the real Multiplayer timer on a slow opponent while readied at the
 	-- PvP blind (0 = never). Rookie leaves it alone, like a casual player.
 	start_timer = 1000,
+	-- Play-phase evaluation sophistication (difficulty knobs, all legitimate):
+	-- estimate_plays scores plays by an estimated chips x mult; est_jokers adds
+	-- visible Joker effects to that estimate; use_requirement reads the displayed
+	-- blind requirement to prefer clearing plays and to decide when to discard.
+	estimate_plays = true,
+	est_jokers = true,
+	use_requirement = true,
+	-- Discard (when not clearing) if best_play * hands_left < pct% of what is
+	-- still needed.
+	discard_need_pct = 90,
+	-- Draw-aware discards: rank discards by expected best follow-up play and
+	-- also discard when that beats the best play now by discard_gain_pct%.
+	discard_ev = true,
+	discard_gain_pct = 150,
 	item_joker = 300,
 	item_consumable = 200,
 	item_card = 120,
@@ -88,6 +102,9 @@ end
 local CONFIGS = {
 	rookie = make_config("rookie", {
 		start_timer = 0,
+		est_jokers = false,
+		use_requirement = false,
+		discard_ev = false,
 		reserve = 6,
 		play_junk = 250,
 		discard_junk = 5000,
@@ -101,6 +118,7 @@ local CONFIGS = {
 	}),
 	competitive = make_config("competitive", {}),
 	major_league = make_config("major_league", {
+		discard_need_pct = 100,
 		reserve = 16,
 		play_junk = 550,
 		discard_junk = 7000,
@@ -120,6 +138,11 @@ local ORDER = { "rookie", "competitive", "major_league" }
 
 local TEMPLATE = [==[
 local CONF = %s
+
+-- Per-decision play analysis, computed once over the certified PLAY_CARDS
+-- candidates before scoring (see the entry point). Declared first so every
+-- scoring function below closes over this local, never a global.
+local PLAY = nil
 
 local function byte_less(a, b)
 	local na = #a
@@ -440,6 +463,22 @@ local function play_score(observation, action)
 	if cards == nil or #cards == 0 then
 		return nil
 	end
+	if CONF.estimate_plays and PLAY ~= nil then
+		local value = PLAY.est[action.id]
+		if value ~= nil then
+			-- Scaled to this decision's best estimate so late-game values keep
+			-- full resolution; strictly increasing in the estimate.
+			local scale = PLAY.best or 1000
+			if scale < 1000 then
+				scale = 1000
+			end
+			local score = 400000 + 300000 * value / (value + scale)
+			if PLAY.remaining ~= nil and value >= PLAY.remaining then
+				score = score + 250000
+			end
+			return score
+		end
+	end
 	local v, primary, sum, n, minimal, bonus, debuffed = evaluate(cards)
 	if v == nil then
 		return CONF.unknown + 1
@@ -449,6 +488,788 @@ local function play_score(observation, action)
 	score = score + bonus * CONF.enhance_value
 	score = score - debuffed * CONF.debuff_penalty
 	return score
+end
+
+-- Balatro score estimate (public rules): level-1 base chips/mult per hand, the
+-- chips of the cards that actually score, visible enhancements, editions and red
+-- seals, cards held in hand, and a table of simple Joker effects keyed by the
+-- visible Joker center. Only public, displayed facts are used. Scaling Jokers,
+-- hand levels and boss effects are unknown and ignored, so this is a relative
+-- estimate for choosing between plays, not an exact score.
+local HAND_BASE = {
+	high_card = { 5, 1 }, pair = { 10, 2 }, two_pair = { 20, 2 }, three = { 30, 3 },
+	straight = { 30, 4 }, flush = { 35, 4 }, full_house = { 40, 4 }, four = { 60, 7 },
+	straight_flush = { 100, 8 }, five = { 120, 12 }, flush_house = { 140, 14 }, flush_five = { 160, 16 },
+}
+local CONTAINS = {
+	pair = { pair = true, two_pair = true, three = true, full_house = true, four = true, five = true, flush_house = true, flush_five = true },
+	two_pair = { two_pair = true, full_house = true, flush_house = true },
+	three = { three = true, full_house = true, four = true, five = true, flush_house = true, flush_five = true },
+	four = { four = true, five = true, flush_five = true },
+	straight = { straight = true, straight_flush = true },
+	flush = { flush = true, straight_flush = true, flush_house = true, flush_five = true },
+}
+local JOKER_EFFECTS = {
+	j_joker = { "mult", 4 }, j_misprint = { "mult", 11 }, j_gros_michel = { "mult", 15 },
+	j_cavendish = { "xmult", 3 }, j_stuntman = { "chips", 250 },
+	j_greedy_joker = { "suit_mult", 3, "D" }, j_lusty_joker = { "suit_mult", 3, "H" },
+	j_wrathful_joker = { "suit_mult", 3, "S" }, j_gluttenous_joker = { "suit_mult", 3, "C" },
+	j_jolly = { "hand_mult", 8, "pair" }, j_zany = { "hand_mult", 12, "three" },
+	j_mad = { "hand_mult", 10, "two_pair" }, j_crazy = { "hand_mult", 12, "straight" },
+	j_droll = { "hand_mult", 10, "flush" },
+	j_sly = { "hand_chips", 50, "pair" }, j_wily = { "hand_chips", 100, "three" },
+	j_clever = { "hand_chips", 80, "two_pair" }, j_devious = { "hand_chips", 100, "straight" },
+	j_crafty = { "hand_chips", 80, "flush" },
+	j_duo = { "hand_xmult", 2, "pair" }, j_trio = { "hand_xmult", 3, "three" },
+	j_family = { "hand_xmult", 4, "four" }, j_order = { "hand_xmult", 3, "straight" },
+	j_tribe = { "hand_xmult", 2, "flush" },
+	j_half = { "half", 20 }, j_scary_face = { "face_chips", 30 }, j_smiley = { "face_mult", 5 },
+	j_even_steven = { "even_mult", 4 }, j_odd_todd = { "odd_chips", 31 }, j_scholar = { "ace" },
+	j_fibonacci = { "fib_mult", 8 }, j_walkie_talkie = { "walkie" }, j_triboulet = { "kq_xmult", 2 },
+	j_abstract = { "abstract", 3 }, j_baron = { "held_king" }, j_shoot_the_moon = { "held_queen", 13 },
+	j_photograph = { "photo" },
+}
+
+local RULE_JOKERS = {
+	j_four_fingers = true, j_shortcut = true, j_smeared = true, j_splash = true, j_pareidolia = true,
+}
+-- Estimates are clamped here (also NaN), far above any meaningful score.
+local ESTIMATE_CAP = 1e15
+
+local function card_chip_value(rv)
+	if rv == 14 then
+		return 11
+	end
+	if rv >= 11 then
+		return 10
+	end
+	return rv
+end
+
+local function is_stone(card)
+	return card.center == "m_stone"
+end
+
+-- Hand name and the set of scoring positions (Balatro rules without
+-- Four Fingers / Shortcut / Splash). Returns nil for unreadable cards.
+local function classify_scoring(cards)
+	local n = #cards
+	local groups = {}
+	local ranked = {}
+	local stones = {}
+	for i = 1, n do
+		local c = cards[i]
+		if type(c) ~= "table" or c.redacted == true then
+			return nil
+		end
+		if is_stone(c) then
+			stones[#stones + 1] = i
+		else
+			local rv = rank_value(c.rank)
+			if rv == nil or suit_key(c.suit) == nil then
+				return nil
+			end
+			ranked[#ranked + 1] = i
+			local g = groups[rv]
+			if g == nil then
+				g = {}
+				groups[rv] = g
+			end
+			g[#g + 1] = i
+		end
+	end
+	local list = {}
+	for rv, g in pairs(groups) do
+		list[#list + 1] = { rv = rv, g = g }
+	end
+	table.sort(list, function(a, b)
+		if #a.g ~= #b.g then
+			return #a.g > #b.g
+		end
+		return a.rv > b.rv
+	end)
+	local flush = false
+	local straight = false
+	if n == 5 and #ranked == 5 then
+		local keys = { "H", "D", "C", "S" }
+		for k = 1, 4 do
+			local all = true
+			for i = 1, 5 do
+				local c = cards[ranked[i]]
+				if suit_key(c.suit) ~= keys[k] and c.center ~= "m_wild" then
+					all = false
+				end
+			end
+			if all then
+				flush = true
+			end
+		end
+		if #list == 5 then
+			local lo, hi = 99, 0
+			local has = {}
+			for i = 1, 5 do
+				local rv = list[i].rv
+				has[rv] = true
+				if rv < lo then
+					lo = rv
+				end
+				if rv > hi then
+					hi = rv
+				end
+			end
+			if hi - lo == 4 or (has[14] and has[2] and has[3] and has[4] and has[5]) then
+				straight = true
+			end
+		end
+	end
+	local scoring = {}
+	local function mark(g)
+		for i = 1, #g do
+			scoring[g[i]] = true
+		end
+	end
+	local function mark_all()
+		for i = 1, n do
+			scoring[i] = true
+		end
+	end
+	mark(stones)
+	local s1 = list[1] and #list[1].g or 0
+	local s2 = list[2] and #list[2].g or 0
+	local name
+	if s1 == 5 then
+		name = flush and "flush_five" or "five"
+		mark_all()
+	elseif straight and flush then
+		name = "straight_flush"
+		mark_all()
+	elseif s1 == 4 then
+		name = "four"
+		mark(list[1].g)
+	elseif s1 == 3 and s2 >= 2 then
+		name = flush and "flush_house" or "full_house"
+		mark_all()
+	elseif flush then
+		name = "flush"
+		mark_all()
+	elseif straight then
+		name = "straight"
+		mark_all()
+	elseif s1 == 3 then
+		name = "three"
+		mark(list[1].g)
+	elseif s1 == 2 and s2 == 2 then
+		name = "two_pair"
+		mark(list[1].g)
+		mark(list[2].g)
+	elseif s1 == 2 then
+		name = "pair"
+		mark(list[1].g)
+	else
+		name = "high_card"
+		if list[1] ~= nil then
+			scoring[list[1].g[1]] = true
+		end
+	end
+	return name, scoring
+end
+
+-- Expected score of playing `played` while `held` stays in hand. `jokers` is
+-- the ordered visible Joker list, or nil to ignore Jokers.
+local function estimate_score(played, held, jokers)
+	local name, scoring = classify_scoring(played)
+	if name == nil then
+		return nil
+	end
+	local base = HAND_BASE[name]
+	local chips = base[1]
+	local mult = base[2]
+	local effects = {}
+	local joker_count = 0
+	if jokers ~= nil then
+		for i = 1, #jokers do
+			local j = jokers[i]
+			if type(j) == "table" then
+				-- Abstract Joker counts every Joker, debuffed ones included.
+				joker_count = joker_count + 1
+			end
+			if type(j) == "table" and j.debuff ~= true then
+				local e = JOKER_EFFECTS[j.center]
+				if e ~= nil then
+					effects[#effects + 1] = { e = e, edition = j.edition }
+				else
+					effects[#effects + 1] = { e = false, edition = j.edition }
+				end
+			end
+		end
+	end
+	-- Photograph: x2 whenever the first scoring face card scores (each retrigger).
+	local photo_index = nil
+	for i = 1, #played do
+		local c = played[i]
+		local rv = (not is_stone(c)) and rank_value(c.rank) or nil
+		if photo_index == nil and scoring[i] and c.debuff ~= true and rv ~= nil and rv >= 11 and rv <= 13 then
+			photo_index = i
+		end
+	end
+	for i = 1, #played do
+		local c = played[i]
+		if scoring[i] and c.debuff ~= true then
+			local reps = (c.seal == "Red" or c.seal == "red") and 2 or 1
+			local rv = nil
+			if not is_stone(c) then
+				rv = rank_value(c.rank)
+			end
+			local sk = suit_key(c.suit)
+			for _ = 1, reps do
+				if rv ~= nil then
+					chips = chips + card_chip_value(rv)
+				end
+				local center = c.center
+				-- Enhancement first (Lucky: 1 in 5 for +20 mult = +4 expected),
+				-- then Glass x2, then the card's edition.
+				if center == "m_bonus" then
+					chips = chips + 30
+				elseif center == "m_mult" then
+					mult = mult + 4
+				elseif center == "m_stone" then
+					chips = chips + 50
+				elseif center == "m_lucky" then
+					mult = mult + 4
+				elseif center == "m_glass" then
+					mult = mult * 2
+				end
+				if c.edition == "foil" then
+					chips = chips + 50
+				elseif c.edition == "holo" then
+					mult = mult + 10
+				elseif c.edition == "polychrome" then
+					mult = mult * 1.5
+				end
+				local face = rv ~= nil and rv >= 11 and rv <= 13
+				for k = 1, #effects do
+					local e = effects[k].e
+					if e then
+						local kind = e[1]
+						if kind == "suit_mult" and rv ~= nil and (sk == e[3] or center == "m_wild") then
+							mult = mult + e[2]
+						elseif kind == "face_chips" and face then
+							chips = chips + e[2]
+						elseif kind == "face_mult" and face then
+							mult = mult + e[2]
+						elseif kind == "even_mult" and rv ~= nil and rv <= 10 and rv %% 2 == 0 then
+							mult = mult + e[2]
+						elseif kind == "odd_chips" and rv ~= nil and (rv == 14 or (rv <= 9 and rv %% 2 == 1)) then
+							chips = chips + e[2]
+						elseif kind == "ace" and rv == 14 then
+							chips = chips + 20
+							mult = mult + 4
+						elseif kind == "fib_mult" and (rv == 14 or rv == 2 or rv == 3 or rv == 5 or rv == 8) then
+							mult = mult + e[2]
+						elseif kind == "walkie" and (rv == 10 or rv == 4) then
+							chips = chips + 10
+							mult = mult + 4
+						elseif kind == "kq_xmult" and (rv == 13 or rv == 12) then
+							mult = mult * e[2]
+						elseif kind == "photo" and i == photo_index then
+							mult = mult * 2
+						end
+					end
+				end
+			end
+		end
+	end
+	if held ~= nil then
+		for i = 1, #held do
+			local c = held[i]
+			if type(c) == "table" and c.redacted ~= true and c.debuff ~= true then
+				local reps = (c.seal == "Red" or c.seal == "red") and 2 or 1
+				local rv = nil
+				if not is_stone(c) then
+					rv = rank_value(c.rank)
+				end
+				for _ = 1, reps do
+					if c.center == "m_steel" then
+						mult = mult * 1.5
+					end
+					for k = 1, #effects do
+						local e = effects[k].e
+						if e and e[1] == "held_king" and rv == 13 then
+							mult = mult * 1.5
+						elseif e and e[1] == "held_queen" and rv == 12 then
+							mult = mult + e[2]
+						end
+					end
+				end
+			end
+		end
+	end
+	for k = 1, #effects do
+		local e = effects[k].e
+		local edition = effects[k].edition
+		if edition == "foil" then
+			chips = chips + 50
+		elseif edition == "holo" then
+			mult = mult + 10
+		end
+		if e then
+			local kind = e[1]
+			if kind == "mult" then
+				mult = mult + e[2]
+			elseif kind == "chips" then
+				chips = chips + e[2]
+			elseif kind == "xmult" then
+				mult = mult * e[2]
+			elseif kind == "hand_mult" and CONTAINS[e[3]][name] then
+				mult = mult + e[2]
+			elseif kind == "hand_chips" and CONTAINS[e[3]][name] then
+				chips = chips + e[2]
+			elseif kind == "hand_xmult" and CONTAINS[e[3]][name] then
+				mult = mult * e[2]
+			elseif kind == "half" and #played <= 3 then
+				mult = mult + e[2]
+			elseif kind == "abstract" then
+				mult = mult + e[2] * joker_count
+			end
+		end
+		if edition == "polychrome" then
+			mult = mult * 1.5
+		end
+	end
+	return chips * mult, name
+end
+
+-- Parse a displayed integer ("1200", "1,200", "1.2e5"); nil if unreadable.
+local function display_number(text)
+	if type(text) ~= "string" or #text == 0 or #text > 32 then
+		return nil
+	end
+	local cleaned = string.gsub(text, ",", "")
+	if string.find(cleaned, "^[0-9]+$") == nil and string.find(cleaned, "^[0-9]+%%.?[0-9]*e%%+?[0-9]+$") == nil then
+		return nil
+	end
+	return tonumber(cleaned)
+end
+
+
+local function held_after(hand, refs)
+	local used = {}
+	for i = 1, #refs do
+		used[refs[i]] = true
+	end
+	local out = {}
+	for i = 1, #hand do
+		local c = hand[i]
+		if type(c) == "table" and not used[c.id] then
+			out[#out + 1] = c
+		end
+	end
+	return out
+end
+
+-- Draw-aware discard evaluation (analytic "outs", deterministic). Unseen cards
+-- follow a standard 52-card prior minus the visible hand (only general
+-- knowledge and the visible hand; no deck order, no hidden deck contents).
+local function choose(n, k)
+	if k < 0 or k > n then
+		return 0
+	end
+	local r = 1
+	for i = 1, k do
+		r = r * (n - k + i) / i
+	end
+	return r
+end
+
+-- P(at least `need` successes) drawing `draws` from `pool` holding `good`.
+local function p_at_least(need, draws, good, pool)
+	if need <= 0 then
+		return 1
+	end
+	if need > draws or good < need or pool <= 0 or draws > pool then
+		return 0
+	end
+	local total = choose(pool, draws)
+	if total <= 0 then
+		return 0
+	end
+	local p = 0
+	for x = need, draws do
+		p = p + choose(good, x) * choose(pool - good, draws - x) / total
+	end
+	if p > 1 then
+		p = 1
+	end
+	return p
+end
+
+local SUIT_NAMES = { H = "Hearts", D = "Diamonds", C = "Clubs", S = "Spades" }
+local RANK_NAMES = { [2] = "2", [3] = "3", [4] = "4", [5] = "5", [6] = "6", [7] = "7", [8] = "8",
+	[9] = "9", [10] = "10", [11] = "Jack", [12] = "Queen", [13] = "King", [14] = "Ace" }
+
+-- Best estimated play among `cards` (<= 8) from its structural candidates:
+-- rank groups (with a second group for two pair / full house), the top five of
+-- a suit, five-rank straights and the single high card.
+local function best_play_value(cards, jokers)
+	local best = 0
+	local function try(list)
+		if #list == 0 or #list > 5 then
+			return
+		end
+		local held = {}
+		local used = {}
+		for i = 1, #list do
+			used[list[i]] = true
+		end
+		for i = 1, #cards do
+			if not used[cards[i]] then
+				held[#held + 1] = cards[i]
+			end
+		end
+		local value = estimate_score(list, held, jokers)
+		if value ~= nil and value > best then
+			best = value
+		end
+	end
+	local by_rank = {}
+	local by_suit = {}
+	local top = nil
+	local top_rv = 0
+	for i = 1, #cards do
+		local c = cards[i]
+		local rv = rank_value(c.rank)
+		local sk = suit_key(c.suit)
+		if rv ~= nil and not is_stone(c) then
+			by_rank[rv] = by_rank[rv] or {}
+			local g = by_rank[rv]
+			g[#g + 1] = c
+			if rv > top_rv then
+				top_rv = rv
+				top = c
+			end
+		end
+		if sk ~= nil and not is_stone(c) then
+			by_suit[sk] = by_suit[sk] or {}
+			local g = by_suit[sk]
+			g[#g + 1] = c
+		end
+	end
+	if top ~= nil then
+		try({ top })
+	end
+	local groups = {}
+	for rv = 14, 2, -1 do
+		local g = by_rank[rv]
+		if g ~= nil and #g >= 2 then
+			groups[#groups + 1] = g
+		end
+	end
+	for a = 1, #groups do
+		local ga = groups[a]
+		local one = {}
+		for i = 1, #ga do
+			if i <= 5 then
+				one[#one + 1] = ga[i]
+			end
+		end
+		try(one)
+		for b = a + 1, #groups do
+			local both = {}
+			for i = 1, #one do
+				both[#both + 1] = one[i]
+			end
+			local gb = groups[b]
+			for i = 1, #gb do
+				if #both < 5 then
+					both[#both + 1] = gb[i]
+				end
+			end
+			try(both)
+		end
+	end
+	for _, g in pairs(by_suit) do
+		if #g >= 5 then
+			local sorted = {}
+			for i = 1, #g do
+				sorted[i] = g[i]
+			end
+			table.sort(sorted, function(x, y)
+				local rx, ry = rank_value(x.rank) or 0, rank_value(y.rank) or 0
+				if rx ~= ry then
+					return rx > ry
+				end
+				return byte_less(x.id or "", y.id or "")
+			end)
+			try({ sorted[1], sorted[2], sorted[3], sorted[4], sorted[5] })
+		end
+	end
+	for low = 1, 10 do
+		local run = {}
+		for v = low, low + 4 do
+			local rv = v
+			if v == 1 then
+				rv = 14
+			end
+			local g = by_rank[rv]
+			if g == nil then
+				break
+			end
+			run[#run + 1] = g[1]
+		end
+		if #run == 5 then
+			try(run)
+		end
+	end
+	return best
+end
+
+local function synthetic(rank, suit)
+	return { kind = "card", rank = RANK_NAMES[rank], suit = SUIT_NAMES[suit], center = "c_base", id = "draw" }
+end
+
+-- Expected best play after discarding `discard_refs` and drawing the same
+-- number of cards: the current best of the kept cards, improved by the most
+-- valuable reachable target (flush, better rank group, straight) weighted by
+-- its hypergeometric chance.
+local function discard_ev(observation, discard_refs, jokers)
+	local s = observation.self
+	local hand = s.hand
+	local drop = {}
+	for i = 1, #discard_refs do
+		drop[discard_refs[i]] = true
+	end
+	local kept = {}
+	local seen_rank = {}
+	local seen_suit = {}
+	for i = 1, #hand do
+		local c = hand[i]
+		if type(c) == "table" and c.redacted ~= true then
+			local rv = rank_value(c.rank)
+			local sk = suit_key(c.suit)
+			if rv ~= nil then
+				seen_rank[rv] = (seen_rank[rv] or 0) + 1
+			end
+			if sk ~= nil then
+				seen_suit[sk] = (seen_suit[sk] or 0) + 1
+			end
+			if not drop[c.id] then
+				kept[#kept + 1] = c
+			end
+		end
+	end
+	local d = #discard_refs
+	local pool = 52 - #hand
+	local deck = s.deck
+	if type(deck) == "table" and type(deck.total) == "number" and deck.total > 0 and deck.total < pool then
+		pool = deck.total
+	end
+	local base = best_play_value(kept, jokers)
+	local ev = base
+	-- `play` is the exact target play (kept cards plus synthetic draws); it is
+	-- priced once, without held-card effects, to stay within the budget.
+	local function consider(p, play)
+		if p <= 0 or #play == 0 or #play > 5 then
+			return
+		end
+		local value = estimate_score(play, nil, jokers)
+		if value == nil then
+			return
+		end
+		local candidate = p * value + (1 - p) * base
+		if candidate > ev then
+			ev = candidate
+		end
+	end
+	local function kept_where(test, limit)
+		local out = {}
+		for i = 1, #kept do
+			local c = kept[i]
+			if not is_stone(c) and test(c) then
+				out[#out + 1] = c
+			end
+		end
+		table.sort(out, function(x, y)
+			local rx, ry = rank_value(x.rank) or 0, rank_value(y.rank) or 0
+			if rx ~= ry then
+				return rx > ry
+			end
+			return byte_less(x.id or "", y.id or "")
+		end)
+		while #out > limit do
+			out[#out] = nil
+		end
+		return out
+	end
+	-- Flush: complete a suit.
+	local kept_suit = {}
+	local kept_rank = {}
+	for i = 1, #kept do
+		local c = kept[i]
+		local sk = suit_key(c.suit)
+		local rv = rank_value(c.rank)
+		if sk ~= nil and not is_stone(c) then
+			kept_suit[sk] = (kept_suit[sk] or 0) + 1
+		end
+		if rv ~= nil and not is_stone(c) then
+			kept_rank[rv] = (kept_rank[rv] or 0) + 1
+		end
+	end
+	local suits = { "H", "D", "C", "S" }
+	for k = 1, 4 do
+		local sk = suits[k]
+		local have = kept_suit[sk] or 0
+		local need = 5 - have
+		if have >= 2 and need >= 1 and need <= d then
+			local play = kept_where(function(c)
+				return suit_key(c.suit) == sk
+			end, 5)
+			for _ = 1, need do
+				play[#play + 1] = synthetic(8, sk)
+			end
+			consider(p_at_least(need, d, 13 - (seen_suit[sk] or 0), pool), play)
+		end
+	end
+	-- Rank groups: one more of a kept rank (pair -> three, three -> four,
+	-- a lone high card -> pair).
+	for rv = 2, 14 do
+		local have = kept_rank[rv] or 0
+		if have >= 1 and d >= 1 then
+			local outs = 4 - (seen_rank[rv] or 0)
+			if outs > 0 and have <= 3 then
+				local play = kept_where(function(c)
+					return rank_value(c.rank) == rv
+				end, 4)
+				play[#play + 1] = synthetic(rv, "S")
+				consider(p_at_least(1, d, outs, pool), play)
+			end
+		end
+	end
+	-- Straights missing exactly one rank (open or gutshot).
+	if d >= 1 then
+		for low = 1, 10 do
+			local missing = nil
+			local count = 0
+			for v = low, low + 4 do
+				local rv = v
+				if v == 1 then
+					rv = 14
+				end
+				if (kept_rank[rv] or 0) > 0 then
+					count = count + 1
+				else
+					missing = rv
+				end
+			end
+			if count == 4 and missing ~= nil then
+				local outs = 4 - (seen_rank[missing] or 0)
+				if outs > 0 then
+					local play = {}
+					for v = low, low + 4 do
+						local rv = v
+						if v == 1 then
+							rv = 14
+						end
+						if rv == missing then
+							play[#play + 1] = synthetic(missing, "D")
+						else
+							local picked = kept_where(function(c)
+								return rank_value(c.rank) == rv
+							end, 1)
+							play[#play + 1] = picked[1]
+						end
+					end
+					consider(p_at_least(1, d, outs, pool), play)
+				end
+			end
+		end
+	end
+	return ev
+end
+
+local function analyse_plays(observation, actions, count)
+	local info = { est = {}, best = nil, remaining = nil, clears = false, discard_mode = false }
+	local s = observation.self
+	if type(s) ~= "table" or type(s.hand) ~= "table" then
+		return info
+	end
+	local jokers = nil
+	if CONF.est_jokers then
+		jokers = s.jokers
+	end
+	-- Jokers that change what a hand is (Four Fingers, Shortcut, Smeared,
+	-- Splash, Pareidolia) make the estimate wrong: keep the category ranking.
+	if type(s.jokers) == "table" then
+		for i = 1, #s.jokers do
+			local j = s.jokers[i]
+			if type(j) == "table" and RULE_JOKERS[j.center] then
+				return info
+			end
+		end
+	end
+	local best = nil
+	local best_name = nil
+	for i = 1, count do
+		local a = actions[i]
+		if type(a) == "table" and a.type == "PLAY_CARDS" then
+			local cards = cards_for(observation, a.card_refs)
+			if cards ~= nil and #cards > 0 then
+				local value, name = estimate_score(cards, held_after(s.hand, a.card_refs), jokers)
+				if value ~= nil and (value ~= value or value >= ESTIMATE_CAP) then
+					value = ESTIMATE_CAP
+				end
+				if value ~= nil then
+					info.est[a.id] = value
+					if best == nil or value > best then
+						best = value
+						best_name = name
+					end
+				end
+			end
+		end
+	end
+	info.best = best
+	if CONF.use_requirement and observation.phase ~= "MULTIPLAYER_PVP" then
+		local need = display_number(s.blind_requirement)
+		local have = display_number(s.current_score) or 0
+		if need ~= nil and need > 0 then
+			info.remaining = need - have
+		end
+	end
+	if best ~= nil and info.remaining ~= nil and best >= info.remaining then
+		info.clears = true
+	end
+	local discards = s.discards
+	local hands = s.hands
+	local can_discard = type(discards) == "number" and discards > 0 and type(hands) == "number" and hands > 0
+	if CONF.discard_ev and can_discard and not info.clears then
+		info.discard_ev = {}
+		local best_ev = nil
+		for i = 1, count do
+			local a = actions[i]
+			if type(a) == "table" and a.type == "DISCARD_CARDS" and type(a.card_refs) == "table" then
+				local value = discard_ev(observation, a.card_refs, jokers)
+				info.discard_ev[a.id] = value
+				if best_ev == nil or value > best_ev then
+					best_ev = value
+				end
+			end
+		end
+		info.best_discard_ev = best_ev
+	end
+	if best ~= nil and not info.clears and can_discard then
+		if best_name == "high_card" then
+			info.discard_mode = true
+		elseif info.remaining ~= nil and hands == 1 then
+			-- Last hand and nothing clears: improving is the only chance.
+			info.discard_mode = true
+		elseif info.remaining ~= nil and best * hands * 100 < info.remaining * CONF.discard_need_pct then
+			info.discard_mode = true
+		elseif info.best_discard_ev ~= nil and info.best_discard_ev * 100 > best * CONF.discard_gain_pct then
+			-- Drawing is expected to beat the best play now by a clear margin.
+			info.discard_mode = true
+		end
+	end
+	return info
 end
 
 local function hand_aggregates(hand)
@@ -1006,7 +1827,26 @@ local function score_of(observation, action)
 		return play_score(observation, action)
 	end
 	if kind == "DISCARD_CARDS" then
-		return discard_score(observation, action)
+		local score = discard_score(observation, action)
+		if score ~= nil and PLAY ~= nil and PLAY.discard_ev ~= nil then
+			local value = PLAY.discard_ev[action.id]
+			if value ~= nil then
+				-- Rank discards by expected follow-up play; the old per-card
+				-- heuristic only breaks ties.
+				local scale = PLAY.best or 1000
+				if scale < 1000 then
+					scale = 1000
+				end
+				if value ~= value or value > ESTIMATE_CAP then
+					value = ESTIMATE_CAP
+				end
+				score = 200000 + 300000 * value / (value + scale) + score / 1000
+			end
+		end
+		if score ~= nil and CONF.estimate_plays and PLAY ~= nil and PLAY.discard_mode then
+			score = score + 1000000
+		end
+		return score
 	end
 	if kind == "SELECT_BLIND" or kind == "SKIP_BLIND" then
 		return blind_score(observation, action)
@@ -1061,6 +1901,10 @@ return function(observation, actions)
 	local count = #actions
 	if count > limit then
 		count = limit
+	end
+	PLAY = nil
+	if CONF.estimate_plays then
+		PLAY = analyse_plays(observation, actions, count)
 	end
 	local best = nil
 	local best_score = nil

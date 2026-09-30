@@ -368,5 +368,61 @@ return function(ctx)
 			legal(difficulty, frame, action)
 		end
 	end)
+
+	local function kind_of(difficulty, frame)
+		local result = Support.run(env, difficulty, frame)
+		ctx.is_true(result.ok == true, difficulty .. ":" .. tostring(result.code))
+		return result.action
+	end
+
+	test("policy_plays_a_clearing_hand_instead_of_discarding", function()
+		-- 64 >= 60 remaining: the pair clears, so no discard is spent.
+		local frame = Support.requirement_frame("60", 2, 3)
+		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+			local action = kind_of(difficulty, frame)
+			ctx.eq(action.type, "PLAY_CARDS", difficulty)
+			ctx.eq(#action.card_refs, 2, difficulty .. " plays the pair")
+		end
+	end)
+
+	test("policy_discards_when_plays_cannot_reach_the_requirement", function()
+		-- 64 x 2 hands << 1000: improve the hand while discards remain.
+		local frame = Support.requirement_frame("1000", 2, 3)
+		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+			ctx.eq(kind_of(difficulty, frame).type, "DISCARD_CARDS", difficulty)
+		end
+		-- Rookie does not read the requirement: it plays its made pair.
+		ctx.eq(kind_of("rookie", frame).type, "PLAY_CARDS", "rookie")
+		-- Without discards everyone plays the best hand.
+		local no_discards = Support.requirement_frame("1000", 2, 0)
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			local action = kind_of(difficulty, no_discards)
+			ctx.eq(action.type, "PLAY_CARDS", difficulty)
+			ctx.eq(#action.card_refs, 2, difficulty)
+		end
+	end)
+
+	test("policy_ignores_requirement_in_pvp", function()
+		-- The PvP target is the opponent's score, never the blind requirement.
+		local frame = Support.requirement_frame("100000", 2, 3, "MULTIPLAYER_PVP")
+		ctx.eq(kind_of("major_league", frame).type, "PLAY_CARDS")
+	end)
+
+	test("policy_counts_visible_joker_effects", function()
+		-- The Duo (x2 on a pair) lifts the pair to 128 >= 100: it clears,
+		-- while without Jokers (Rookie's view) it would not.
+		local frame = Support.requirement_frame("100", 1, 3, nil, { Support.joker("j_duo") })
+		local action = kind_of("competitive", frame)
+		ctx.eq(action.type, "PLAY_CARDS")
+		ctx.eq(#action.card_refs, 2)
+	end)
+
+	test("policy_requirement_parsing_is_defensive", function()
+		for _, text in ipairs({ "1,000", "1e3", "abc", "12.5.3", "0" }) do
+			local frame = Support.requirement_frame(text, 2, 3)
+			local result = Support.run(env, "major_league", frame)
+			ctx.is_true(result.ok == true, text .. ":" .. tostring(result.code))
+		end
+	end)
 end
 

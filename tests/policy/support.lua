@@ -58,7 +58,10 @@ local function base_self()
 		hands = 4,
 		discards = 3,
 		current_score = "0",
-		blind_requirement = "300",
+		-- Low enough that four weak plays still suffice, so these frames test
+		-- play-vs-play and discard-vs-play choices, not the requirement logic
+		-- (which has its own frames below).
+		blind_requirement = "100",
 		hand_visible = false,
 		jokers = {},
 		consumables = {},
@@ -142,6 +145,27 @@ function Support.timer_frame()
 	local frame = Support.blind_frame()
 	frame.certificates.items = { { type = "START_TIMER", certified = true } }
 	return frame
+end
+
+-- Requirement-aware frames: a made pair of Aces (est. 64 with no Jokers) versus
+-- discarding the rest, at a chosen remaining requirement.
+function Support.requirement_frame(requirement, hands, discards, phase, jokers)
+	local frame = handed(phase or "PLAY_HAND", pair_hand(), {
+		play_cert({ "hand:1", "hand:2" }),
+		play_cert({ "hand:5" }),
+		discard_cert({ "hand:3", "hand:4", "hand:5" }),
+	})
+	frame.self.blind_requirement = requirement
+	frame.self.hands = hands
+	frame.self.discards = discards
+	if jokers ~= nil then
+		frame.self.jokers = jokers
+	end
+	return frame
+end
+
+function Support.joker(center)
+	return { kind = "joker", center = center, face_down = false }
 end
 
 function Support.blind_zero_hands_frame()

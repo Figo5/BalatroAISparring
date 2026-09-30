@@ -719,6 +719,18 @@ local function build_self(G, phase, hand_cards)
 			out.current_score = dec_string(floor)
 		end
 	end
+	-- The displayed "score at least" of a normal blind (the blind UI shows
+	-- `G.GAME.blind.chips`). Only for a blind positively identified as non-PvP:
+	-- a PvP blind's target is the opponent's (possibly masked) score, and
+	-- Multiplayer overwrites a finished non-PvP blind with -1, which is dropped.
+	-- Only while a hand is being played: outside the blind (shop, blind
+	-- select) the previous blind's value is not what the UI is showing.
+	if PHASE_ALLOWS_HAND[phase] == true and engine_pvp_boss(G) == false then
+		local need = rpath(game, "blind", "chips")
+		if type(need) == "number" and need == need and need ~= math.huge and need > 0 then
+			out.blind_requirement = dec_string(math.floor(need))
+		end
+	end
 
 	local cards = {}
 	local jokers, joker_count = area_cards(G, "jokers", LIMITS.jokers)
@@ -1015,8 +1027,12 @@ local function hand_selections(cards, count, max_k, cap)
 	local rank_order = {}
 	local suits = {}
 	local suit_order = {}
+	local rank_values = {}
 	for i = 1, count do
 		local rank, suit = grouping_identity(rawget(cards, i))
+		if rank ~= nil then
+			rank_values[i] = RANK_VALUE[rank]
+		end
 		if rank ~= nil then
 			local group = ranks[rank]
 			if group == nil then
@@ -1121,13 +1137,30 @@ local function hand_selections(cards, count, max_k, cap)
 		add_type(straights, 8)
 	end
 
-	-- 4. flush candidates (first five of a visible suit).
+	-- 4. flush candidates: the five highest-ranked cards of a visible suit
+	-- (ties by hand position), not merely the first five in hand order.
 	if max_k >= 5 then
 		local flushes = {}
 		for k = 1, #suit_order do
 			local group = suits[suit_order[k]]
 			if #group >= 5 then
-				flushes[#flushes + 1] = { group[1], group[2], group[3], group[4], group[5] }
+				local sorted = {}
+				for g = 1, #group do
+					sorted[g] = group[g]
+				end
+				table.sort(sorted, function(a, b)
+					local ra, rb = rank_values[a] or 0, rank_values[b] or 0
+					if ra ~= rb then
+						return ra > rb
+					end
+					return a < b
+				end)
+				local top = { sorted[1], sorted[2], sorted[3], sorted[4], sorted[5] }
+				table.sort(top)
+				flushes[#flushes + 1] = top
+				if #group > 5 then
+					flushes[#flushes + 1] = { group[1], group[2], group[3], group[4], group[5] }
+				end
 			end
 		end
 		add_type(flushes, 4)
@@ -1163,6 +1196,142 @@ local function hand_selections(cards, count, max_k, cap)
 	end
 	add_type(pairs, 20)
 
+	return out
+end
+
+-- A card worth keeping on its own: any edition, seal or enhancement.
+local function is_valuable(card)
+	if rget(card, "edition") ~= nil or rget(card, "seal") ~= nil then
+		return true
+	end
+	local key = rpath(card, "config", "center", "key")
+	return type(key) == "string" and string.sub(key, 1, 2) == "m_"
+end
+
+-- Discard-specific candidates: throw away what does not belong to a visible
+-- draw, lowest ranks first, never more than `max_k` and never a valuable card.
+-- Every candidate is still an ordinary visible-hand selection; the policy
+-- chooses among them and the executor re-checks the real discard gate.
+local function discard_selections(cards, count, max_k, cap)
+	local out = {}
+	local seen = {}
+	local function add(selection)
+		if #selection == 0 or #selection > max_k or #out >= cap then
+			return
+		end
+		local sorted = {}
+		for i = 1, #selection do
+			sorted[i] = selection[i]
+		end
+		table.sort(sorted)
+		local key = table.concat(sorted, ",")
+		if seen[key] then
+			return
+		end
+		seen[key] = true
+		out[#out + 1] = sorted
+	end
+	local info = {}
+	local rank_count = {}
+	local suit_members = {}
+	local suit_order = {}
+	for i = 1, count do
+		local card = rawget(cards, i)
+		local rank, suit = grouping_identity(card)
+		local value = rank ~= nil and RANK_VALUE[rank] or nil
+		info[i] = { value = value, suit = suit, keep = is_valuable(card) }
+		if value ~= nil then
+			rank_count[value] = (rank_count[value] or 0) + 1
+		end
+		if suit ~= nil then
+			if suit_members[suit] == nil then
+				suit_members[suit] = {}
+				suit_order[#suit_order + 1] = suit
+			end
+			local list = suit_members[suit]
+			list[#list + 1] = i
+		end
+	end
+	table.sort(suit_order, byte_less)
+	-- Lowest-value first; unreadable (stone/face-down) cards are never offered.
+	local function cheapest(excluded, limit)
+		local pool = {}
+		for i = 1, count do
+			local entry = info[i]
+			if not excluded[i] and not entry.keep and entry.value ~= nil then
+				pool[#pool + 1] = i
+			end
+		end
+		table.sort(pool, function(a, b)
+			if info[a].value ~= info[b].value then
+				return info[a].value < info[b].value
+			end
+			return a < b
+		end)
+		local picked = {}
+		for i = 1, #pool do
+			if #picked >= limit then
+				break
+			end
+			picked[#picked + 1] = pool[i]
+		end
+		return picked
+	end
+	-- 1. Flush draws: keep every card of one suit with >= 3 visible cards.
+	for k = 1, #suit_order do
+		local members = suit_members[suit_order[k]]
+		if #members >= 3 and #members < 5 then
+			local keep = {}
+			for m = 1, #members do
+				keep[members[m]] = true
+			end
+			add(cheapest(keep, max_k))
+		end
+	end
+	-- 2. Made groups: keep every rank that appears at least twice.
+	local grouped = {}
+	local has_group = false
+	for i = 1, count do
+		local value = info[i].value
+		if value ~= nil and (rank_count[value] or 0) >= 2 then
+			grouped[i] = true
+			has_group = true
+		end
+	end
+	if has_group then
+		add(cheapest(grouped, max_k))
+		add(cheapest(grouped, 3))
+	end
+	-- 3. Straight draws: four distinct ranks inside a window of five (Ace low
+	-- and high); keep one card per rank of the best (highest) window.
+	local by_value = {}
+	for i = 1, count do
+		local value = info[i].value
+		if value ~= nil and by_value[value] == nil then
+			by_value[value] = i
+		end
+	end
+	if by_value[14] ~= nil then
+		by_value[1] = by_value[14]
+	end
+	for low = 10, 1, -1 do
+		local keep = {}
+		local present = 0
+		for v = low, low + 4 do
+			if by_value[v] ~= nil then
+				keep[by_value[v]] = true
+				present = present + 1
+			end
+		end
+		if present >= 4 then
+			add(cheapest(keep, max_k))
+			break
+		end
+	end
+	-- 4. Plain junk: the lowest 1..max_k unmatched cards.
+	for n = max_k, 1, -1 do
+		add(cheapest(grouped, n))
+	end
 	return out
 end
 
@@ -1227,6 +1396,27 @@ end
 local function cert_play_discard(builder, t, hand_cards, max_k, forced)
 	local cap = LIMITS.selection
 	local selections = hand_selections(hand_cards, #hand_cards, max_k, cap)
+	if t == "DISCARD_CARDS" then
+		-- Targeted discards first, then the generic selections, same total cap.
+		local targeted = discard_selections(hand_cards, #hand_cards, max_k, 12)
+		local merged = {}
+		local seen = {}
+		for _, list in ipairs({ targeted, selections }) do
+			for i = 1, #list do
+				local sorted = {}
+				for j = 1, #list[i] do
+					sorted[j] = list[i][j]
+				end
+				table.sort(sorted)
+				local key = table.concat(sorted, ",")
+				if not seen[key] and #merged < cap then
+					seen[key] = true
+					merged[#merged + 1] = list[i]
+				end
+			end
+		end
+		selections = merged
+	end
 	for i = 1, #selections do
 		-- H3 alignment: never offer a selection the executor must refuse because
 		-- it omits a forced card. The executor still re-checks the same rule.

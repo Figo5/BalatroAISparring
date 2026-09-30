@@ -638,5 +638,32 @@ return function(ctx)
 		local second = pipeline.adapter.step()
 		is_true(first.epoch ~= second.epoch, "nemesis timer must change the decision epoch")
 	end)
+
+	test("blind_requirement_projected_only_for_a_normal_blind", function()
+		local function requirement(opts, chips)
+			local engine = support.engine(opts)
+			if engine.G.GAME.blind ~= nil then
+				engine.G.GAME.blind.chips = chips
+			end
+			local result = produce(engine)
+			return result.ui_view.self.blind_requirement
+		end
+		local hand = { support.card({ rank = "Ace", suit = "Spades" }) }
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand }, 300), "300")
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand }, 1234.9), "1234")
+		-- PvP: the target is the opponent's (possibly masked) score.
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand, blind_key = "bl_mp_nemesis", blind_pvp = true }, 300), nil)
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand, blind_pvp = true }, 300), nil)
+		-- Multiplayer marks a finished non-PvP blind with -1.
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand }, -1), nil)
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand }, 0 / 0), nil)
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand, omit_blind = true }, 300), nil)
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand }, math.huge), nil)
+		-- The nemesis key alone identifies PvP, even without the pvp flag.
+		eq(requirement({ state = STATES.SELECTING_HAND, hand = hand, blind_key = "bl_mp_nemesis" }, 300), nil)
+		-- Outside the hand phases (shop, blind select) it is never projected.
+		eq(requirement({ state = STATES.SHOP }, 300), nil)
+		eq(requirement({ state = STATES.BLIND_SELECT, blind_select = {} }, 300), nil)
+	end)
 end
 

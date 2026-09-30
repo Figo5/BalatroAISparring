@@ -180,7 +180,7 @@ may contain `>>`), `ante`, `round`, `lives`, `hands_per_round`,
 | `hands` | int `>= 0` |
 | `discards` | int `>= 0` |
 | `current_score` | displayed string (display charset, <= 32) |
-| `blind_requirement` | displayed string (display charset, <= 32) |
+| `blind_requirement` | displayed string (display charset, <= 32). The production adapter fills it from the blind UI's `G.GAME.blind.chips` only for a blind positively identified as non-PvP, when positive and finite. It is omitted for the PvP blind (whose target is the opponent's possibly masked score) and after Multiplayer marks a finished blind with -1. |
 | `hand_visible` | bool; explicit visibility certificate for the hand |
 | `hand` | ordered `card` array, only when phase permits **and** `hand_visible = true` |
 | `jokers` | ordered `joker` array |

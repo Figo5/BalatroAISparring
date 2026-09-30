@@ -128,6 +128,75 @@ plus a small enhanced/edition bonus and a heavy per-debuffed-card penalty. The
 category weight is dominant, so any made hand beats any high-card play, and
 within a category a compact play beats a junk-padded one of the same category.
 
+### 4.1 Estimated chips × mult (cloud improvement)
+
+When `estimate_plays` is on (every difficulty), all certified `PLAY_CARDS`
+candidates are first analysed once per decision (`analyse_plays`):
+
+- **Scoring cards** follow Balatro rules. The pair cards of a Pair, the top card
+  of a High Card, the four of Four of a Kind, all five cards of a Straight,
+  Flush or Full House, and Stone cards always.
+- **Base** is the level-1 chips/mult of the hand, plus the chips of the scoring
+  cards (2–10 face value, J/Q/K 10, A 11).
+- **Card effects,** in Balatro's order per scoring card: rank chips, then the
+  enhancement (Bonus +30 chips, Mult +4, Stone +50 chips, Lucky +4 expected mult
+  from 1 in 5 for +20, Glass ×2), then the card's edition (Foil +50 chips, Holo
+  +10 mult, Polychrome ×1.5), then per-card Joker triggers. A red seal
+  retriggers all of it, including Photograph's ×2 on the first scoring face
+  card.
+- **Held cards:** Steel ×1.5 while held.
+- **Jokers**, when `est_jokers` is on: a fixed table of simple, public effects
+  keyed by the visible Joker `center` (`JOKER_EFFECTS`: flat and ×mult, suit,
+  face, even/odd, Fibonacci, Scholar and Walkie Talkie per-card effects, the
+  "contains a hand" +mult/+chips/×mult family, Half, Abstract, Baron, Shoot the
+  Moon and Photograph). Joker editions apply in Joker order, so ×mult after
+  +mult is modelled.
+
+Unknowns count as neutral: hand levels, scaling Jokers' current values, boss
+effects, probabilities beyond Lucky's expectation and any Joker not in the table.
+Abstract Joker counts every Joker, debuffed included. When a Joker that changes
+what a hand is (Four Fingers, Shortcut, Smeared, Splash, Pareidolia) is present,
+the estimate is not used at all and the category ranking decides. Estimates are
+clamped at 1e15, and NaN is clamped too. The estimate is for comparing plays,
+not an exact score.
+
+A play then scores `400000 + 300000·est/(est+scale)`, where `scale` is this
+decision's best estimate (at least 1000), so late-game values keep resolution, so every play outranks any
+non-discard alternative and a higher estimate always wins. When `use_requirement`
+is on and the displayed `blind_requirement` is readable (non-PvP only), a play
+whose estimate reaches the remaining requirement gets +250000, so it is always
+preferred.
+
+**Draw-aware discards (`discard_ev`, Competitive and Major League).** Each
+certified discard is valued by the expected best follow-up play:
+
+- the best estimated play among the kept cards, improved by the most valuable
+  reachable target, weighted by its hypergeometric chance with the same number
+  of draws;
+- targets are completing a flush, one more card of a kept rank, and a straight
+  missing exactly one rank;
+- unseen cards follow a standard 52-card prior minus the visible hand, capped by
+  the displayed deck total. Only general knowledge and the visible hand are
+  used: no deck order and no hidden deck contents.
+
+The adapter also offers discard-specific candidates. Each keeps a flush draw, all
+made rank groups, or a four-rank straight draw, or drops only the lowest junk;
+valuable (enhanced, sealed or editioned) cards are never discarded. Discards are
+ranked by that expected value, and the old per-card heuristic only breaks ties.
+Rookie keeps the per-card heuristic.
+
+**Discard mode.** This applies when no play clears, discards and hands remain,
+and one of the following holds:
+
+- the best play is only a High Card;
+- it is the last hand and a requirement is known;
+- (with `use_requirement`) `best_est × hands_left < discard_need_pct% × remaining`;
+- (with `discard_ev`) the best discard's expected value exceeds
+  `discard_gain_pct%` (150) of the best play now. Every discard candidate
+then gets +1000000, and the existing discard scoring picks which cards go. With
+enough hands left to clear the blind, the policy plays instead of wasting
+discards.
+
 Purchases are scored by item kind plus a small edition weight: a recognized
 non-negative edition (`foil`/`holo`/`polychrome`) adds a fixed bonus over an
 un-editioned copy and the `negative` edition keeps its bounded slot-saving bonus.
@@ -160,6 +229,12 @@ information or authority differences).
 | `reorder` / max improvement bonus | 105 / 10 | 105 / 10 | 105 / 10 |
 | negative-edition bonus | 120 | 150 | 180 |
 | recognized-edition buy bonus / `slot_sell` | 40 / 220 | 40 / 220 | 40 / 220 |
+| `estimate_plays` (chips × mult play scoring) | on | on | on |
+| `est_jokers` (visible Joker effects in the estimate) | off | on | on |
+| `use_requirement` (clear-first, requirement-driven discards) | off | on | on |
+| `discard_need_pct` | n/a | 90 | 100 |
+| `discard_ev` (draw-aware discard ranking) | off | on | on |
+| `start_timer` (press the MP timer on a slow opponent) | 0 (never) | 1000 | 1000 |
 
 Observable consequences (pinned by tests):
 
