@@ -341,4 +341,32 @@ return function()
 		f.consumable_target.source_ref = "joker:1"
 		eq(obs_code(obs, f), CODE.BAD_TARGET_REF, "must be consumable zone")
 	end)
+
+	test("observation.hand_levels.allowlisted_and_strict", function()
+		local f = syn("PLAY_HAND")
+		f.self.hand_levels = {
+			pair = { level = 2, chips = 25, mult = 3 },
+			flush_five = { level = 1, chips = 160, mult = 16 },
+			bogus_hand = function()
+				error("unknown hand traversed")
+			end,
+		}
+		local plain = obs.export(ois(obs, f))
+		eq(plain.self.hand_levels.pair.chips, 25, "pair chips")
+		eq(plain.self.hand_levels.flush_five.mult, 16, "flush five mult")
+		eq(plain.self.hand_levels.bogus_hand, nil, "unknown hand dropped")
+		for _, bad in ipairs({
+			{ pair = { level = 2, chips = "25", mult = 3 } },
+			{ pair = { level = 2, chips = 25 } },
+			{ pair = { level = -1, chips = 25, mult = 3 } },
+			{ pair = { level = 2, chips = 25.5, mult = 3 } },
+			{ pair = setmetatable({}, {}) },
+			"levels",
+		}) do
+			local g = syn("PLAY_HAND")
+			g.self.hand_levels = bad
+			eq(obs_code(obs, g), CODE.BAD_FIELD, "malformed hand levels")
+		end
+	end)
 end
+

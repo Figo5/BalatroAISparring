@@ -665,5 +665,83 @@ return function(ctx)
 		eq(requirement({ state = STATES.SHOP }, 300), nil)
 		eq(requirement({ state = STATES.BLIND_SELECT, blind_select = {} }, 300), nil)
 	end)
+
+	test("hand_levels_projected_for_visible_hands_only", function()
+		local engine = support.engine({ state = STATES.SELECTING_HAND, hand = { support.card({ rank = "Ace", suit = "Spades" }) } })
+		engine.G.GAME.hands = {
+			["Pair"] = { level = 3, chips = 35, mult = 4, visible = true, played = 7 },
+			["Flush"] = { level = 1, chips = 35, mult = 4, visible = true },
+			["Full House"] = { level = 1, chips = 40, mult = 4 },
+			["Four of a Kind"] = { level = 200000, chips = 60, mult = 7, visible = true },
+			["Five of a Kind"] = { level = 1, chips = 120, mult = 12, visible = false },
+			["Mystery Hand"] = { level = 9, chips = 1, mult = 1 },
+			["Straight"] = { level = 2, chips = "big", mult = 4 },
+		}
+		local result = produce(engine)
+		local levels = result.ui_view.self.hand_levels
+		eq(levels.pair.level, 3)
+		eq(levels.pair.chips, 35)
+		eq(levels.pair.mult, 4)
+		eq(levels.flush.level, 1)
+		eq(levels.five, nil, "undiscovered secret hand stays hidden")
+		eq(levels.full_house, nil, "visible must be explicitly true")
+		eq(levels.four, nil, "runaway level dropped, frame kept")
+		eq(levels.straight, nil, "non-numeric values are dropped")
+		local _, handle = capture(engine)
+		local exported = bundle.obs.export(handle)
+		eq(exported.self.hand_levels.pair.chips, 35)
+		eq(exported.self.hand_levels.mystery_hand, nil)
+	end)
+
+	local function discard_sets(engine)
+		local result = produce(engine)
+		local out = {}
+		for _, item in ipairs(result.ui_view.certificates.items) do
+			if item.type == "DISCARD_CARDS" then
+				out[#out + 1] = table.concat(item.card_refs, ",")
+			end
+		end
+		return out
+	end
+
+	local function contains(list, value)
+		for _, item in ipairs(list) do
+			if item == value then
+				return true
+			end
+		end
+		return false
+	end
+
+	test("targeted_discards_keep_a_flush_draw_and_valuable_cards", function()
+		local hand = {
+			support.card({ rank = "2", suit = "Hearts" }),
+			support.card({ rank = "6", suit = "Hearts" }),
+			support.card({ rank = "9", suit = "Hearts" }),
+			support.card({ rank = "Queen", suit = "Hearts" }),
+			support.card({ rank = "3", suit = "Clubs" }),
+			support.card({ rank = "5", suit = "Spades", edition = "foil" }),
+			support.card({ rank = "7", suit = "Diamonds" }),
+			support.card({ rank = "Jack", suit = "Clubs" }),
+		}
+		local sets = discard_sets(support.engine({ state = STATES.SELECTING_HAND, hand = hand }))
+		-- Keep the four Hearts and the foil 5: discard the other three.
+		is_true(contains(sets, "hand:5,hand:7,hand:8"), table.concat(sets, " | "))
+	end)
+
+	test("targeted_discards_never_offer_face_down_or_stone_cards", function()
+		local hand = {
+			support.card({ rank = "Ace", suit = "Hearts" }),
+			support.card({ rank = "2", suit = "Spades" }),
+			support.card({ rank = "3", suit = "Clubs" }),
+			support.card({ rank = "4", suit = "Diamonds" }),
+			support.card({ rank = "King", suit = "Hearts", facing = "back", sprite_facing = "back" }),
+			support.card({ rank = "9", suit = "Clubs" }),
+			support.card({ rank = "10", suit = "Spades" }),
+		}
+		local sets = discard_sets(support.engine({ state = STATES.SELECTING_HAND, hand = hand }))
+		-- The Ace-low straight draw A-2-3-4 is kept: discard the 9 and 10 only.
+		is_true(contains(sets, "hand:6,hand:7"), table.concat(sets, " | "))
+	end)
 end
 

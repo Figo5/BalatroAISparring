@@ -1,0 +1,61 @@
+{
+  "coverage": 0.97,
+  "difficulties": {
+    "competitive": {
+      "clear_taken": 1.0,
+      "decisions": 150,
+      "discard_quality": 0.7921,
+      "discard_rate": 0.3267,
+      "failures": 0,
+      "forced_discard_quality": 0.8448,
+      "illegal": 0,
+      "latency_ms_mean": 15.443,
+      "latency_ms_p95": 25.899,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 1.0,
+      "play_rate": 0.6733,
+      "regret": 0.0
+    },
+    "major_league": {
+      "clear_taken": 1.0,
+      "decisions": 150,
+      "discard_quality": 0.7921,
+      "discard_rate": 0.3267,
+      "failures": 0,
+      "forced_discard_quality": 0.8448,
+      "illegal": 0,
+      "latency_ms_mean": 15.642,
+      "latency_ms_p95": 26.678,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 1.0,
+      "play_rate": 0.6733,
+      "regret": 0.0
+    },
+    "rookie": {
+      "clear_taken": 0.873,
+      "decisions": 150,
+      "discard_quality": 0.5063,
+      "discard_rate": 0.18,
+      "failures": 0,
+      "forced_discard_quality": 0.7003,
+      "illegal": 0,
+      "latency_ms_mean": 11.999,
+      "latency_ms_p95": 18.811,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 0.8049,
+      "play_rate": 0.82,
+      "regret": 0.08
+    }
+  },
+  "runtime": "lupa.luajit21",
+  "scenarios": 150,
+  "seeds": [
+    11,
+    23,
+    37
+  ],
+  "wall_seconds": 12.16
+}

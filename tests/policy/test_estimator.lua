@@ -81,4 +81,209 @@ return function(ctx)
 		ctx.is_true(result.ok == true)
 		ctx.eq(result.action.type, "DISCARD_CARDS")
 	end)
+
+	test("hand_levels_change_what_clears", function()
+		-- Level-1 pair of Aces = (10+22)*2 = 64 < 150. With a displayed Pair at
+		-- level 4 (40 chips, 5 mult) it is (40+22)*5 = 310 and clears.
+		local frame = Support.requirement_frame("150", 2, 3)
+		ctx.eq(Support.run(env, "competitive", frame).action.type, "DISCARD_CARDS")
+		frame.self.hand_levels = { pair = { level = 4, chips = 40, mult = 5 } }
+		local leveled = Support.run(env, "competitive", frame)
+		ctx.eq(leveled.action.type, "PLAY_CARDS")
+		ctx.eq(#leveled.action.card_refs, 2)
+		-- Rookie ignores levels and requirement: it plays its pair either way.
+		ctx.eq(Support.run(env, "rookie", frame).action.type, "PLAY_CARDS")
+	end)
+
+	test("shop_prefers_the_joker_that_raises_the_panel_most", function()
+		local frame = Support.shop_frame()
+		frame.shop.items = {
+			{ kind = "joker", center = "j_joker", cost = 4, face_down = false },
+			{ kind = "joker", center = "j_duo", cost = 4, face_down = false },
+		}
+		frame.self.money = 30
+		-- With Gros Michel (+15 mult) owned, x2 beats another +4 mult on pairs.
+		frame.self.jokers = { Support.joker("j_gros_michel") }
+		frame.certificates.items = {
+			{ type = "BUY_ITEM", certified = true, item_ref = "shop:1", capacity_ok = true },
+			{ type = "BUY_ITEM", certified = true, item_ref = "shop:2", capacity_ok = true },
+			{ type = "LEAVE_SHOP", certified = true },
+		}
+		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+			local result = Support.run(env, difficulty, frame)
+			ctx.is_true(result.ok == true, difficulty)
+			ctx.eq(result.action.type, "BUY_ITEM", difficulty)
+			ctx.eq(result.action.item_ref, "shop:2", difficulty .. " buys The Duo (x2 on pairs)")
+		end
+		-- With no Jokers, +4 mult outscores x2 on the pair-heavy panel.
+		frame.self.jokers = {}
+		ctx.eq(Support.run(env, "major_league", frame).action.item_ref, "shop:1")
+	end)
+
+	test("joker_order_puts_additive_mult_before_xmult", function()
+		local frame = Support.shop_frame()
+		frame.shop.items = {}
+		frame.self.money = 0
+		frame.self.jokers = { Support.joker("j_cavendish"), Support.joker("j_gros_michel") }
+		frame.certificates.items = {
+			{ type = "REORDER_JOKERS", certified = true, order = { "joker:2", "joker:1" } },
+			{ type = "LEAVE_SHOP", certified = true },
+		}
+		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+			local result = Support.run(env, difficulty, frame)
+			ctx.eq(result.action.type, "REORDER_JOKERS", difficulty .. " moves +15 mult before x3")
+		end
+		-- Already in the best order: no reorder is offered as an improvement.
+		frame.self.jokers = { Support.joker("j_gros_michel"), Support.joker("j_cavendish") }
+		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+			ctx.eq(Support.run(env, difficulty, frame).action.type, "LEAVE_SHOP", difficulty)
+		end
+	end)
+
+	test("large_hand_stays_within_budget", function()
+		-- 20 visible cards (hand-size vouchers/Jokers): the draw-aware discard
+		-- evaluation is skipped above 12 cards, so the budget holds.
+		local frame = heavy_frame()
+		local ranks = { "2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King" }
+		for i = #frame.self.hand + 1, 20 do
+			frame.self.hand[i] = card(ranks[(i % #ranks) + 1], i % 2 == 0 and "Clubs" or "Diamonds")
+		end
+		local refs = {}
+		for i = 16, 20 do
+			refs[#refs + 1] = "hand:" .. i
+		end
+		frame.certificates.items[#frame.certificates.items + 1] = { type = "DISCARD_CARDS", certified = true, card_refs = refs }
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			local result = Support.run(env, difficulty, frame)
+			ctx.is_true(result.ok == true, difficulty .. ":" .. tostring(result.code))
+		end
+	end)
+
+	test("draw_aware_discard_keeps_the_flush_draw", function()
+		-- Four Hearts plus four junk off-suit cards, nothing made: discarding the
+		-- off-suit cards (keeping the draw) beats breaking the draw.
+		local frame = Support.requirement_frame("2000", 3, 3)
+		frame.self.hand = {
+			card("2", "Hearts"), card("6", "Hearts"), card("9", "Hearts"), card("Queen", "Hearts"),
+			card("3", "Clubs"), card("5", "Spades"), card("7", "Diamonds"), card("Jack", "Clubs"),
+		}
+		local function d(list)
+			local refs = {}
+			for i = 1, #list do
+				refs[i] = "hand:" .. list[i]
+			end
+			return { type = "DISCARD_CARDS", certified = true, card_refs = refs }
+		end
+		frame.certificates.items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:4" } },
+			d({ 5, 6, 7, 8 }),
+			d({ 1, 2, 5 }),
+			d({ 1, 2, 3, 4 }),
+		}
+		local result = Support.run(env, "major_league", frame)
+		ctx.is_true(result.ok == true)
+		ctx.eq(result.action.type, "DISCARD_CARDS")
+		ctx.truthy(Support.same_refs(result.action.card_refs, { "hand:5", "hand:6", "hand:7", "hand:8" }), "keeps the four Hearts")
+	end)
+
+	local KNOWN = { "j_joker", "j_cavendish", "j_gros_michel", "j_duo", "j_trio", "j_scholar", "j_smiley", "j_sly" }
+
+	local function reorder_frame(centers, orders)
+		local frame = Support.shop_frame()
+		frame.self.money = 0
+		frame.shop.items = {}
+		frame.self.jokers = {}
+		for i = 1, #centers do
+			frame.self.jokers[i] = Support.joker(centers[i])
+		end
+		local items = {}
+		for _, order in ipairs(orders) do
+			local refs = {}
+			for i = 1, #order do
+				refs[i] = "joker:" .. order[i]
+			end
+			items[#items + 1] = { type = "REORDER_JOKERS", certified = true, order = refs }
+		end
+		items[#items + 1] = { type = "LEAVE_SHOP", certified = true }
+		frame.certificates.items = items
+		return frame
+	end
+
+	test("many_jokers_and_reorders_stay_within_budget", function()
+		-- 32 owned Jokers, 17 reorder candidates and 16 shop Jokers.
+		local centers = {}
+		for i = 1, 32 do
+			centers[i] = KNOWN[(i % #KNOWN) + 1]
+		end
+		local orders = {}
+		local reversed = {}
+		for i = 1, 32 do
+			reversed[i] = 33 - i
+		end
+		orders[1] = reversed
+		for k = 1, 16 do
+			local order = {}
+			for i = 1, 32 do
+				order[i] = i
+			end
+			order[k], order[k + 1] = order[k + 1], order[k]
+			orders[#orders + 1] = order
+		end
+		local frame = reorder_frame(centers, orders)
+		frame.self.money = 200
+		for i = 1, 16 do
+			frame.shop.items[i] = { kind = "joker", center = KNOWN[(i % #KNOWN) + 1], cost = 5, face_down = false }
+			table.insert(frame.certificates.items, 1, { type = "BUY_ITEM", certified = true, item_ref = "shop:" .. i, capacity_ok = true })
+		end
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			local result = Support.run(env, difficulty, frame)
+			ctx.is_true(result.ok == true, difficulty .. ":" .. tostring(result.code))
+		end
+	end)
+
+	test("joker_order_settles_in_a_few_steps", function()
+		-- Repeatedly apply the chosen adjacent swap until the policy leaves:
+		-- it must stop (no oscillation) with +mult before xmult.
+		local centers = { "j_cavendish", "j_duo", "j_joker", "j_gros_michel" }
+		for step = 1, 8 do
+			local orders = {}
+			for k = 1, #centers - 1 do
+				local order = { 1, 2, 3, 4 }
+				order[k], order[k + 1] = order[k + 1], order[k]
+				orders[#orders + 1] = order
+			end
+			local result = Support.run(env, "major_league", reorder_frame(centers, orders))
+			ctx.is_true(result.ok == true)
+			if result.action.type == "LEAVE_SHOP" then
+				ctx.eq(centers[#centers] == "j_cavendish" or centers[#centers] == "j_duo", true, "xmult last")
+				ctx.eq(centers[1] == "j_joker" or centers[1] == "j_gros_michel", true, "+mult first")
+				return
+			end
+			local next_centers = {}
+			for i = 1, #result.action.order do
+				next_centers[i] = centers[tonumber(string.match(result.action.order[i], ":(%d+)$"))]
+			end
+			centers = next_centers
+		end
+		error("reordering did not settle within 8 steps")
+	end)
+
+	test("rule_changing_joker_owned_disables_shop_gain", function()
+		local frame = Support.shop_frame()
+		frame.self.money = 30
+		frame.self.jokers = { Support.joker("j_splash") }
+		frame.shop.items = {
+			{ kind = "joker", center = "j_joker", cost = 4, face_down = false },
+			{ kind = "joker", center = "j_stuntman", cost = 4, face_down = false },
+		}
+		frame.certificates.items = {
+			{ type = "BUY_ITEM", certified = true, item_ref = "shop:1", capacity_ok = true },
+			{ type = "BUY_ITEM", certified = true, item_ref = "shop:2", capacity_ok = true },
+			{ type = "LEAVE_SHOP", certified = true },
+		}
+		-- With the estimate off both Jokers score the flat kind value: the
+		-- canonical id tie-break picks the first.
+		ctx.eq(Support.run(env, "major_league", frame).action.item_ref, "shop:1")
+	end)
 end
+

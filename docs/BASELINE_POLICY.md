@@ -136,8 +136,9 @@ candidates are first analysed once per decision (`analyse_plays`):
 - **Scoring cards** follow Balatro rules. The pair cards of a Pair, the top card
   of a High Card, the four of Four of a Kind, all five cards of a Straight,
   Flush or Full House, and Stone cards always.
-- **Base** is the level-1 chips/mult of the hand, plus the chips of the scoring
-  cards (2–10 face value, J/Q/K 10, A 11).
+- **Base** is the hand's displayed chips/mult from `self.hand_levels` (planet
+  levels) when `use_levels` is on, otherwise its level-1 values. The chips of
+  the scoring cards are added (2–10 face value, J/Q/K 10, A 11).
 - **Card effects,** in Balatro's order per scoring card: rank chips, then the
   enhancement (Bonus +30 chips, Mult +4, Stone +50 chips, Lucky +4 expected mult
   from 1 in 5 for +20, Glass ×2), then the card's edition (Foil +50 chips, Holo
@@ -152,7 +153,8 @@ candidates are first analysed once per decision (`analyse_plays`):
   Moon and Photograph). Joker editions apply in Joker order, so ×mult after
   +mult is modelled.
 
-Unknowns count as neutral: hand levels, scaling Jokers' current values, boss
+Unknowns count as neutral: boss-blind effects (for example The Flint halving
+base chips and mult), scaling Jokers' current values, boss
 effects, probabilities beyond Lucky's expectation and any Joker not in the table.
 Abstract Joker counts every Joker, debuffed included. When a Joker that changes
 what a hand is (Four Fingers, Shortcut, Smeared, Splash, Pareidolia) is present,
@@ -185,6 +187,21 @@ valuable (enhanced, sealed or editioned) cards are never discarded. Discards are
 ranked by that expected value, and the old per-card heuristic only breaks ties.
 Rookie keeps the per-card heuristic.
 
+On the **last hand** with a known requirement, discards are ranked by the chance
+that the follow-up play reaches what is still needed, and expected value only
+breaks ties: only a clear matters then. To stay inside the 2M-instruction
+sandbox budget, the draw-aware evaluation covers at most 40 discard candidates
+and is skipped for hands over 12 cards (the per-card heuristic then decides).
+Drawn cards are priced so they cannot overstate the target: flush fillers use
+ranks nobody kept, and a straight's missing card takes a suit none of the kept
+cards share.
+
+**Known limitation.** The draw prior is a standard 52-card deck minus the visible
+hand. The adapter never reads `G.deck` (a documented boundary), so deck
+depletion within a round and cards added or destroyed are not modelled.
+Exporting the displayed deck count would fix that, but it needs an
+architecture review of that boundary first.
+
 **Discard mode.** This applies when no play clears, discards and hands remain,
 and one of the following holds:
 
@@ -196,6 +213,26 @@ and one of the following holds:
 then gets +1000000, and the existing discard scoring picks which cards go. With
 enough hands left to clear the blind, the policy plays instead of wasting
 discards.
+
+### 4.2 Shop Jokers and Joker order (Competitive, Major League)
+
+A shop Joker adds `joker_gain_value` (400) × its **marginal gain**, capped at
++300%. The gain is how much it raises the estimate of a fixed, deterministic
+panel of representative hands, given the Jokers already owned and the displayed
+hand levels. The panel weights: pair ×4, two pair ×2, and three of a kind,
+flush, straight and high card ×1 each. For example, with nothing owned a +4-mult
+Joker beats The Duo on this pair-heavy panel. With Gros Michel (+15 mult) owned,
+The Duo's ×2 wins. Unknown or scaling Jokers keep the flat kind value, and
+rule-changing Jokers switch this off.
+
+A `REORDER_JOKERS` candidate is judged by the same panel when every owned Joker
+has a known effect and none is pinned. It is taken only if it improves the panel
+by more than 0.5%. Its score grows strictly with the improvement but stays below
+`reorder + reorder_bonus`, so reordering never starves plays or purchases, and
+for fixed hand levels it cannot oscillate. It applies only to rows of at most 8
+Jokers and scores at most 20 reorder candidates per decision, which keeps the
+instruction budget. Otherwise the tier rule below applies. A shop Joker's gain
+is halved when buying it would drop money below the reserve.
 
 Purchases are scored by item kind plus a small edition weight: a recognized
 non-negative edition (`foil`/`holo`/`polychrome`) adds a fixed bonus over an
@@ -234,6 +271,8 @@ information or authority differences).
 | `use_requirement` (clear-first, requirement-driven discards) | off | on | on |
 | `discard_need_pct` | n/a | 90 | 100 |
 | `discard_ev` (draw-aware discard ranking) | off | on | on |
+| `use_levels` (displayed poker-hand levels in the estimate) | off | on | on |
+| `joker_gain_value` (panel-based shop Joker value; order by panel) | used only with `est_jokers` (off) | 400 | 400 |
 | `start_timer` (press the MP timer on a slow opponent) | 0 (never) | 1000 | 1000 |
 
 Observable consequences (pinned by tests):

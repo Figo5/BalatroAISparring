@@ -67,6 +67,18 @@ HAND_BASE = {
     "flush_house": (140, 14),
     "flush_five": (160, 16),
 }
+# Per-level (chips, mult) increments, public Balatro values; engine names.
+LEVEL_UP = {
+    "high_card": (10, 1, "High Card"),
+    "pair": (15, 1, "Pair"),
+    "two_pair": (20, 1, "Two Pair"),
+    "three": (20, 2, "Three of a Kind"),
+    "straight": (30, 3, "Straight"),
+    "flush": (15, 2, "Flush"),
+    "full_house": (25, 2, "Full House"),
+    "four": (30, 3, "Four of a Kind"),
+    "straight_flush": (40, 4, "Straight Flush"),
+}
 CONTAINS = {
     "pair": {"pair", "two_pair", "three", "full_house", "four", "five", "flush_house", "flush_five"},
     "two_pair": {"two_pair", "full_house", "flush_house"},
@@ -175,10 +187,12 @@ def classify(cards):
     return "high_card", stones
 
 
-def reference_score(played, held, jokers):
+def reference_score(played, held, jokers, levels=None):
     """Expected score of playing ``played`` with ``held`` left in hand."""
     hand, scoring = classify(played)
     chips, mult = HAND_BASE[hand]
+    if levels and hand in levels:
+        chips, mult = levels[hand]["chips"], levels[hand]["mult"]
     chips, mult = float(chips), float(mult)
     photo_index = None
     for index in sorted(scoring):
@@ -290,6 +304,16 @@ def make_scenario(rng):
             card["seal"] = "Red"
         hand.append(card)
     jokers = rng.sample(JOKER_KEYS, rng.choice([0, 1, 2, 2, 3, 3, 4, 5]))
+    levels = {}
+    for name in rng.sample(sorted(LEVEL_UP), rng.choice([0, 0, 1, 2, 3])):
+        level = rng.choice([2, 3, 4, 6])
+        add_chips, add_mult, _ = LEVEL_UP[name]
+        base_chips, base_mult = HAND_BASE[name]
+        levels[name] = {
+            "level": level,
+            "chips": base_chips + add_chips * (level - 1),
+            "mult": base_mult + add_mult * (level - 1),
+        }
     pvp = rng.random() < 0.2
     requirement = rng.choice([300, 450, 600, 800, 1200, 2000, 3000, 5000, 11000])
     scored = int(requirement * rng.choice([0, 0, 0.2, 0.5, 0.8]))
@@ -301,6 +325,7 @@ def make_scenario(rng):
         "chips": scored,
         "requirement": requirement,
         "pvp": pvp,
+        "levels": levels,
     }
 
 
@@ -354,6 +379,13 @@ return function(repo, scenarios, difficulties)
 			blind_pvp = sc.pvp or nil,
 		})
 		engine.G.GAME.blind.chips = sc.requirement
+		if sc.levels ~= nil then
+			local hands = {}
+			for name, entry in pairs(sc.levels) do
+				hands[entry.engine] = { level = entry.level, chips = entry.chips, mult = entry.mult, visible = true }
+			end
+			engine.G.GAME.hands = hands
+		end
 		local pipeline = support.pipeline(bundle, engine, {})
 		local step, code = pipeline.adapter.step()
 		local row = { scenario = s, candidates = {}, choices = {} }
@@ -367,6 +399,26 @@ return function(repo, scenarios, difficulties)
 				row.candidates[#row.candidates + 1] = { id = a.id, type = a.type, refs = a.card_refs }
 			end
 			local export = bundle.obs.export(handle)
+			-- Forced-discard variant: the same observation with only its discard
+			-- certificates, so discard ranking is compared on identical states.
+			local forced = nil
+			if export.certificates ~= nil then
+				local items = {}
+				for i = 1, #export.certificates.items do
+					local item = export.certificates.items[i]
+					if item.type == "DISCARD_CARDS" then
+						items[#items + 1] = item
+					end
+				end
+				if #items > 0 then
+					forced = {}
+					for k, v in pairs(export) do
+						forced[k] = v
+					end
+					forced.certificates = { version = export.certificates.version, items = items }
+				end
+			end
+			row.forced = {}
 			for d = 1, #difficulties do
 				local name = difficulties[d]
 				local started = clock()
@@ -378,6 +430,14 @@ return function(repo, scenarios, difficulties)
 					choice.type = result.action.type
 				end
 				row.choices[#row.choices + 1] = choice
+				if forced ~= nil then
+					local forced_result = policy_env.run(sources[name], forced)
+					local forced_choice = { difficulty = name, ok = forced_result.ok == true }
+					if forced_result.ok == true and type(forced_result.action) == "table" then
+						forced_choice.refs = forced_result.action.card_refs
+					end
+					row.forced[#row.forced + 1] = forced_choice
+				end
 			end
 		end
 		out[#out + 1] = row
@@ -385,6 +445,18 @@ return function(repo, scenarios, difficulties)
 	return out
 end
 '''
+
+
+def lua_scenarios(scenarios):
+    """Scenarios with each hand level tagged by its engine hand name."""
+    out = []
+    for scenario in scenarios:
+        copy = dict(scenario)
+        copy["levels"] = {
+            name: dict(entry, engine=LEVEL_UP[name][2]) for name, entry in (scenario.get("levels") or {}).items()
+        }
+        out.append(copy)
+    return out
 
 
 def to_lua(lua, value):
@@ -414,24 +486,24 @@ def refs_to_indices(refs):
     return [int(ref.split(":")[1]) - 1 for ref in refs]
 
 
-def best_possible(hand, jokers):
+def best_possible(hand, jokers, levels=None):
     best = 0.0
     indices = range(len(hand))
     for size in range(1, 6):
         for combo in itertools.combinations(indices, size):
             played = [hand[i] for i in combo]
             held = [hand[i] for i in indices if i not in combo]
-            best = max(best, reference_score(played, held, jokers))
+            best = max(best, reference_score(played, held, jokers, levels))
     return best
 
 
-def discard_ev(hand, jokers, discard_idx, draws):
+def discard_ev(hand, jokers, discard_idx, draws, levels=None):
     """Mean best reference play after discarding and drawing, over ``draws``."""
     kept = [hand[i] for i in range(len(hand)) if i not in discard_idx]
     total = 0.0
     for order in draws:
         new_hand = kept + order[: len(discard_idx)]
-        total += best_possible(new_hand, jokers)
+        total += best_possible(new_hand, jokers, levels)
     return total / len(draws)
 
 
@@ -442,7 +514,7 @@ def evaluate(rows, scenarios, discard_samples=0):
             "decisions": 0, "plays": 0, "discards": 0, "other": 0, "no_action": 0,
             "failures": 0, "illegal": 0, "optimal": 0, "regret_sum": 0.0,
             "clear_chances": 0, "clear_taken": 0, "latency": [],
-            "discard_quality": [],
+            "discard_quality": [], "forced_quality": [],
         }
     coverage = []
     for row in rows:
@@ -452,22 +524,23 @@ def evaluate(rows, scenarios, discard_samples=0):
                 metrics[difficulty]["failures"] += 1
             continue
         hand, jokers = scenario["hand"], scenario["jokers"]
+        levels = scenario.get("levels")
         play_scores = {}
         for candidate in row["candidates"]:
             if candidate["type"] == "PLAY_CARDS":
                 idx = refs_to_indices(candidate["refs"])
                 played = [hand[i] for i in idx]
                 held = [hand[i] for i in range(len(hand)) if i not in idx]
-                play_scores[candidate["id"]] = reference_score(played, held, jokers)
+                play_scores[candidate["id"]] = reference_score(played, held, jokers, levels)
         best_offered = max(play_scores.values()) if play_scores else 0.0
-        possible = best_possible(hand, jokers)
+        possible = best_possible(hand, jokers, levels)
         if possible > 0:
             coverage.append(best_offered / possible)
         remaining = scenario["requirement"] - scenario["chips"]
         can_clear = (not scenario["pvp"]) and best_offered >= remaining
         valid_ids = {c["id"] for c in row["candidates"]}
         discard_values = None
-        if discard_samples and any(c.get("type") == "DISCARD_CARDS" for c in row["choices"]):
+        if discard_samples and (row.get("forced") or any(c.get("type") == "DISCARD_CARDS" for c in row["choices"])):
             seen = {(c["rank"], c["suit"]) for c in hand}
             unseen = [{"rank": r, "suit": su} for r in RANKS for su in SUITS if (r, su) not in seen]
             draw_rng = random.Random(row["scenario"])
@@ -480,8 +553,18 @@ def evaluate(rows, scenarios, discard_samples=0):
             for candidate in row["candidates"]:
                 if candidate["type"] == "DISCARD_CARDS":
                     discard_values[candidate["id"]] = discard_ev(
-                        hand, jokers, set(refs_to_indices(candidate["refs"])), draws
+                        hand, jokers, set(refs_to_indices(candidate["refs"])), draws, levels
                     )
+        if discard_values:
+            best_discard = max(discard_values.values())
+            by_refs = {}
+            for candidate in row["candidates"]:
+                if candidate["type"] == "DISCARD_CARDS":
+                    by_refs[",".join(candidate["refs"])] = discard_values.get(candidate["id"], 0.0)
+            for forced in row.get("forced") or []:
+                if forced.get("ok") and forced.get("refs") and best_discard > 0:
+                    value = by_refs.get(",".join(forced["refs"]), 0.0)
+                    metrics[forced["difficulty"]]["forced_quality"].append(value / best_discard)
         for choice in row["choices"]:
             m = metrics[choice["difficulty"]]
             m["decisions"] += 1
@@ -518,6 +601,7 @@ def evaluate(rows, scenarios, discard_samples=0):
     for difficulty, m in metrics.items():
         latency = sorted(m.pop("latency")) or [0.0]
         quality = m.pop("discard_quality")
+        forced_quality = m.pop("forced_quality")
         plays = m["plays"] or 1
         report["difficulties"][difficulty] = {
             "decisions": m["decisions"],
@@ -533,13 +617,14 @@ def evaluate(rows, scenarios, discard_samples=0):
             "latency_ms_mean": round(1000 * statistics.mean(latency), 3),
             "latency_ms_p95": round(1000 * latency[int(0.95 * (len(latency) - 1))], 3),
             "discard_quality": round(statistics.mean(quality), 4) if quality else None,
+            "forced_discard_quality": round(statistics.mean(forced_quality), 4) if forced_quality else None,
         }
     return report
 
 
 # Regression gates for --check: the stored baseline may be improved on, never
 # made worse beyond these tolerances.
-CHECK_TOLERANCE = {"play_optimal": 0.02, "regret": 0.02, "clear_taken": 0.02, "coverage": 0.01}
+CHECK_TOLERANCE = {"play_optimal": 0.02, "regret": 0.02, "clear_taken": 0.02, "coverage": 0.01, "discard_quality": 0.03}
 
 
 def check(report, baseline):
@@ -558,6 +643,10 @@ def check(report, baseline):
             problems.append(f"{difficulty} regret {now.get('regret')} > {base['regret']}")
         if base.get("clear_taken") is not None and (now.get("clear_taken") or 0) < base["clear_taken"] - CHECK_TOLERANCE["clear_taken"]:
             problems.append(f"{difficulty} clear_taken {now.get('clear_taken')} < {base['clear_taken']}")
+        for key in ("discard_quality", "forced_discard_quality"):
+            if base.get(key) is not None and now.get(key) is not None:
+                if now[key] < base[key] - CHECK_TOLERANCE["discard_quality"]:
+                    problems.append(f"{difficulty} {key} {now[key]} < {base[key]}")
     return problems
 
 
@@ -578,7 +667,7 @@ def main(argv=None):
     lua = importlib.import_module(args.runtime).LuaRuntime(unpack_returned_tuples=True)
     harness = lua.execute(HARNESS)
     started = time.perf_counter()
-    rows = from_lua(harness(str(REPO), to_lua(lua, scenarios), to_lua(lua, list(DIFFICULTIES))))
+    rows = from_lua(harness(str(REPO), to_lua(lua, lua_scenarios(scenarios)), to_lua(lua, list(DIFFICULTIES))))
     elapsed = time.perf_counter() - started
     report = evaluate(rows, scenarios, args.discard_samples)
     report["scenarios"] = len(scenarios)

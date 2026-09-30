@@ -427,6 +427,41 @@ local function build_zone(G, view_zone, zone_name)
 	return out
 end
 
+-- Public poker-hand levels: only allowlisted hand names, each exactly
+-- { level, chips, mult } as non-negative integers. Unknown names are never read.
+local HAND_LEVEL_NAMES = {
+	"high_card", "pair", "two_pair", "three", "straight", "flush", "full_house",
+	"four", "straight_flush", "five", "flush_house", "flush_five",
+}
+
+local function copy_hand_levels(source)
+	if source == nil then
+		return nil
+	end
+	if not is_plain(source) then
+		return nil, CODE.BAD_VIEW
+	end
+	local out = nil
+	for i = 1, #HAND_LEVEL_NAMES do
+		local name = HAND_LEVEL_NAMES[i]
+		local entry = rawget(source, name)
+		if entry ~= nil then
+			if not is_plain(entry) then
+				return nil, CODE.BAD_VIEW
+			end
+			local level = rawget(entry, "level")
+			local chips = rawget(entry, "chips")
+			local mult = rawget(entry, "mult")
+			if not is_int(level) or not is_int(chips) or not is_int(mult) or level < 0 or chips < 0 or mult < 0 then
+				return nil, CODE.BAD_VIEW
+			end
+			out = out or {}
+			out[name] = { level = level, chips = chips, mult = mult }
+		end
+	end
+	return out
+end
+
 local function copy_deck(source)
 	if source == nil then
 		return nil
@@ -640,6 +675,13 @@ local function build_self(G, view, phase)
 	end
 	if deck ~= nil then
 		out.deck = deck
+	end
+	local levels, levels_code = copy_hand_levels(rget(view_self, "hand_levels"))
+	if levels_code ~= nil then
+		return nil, levels_code
+	end
+	if levels ~= nil then
+		out.hand_levels = levels
 	end
 	return out
 end

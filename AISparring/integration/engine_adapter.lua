@@ -709,6 +709,15 @@ local function build_match(G, MP)
 	return match
 end
 
+-- Engine poker-hand names (G.GAME.hands keys) to observation tokens.
+local HAND_LEVEL_KEYS = {
+	["High Card"] = "high_card", ["Pair"] = "pair", ["Two Pair"] = "two_pair",
+	["Three of a Kind"] = "three", ["Straight"] = "straight", ["Flush"] = "flush",
+	["Full House"] = "full_house", ["Four of a Kind"] = "four",
+	["Straight Flush"] = "straight_flush", ["Five of a Kind"] = "five",
+	["Flush House"] = "flush_house", ["Flush Five"] = "flush_five",
+}
+
 local function build_self(G, phase, hand_cards)
 	local out = {}
 	local game = rget(G, "GAME")
@@ -723,6 +732,30 @@ local function build_self(G, phase, hand_cards)
 	-- `G.GAME.blind.chips`). Only for a blind positively identified as non-PvP:
 	-- a PvP blind's target is the opponent's (possibly masked) score, and
 	-- Multiplayer overwrites a finished non-PvP blind with -1, which is dropped.
+	-- Public poker-hand levels, as Run Info shows them: only hands the UI
+	-- lists (`visible ~= false`; secret hands appear once discovered).
+	local hands = rget(game, "hands")
+	if type(hands) == "table" then
+		local levels = nil
+		for engine_name, name in next, HAND_LEVEL_KEYS do
+			local entry = rget(hands, engine_name)
+			-- Run Info lists a hand only when `visible` is true.
+			if type(entry) == "table" and rget(entry, "visible") == true then
+				local level = int_field(rget(entry, "level"))
+				local hand_chips = int_field(rget(entry, "chips"))
+				local hand_mult = int_field(rget(entry, "mult"))
+				-- Same bound as the observation schema (a modded runaway level is
+				-- dropped, never allowed to reject the whole frame).
+				if level ~= nil and level <= 100000 and hand_chips ~= nil and hand_mult ~= nil then
+					levels = levels or {}
+					levels[name] = { level = level, chips = hand_chips, mult = hand_mult }
+				end
+			end
+		end
+		if levels ~= nil then
+			out.hand_levels = levels
+		end
+	end
 	-- Only while a hand is being played: outside the blind (shop, blind
 	-- select) the previous blind's value is not what the UI is showing.
 	if PHASE_ALLOWS_HAND[phase] == true and engine_pvp_boss(G) == false then

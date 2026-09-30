@@ -68,6 +68,10 @@ local BASE = {
 	-- also discard when that beats the best play now by discard_gain_pct%.
 	discard_ev = true,
 	discard_gain_pct = 150,
+	-- Use the displayed poker-hand levels (planets) instead of level-1 bases.
+	use_levels = true,
+	-- Shop Jokers: points per +100% estimated panel score (0 = flat value).
+	joker_gain_value = 400,
 	item_joker = 300,
 	item_consumable = 200,
 	item_card = 120,
@@ -105,6 +109,7 @@ local CONFIGS = {
 		est_jokers = false,
 		use_requirement = false,
 		discard_ev = false,
+		use_levels = false,
 		reserve = 6,
 		play_junk = 250,
 		discard_junk = 5000,
@@ -143,6 +148,8 @@ local CONF = %s
 -- candidates before scoring (see the entry point). Declared first so every
 -- scoring function below closes over this local, never a global.
 local PLAY = nil
+-- The displayed poker-hand levels (self.hand_levels) for this decision, or nil.
+local LEVELS = nil
 
 local function byte_less(a, b)
 	local na = #a
@@ -535,6 +542,12 @@ local RULE_JOKERS = {
 }
 -- Estimates are clamped here (also NaN), far above any meaningful score.
 local ESTIMATE_CAP = 1e15
+-- At most this many discard candidates get the draw-aware evaluation.
+local DISCARD_EV_LIMIT = 40
+-- Estimate-based Joker ordering is limited to small Joker rows and a bounded
+-- number of candidates per decision, so it always fits the sandbox budget.
+local REORDER_EST_MAX_JOKERS = 8
+local REORDER_EST_LIMIT = 20
 
 local function card_chip_value(rv)
 	if rv == 14 then
@@ -684,6 +697,13 @@ local function estimate_score(played, held, jokers)
 	local base = HAND_BASE[name]
 	local chips = base[1]
 	local mult = base[2]
+	if LEVELS ~= nil then
+		local level = LEVELS[name]
+		if type(level) == "table" and type(level.chips) == "number" and type(level.mult) == "number" then
+			chips = level.chips
+			mult = level.mult
+		end
+	end
 	local effects = {}
 	local joker_count = 0
 	if jokers ~= nil then
@@ -886,7 +906,16 @@ local function p_at_least(need, draws, good, pool)
 	if need <= 0 then
 		return 1
 	end
-	if need > draws or good < need or pool <= 0 or draws > pool then
+	if pool <= 0 then
+		return 0
+	end
+	if good > pool then
+		good = pool
+	end
+	if draws > pool then
+		draws = pool
+	end
+	if need > draws or good < need then
 		return 0
 	end
 	local total = choose(pool, draws)
@@ -1031,7 +1060,7 @@ end
 -- number of cards: the current best of the kept cards, improved by the most
 -- valuable reachable target (flush, better rank group, straight) weighted by
 -- its hypergeometric chance.
-local function discard_ev(observation, discard_refs, jokers)
+local function discard_ev(observation, discard_refs, jokers, need)
 	local s = observation.self
 	local hand = s.hand
 	local drop = {}
@@ -1065,6 +1094,11 @@ local function discard_ev(observation, discard_refs, jokers)
 	end
 	local base = best_play_value(kept, jokers)
 	local ev = base
+	-- Chance that the follow-up play reaches `need` (last-hand ranking).
+	local p_clear = 0
+	if need ~= nil and base >= need then
+		p_clear = 1
+	end
 	-- `play` is the exact target play (kept cards plus synthetic draws); it is
 	-- priced once, without held-card effects, to stay within the budget.
 	local function consider(p, play)
@@ -1078,6 +1112,9 @@ local function discard_ev(observation, discard_refs, jokers)
 		local candidate = p * value + (1 - p) * base
 		if candidate > ev then
 			ev = candidate
+		end
+		if need ~= nil and value >= need and p > p_clear then
+			p_clear = p
 		end
 	end
 	local function kept_where(test, limit)
@@ -1123,8 +1160,15 @@ local function discard_ev(observation, discard_refs, jokers)
 			local play = kept_where(function(c)
 				return suit_key(c.suit) == sk
 			end, 5)
+			-- Fillers: ranks nobody kept, so they cannot also make a pair or
+			-- better than the flush being priced.
+			local filler = 3
 			for _ = 1, need do
-				play[#play + 1] = synthetic(8, sk)
+				while filler <= 14 and (kept_rank[filler] or 0) > 0 do
+					filler = filler + 1
+				end
+				play[#play + 1] = synthetic(filler <= 14 and filler or 8, sk)
+				filler = filler + 2
 			end
 			consider(p_at_least(need, d, 13 - (seen_suit[sk] or 0), pool), play)
 		end
@@ -1164,13 +1208,28 @@ local function discard_ev(observation, discard_refs, jokers)
 				local outs = 4 - (seen_rank[missing] or 0)
 				if outs > 0 then
 					local play = {}
+					-- The drawn card takes a suit none of the kept four share, so a
+					-- straight is never priced as a straight flush.
+					local fill_suit = "D"
+					for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
+						local clash = false
+						for i = 1, #kept do
+							if suit_key(kept[i].suit) == candidate_suit then
+								clash = true
+							end
+						end
+						if not clash then
+							fill_suit = candidate_suit
+							break
+						end
+					end
 					for v = low, low + 4 do
 						local rv = v
 						if v == 1 then
 							rv = 14
 						end
 						if rv == missing then
-							play[#play + 1] = synthetic(missing, "D")
+							play[#play + 1] = synthetic(missing, fill_suit)
 						else
 							local picked = kept_where(function(c)
 								return rank_value(c.rank) == rv
@@ -1183,11 +1242,15 @@ local function discard_ev(observation, discard_refs, jokers)
 			end
 		end
 	end
-	return ev
+	return ev, p_clear
 end
 
 local function analyse_plays(observation, actions, count)
-	local info = { est = {}, best = nil, remaining = nil, clears = false, discard_mode = false }
+	local info = {
+		est = {}, best = nil, remaining = nil, clears = false, discard_mode = false,
+		-- Per-decision Joker-order budget (see reorder_score).
+		reorders_left = REORDER_EST_LIMIT, panel_now = nil,
+	}
 	local s = observation.self
 	if type(s) ~= "table" or type(s.hand) ~= "table" then
 		return info
@@ -1241,14 +1304,27 @@ local function analyse_plays(observation, actions, count)
 	local discards = s.discards
 	local hands = s.hands
 	local can_discard = type(discards) == "number" and discards > 0 and type(hands) == "number" and hands > 0
-	if CONF.discard_ev and can_discard and not info.clears then
+	-- Draw-aware discards stay inside the instruction budget: skipped for very
+	-- large hands and evaluated for at most DISCARD_EV_LIMIT candidates.
+	if CONF.discard_ev and can_discard and not info.clears and #s.hand <= 12 then
 		info.discard_ev = {}
+		info.last_hand = hands == 1 and info.remaining ~= nil
+		local need = nil
+		if info.last_hand then
+			need = info.remaining
+			info.discard_clear = {}
+		end
 		local best_ev = nil
+		local evaluated = 0
 		for i = 1, count do
 			local a = actions[i]
-			if type(a) == "table" and a.type == "DISCARD_CARDS" and type(a.card_refs) == "table" then
-				local value = discard_ev(observation, a.card_refs, jokers)
+			if evaluated < DISCARD_EV_LIMIT and type(a) == "table" and a.type == "DISCARD_CARDS" and type(a.card_refs) == "table" then
+				evaluated = evaluated + 1
+				local value, p_clear = discard_ev(observation, a.card_refs, jokers, need)
 				info.discard_ev[a.id] = value
+				if info.discard_clear ~= nil then
+					info.discard_clear[a.id] = p_clear
+				end
 				if best_ev == nil or value > best_ev then
 					best_ev = value
 				end
@@ -1387,6 +1463,78 @@ local function economy_bonus(left)
 	return bonus
 end
 
+-- Marginal value of a shop Joker: how much it raises the estimated score of a
+-- fixed, deterministic panel of representative hands (weighted towards pairs),
+-- given the Jokers already owned and the displayed hand levels. Only visible
+-- shop and owned-Joker centers are used. Returns a ratio (0.5 = +50%%).
+local PANEL = nil
+
+local function panel_hands()
+	if PANEL ~= nil then
+		return PANEL
+	end
+	local function c(rank, suit)
+		return { kind = "card", rank = rank, suit = suit, center = "c_base", id = "panel" }
+	end
+	PANEL = {
+		{ w = 4, play = { c("King", "Spades"), c("King", "Hearts") }, held = { c("7", "Clubs"), c("4", "Diamonds"), c("9", "Spades") } },
+		{ w = 2, play = { c("Queen", "Spades"), c("Queen", "Diamonds"), c("8", "Clubs"), c("8", "Hearts") }, held = { c("3", "Spades") } },
+		{ w = 1, play = { c("7", "Spades"), c("7", "Hearts"), c("7", "Clubs") }, held = { c("Jack", "Diamonds") } },
+		{ w = 1, play = { c("2", "Hearts"), c("5", "Hearts"), c("8", "Hearts"), c("Jack", "Hearts"), c("King", "Hearts") }, held = {} },
+		{ w = 1, play = { c("6", "Clubs"), c("7", "Diamonds"), c("8", "Spades"), c("9", "Hearts"), c("10", "Clubs") }, held = {} },
+		{ w = 1, play = { c("Ace", "Spades") }, held = { c("4", "Hearts"), c("6", "Clubs") } },
+	}
+	return PANEL
+end
+
+-- Weighted panel score for an ordered Joker list (nil Jokers = none).
+local function panel_total(jokers)
+	local total = 0
+	local panel = panel_hands()
+	for i = 1, #panel do
+		local hand = panel[i]
+		total = total + hand.w * (estimate_score(hand.play, hand.held, jokers) or 0)
+	end
+	return total
+end
+
+local function joker_gain(observation, center, edition)
+	if type(center) ~= "string" then
+		return 0
+	end
+	local s = observation.self
+	local owned = {}
+	if type(s) == "table" and type(s.jokers) == "table" then
+		for i = 1, #s.jokers do
+			local j = s.jokers[i]
+			if type(j) == "table" then
+				owned[#owned + 1] = j
+				if RULE_JOKERS[j.center] then
+					return 0
+				end
+			end
+		end
+	end
+	if RULE_JOKERS[center] then
+		return 0
+	end
+	local with = {}
+	for i = 1, #owned do
+		with[i] = owned[i]
+	end
+	with[#with + 1] = { center = center, edition = edition }
+	local before = panel_total(owned)
+	local after = panel_total(with)
+	if before <= 0 or after <= before then
+		return 0
+	end
+	local gain = (after - before) / before
+	if gain > 3 then
+		gain = 3
+	end
+	return gain
+end
+
 local function kind_value(kind)
 	if kind == "joker" then
 		return CONF.item_joker
@@ -1423,6 +1571,16 @@ local function buy_score(observation, action)
 	local score = kind_value(item.kind)
 	score = score + edition_value(item.edition)
 	score = score + economy_bonus(spend - cost)
+	if item.kind == "joker" and CONF.est_jokers and CONF.joker_gain_value > 0 then
+		-- Up to +3x the panel estimate; unknown/scaling Jokers keep the flat value.
+		local gain = joker_gain(observation, item.center, item.edition) * CONF.joker_gain_value
+		if spend - cost < CONF.reserve then
+			-- Dipping under the reserve (or into Credit Card debt) needs a
+			-- clearly better Joker: halve the gain there.
+			gain = gain / 2
+		end
+		score = score + math.floor(gain)
+	end
 	return score
 end
 
@@ -1712,6 +1870,34 @@ local function reorder_score(observation, action)
 		end
 		candidate[i] = joker_tier(joker)
 	end
+	-- Estimate-based ordering (+mult before xmult etc.) when every Joker's
+	-- effect is known to the estimator; otherwise the tier rule below applies.
+	if CONF.est_jokers and CONF.estimate_plays and n <= REORDER_EST_MAX_JOKERS and PLAY ~= nil
+		and PLAY.reorders_left > 0 then
+		local known = true
+		local reordered = {}
+		for i = 1, n do
+			local joker = jokers[i]
+			if RULE_JOKERS[joker.center] or JOKER_EFFECTS[joker.center] == nil or pinned[i] then
+				known = false
+			end
+			reordered[i] = find_by_id(jokers, order[i])
+		end
+		if known then
+			PLAY.reorders_left = PLAY.reorders_left - 1
+			if PLAY.panel_now == nil then
+				PLAY.panel_now = panel_total(jokers)
+			end
+			local now = PLAY.panel_now
+			local next_total = panel_total(reordered)
+			if now > 0 and next_total > now * 1.005 then
+				-- Strictly increasing in the improvement, below the cap.
+				local r = next_total / now - 1
+				return CONF.reorder + CONF.reorder_bonus * r / (1 + r)
+			end
+			return nil
+		end
+	end
 	for i = 1, n do
 		if anchor[i] and order[i] ~= jokers[i].id then
 			return nil
@@ -1840,7 +2026,13 @@ local function score_of(observation, action)
 				if value ~= value or value > ESTIMATE_CAP then
 					value = ESTIMATE_CAP
 				end
-				score = 200000 + 300000 * value / (value + scale) + score / 1000
+				if PLAY.discard_clear ~= nil and PLAY.discard_clear[action.id] ~= nil then
+					-- Last hand: the chance to clear decides, EV breaks ties.
+					score = 200000 + 250000 * PLAY.discard_clear[action.id]
+						+ 50000 * value / (value + scale) + score / 1000
+				else
+					score = 200000 + 300000 * value / (value + scale) + score / 1000
+				end
 			end
 		end
 		if score ~= nil and CONF.estimate_plays and PLAY ~= nil and PLAY.discard_mode then
@@ -1903,6 +2095,10 @@ return function(observation, actions)
 		count = limit
 	end
 	PLAY = nil
+	LEVELS = nil
+	if CONF.use_levels and type(observation.self) == "table" and type(observation.self.hand_levels) == "table" then
+		LEVELS = observation.self.hand_levels
+	end
 	if CONF.estimate_plays then
 		PLAY = analyse_plays(observation, actions, count)
 	end

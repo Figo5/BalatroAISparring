@@ -179,6 +179,32 @@ return function(ctx)
 		eq(exported.self.deck.by_rank, nil)
 	end)
 
+	test("hand_levels_copied_strictly", function()
+		local reader, spy = make_reader()
+		local engine = support.build({ phase = "BLIND_SELECTION" })
+		engine.ui_view.self.hand_levels = {
+			pair = { level = 2, chips = 25, mult = 3 },
+			not_a_hand = { level = 9, chips = 9, mult = 9 },
+		}
+		local handle, code = reader.capture(engine.runtime, engine.ui_view)
+		eq(code, nil)
+		eq(spy.frames[1].self.hand_levels.pair.chips, 25)
+		eq(spy.frames[1].self.hand_levels.not_a_hand, nil)
+		eq(bundle.obs.export(handle).self.hand_levels.pair.mult, 3)
+		for _, bad in ipairs({
+			{ pair = { level = 2, chips = -1, mult = 3 } },
+			{ pair = { level = 2, chips = 1.5, mult = 3 } },
+			{ pair = { level = 2, mult = 3 } },
+			{ pair = setmetatable({ level = 1, chips = 1, mult = 1 }, {}) },
+		}) do
+			local other = support.build({ phase = "BLIND_SELECTION" })
+			other.ui_view.self.hand_levels = bad
+			local none, bad_code = make_reader().capture(other.runtime, other.ui_view)
+			eq(none, nil)
+			is_true(bad_code ~= nil)
+		end
+	end)
+
 	test("deck_maps_cannot_leak_face_down_identity", function()
 		local reader, spy = make_reader()
 		local engine = support.build({

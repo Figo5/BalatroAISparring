@@ -173,3 +173,27 @@ needs the full re-certification and a companion reinstall, not
   the timer (as before). If the AI paused an already-started timer, that would be
   a defect (it is prevented by `timer_started` in both the adapter and the
   executor).
+
+## LV-7 Stronger play, discard, shop and Joker-order decisions
+
+- **Commits:** see `git log --grep "estimate plays"` and `git log --grep "hand levels"`.
+- **Change:** the policy estimates chips × mult (visible Jokers, enhancements,
+  editions, hand levels), prefers plays that clear the displayed requirement,
+  ranks discards by an expected follow-up play, values shop Jokers by their
+  marginal effect on a panel of hands, and orders Jokers (+mult before ×mult).
+  The adapter now also sends `blind_requirement` (non-PvP, hand phases),
+  `hand_levels` (hands listed in Run Info) and discard-specific candidates.
+  None of this is live-proven. The benchmark only compares against its own rules
+  model.
+- **Local test:** play three matches at Major League difficulty with the
+  Gauntlet seeds and three at Rookie. Where you can, compare against the
+  pre-change build on the same seeds.
+- **Expected:** no rejected or illegal decisions, policy latency comparable to
+  before (a few tens of ms), the AI clears small and big blinds more reliably and
+  reaches a later ante, and there are no pointless repeated Joker reorders.
+- **Evidence to capture:** `results.jsonl` and `decisions.jsonl` for each match
+  (ante reached, lives, decisions, rejected, errors, latency), plus a note of any
+  obviously bad play.
+- **Risk if it fails:** the AI gets weaker. The first things to check are
+  over-discarding (unmodelled scaling Jokers and boss effects) and Joker
+  purchases. Rolling back `baseline_policy.lua` is self-contained.

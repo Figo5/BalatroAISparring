@@ -188,6 +188,7 @@ may contain `>>`), `ante`, `round`, `lives`, `hands_per_round`,
 | `vouchers` | ordered `voucher` array |
 | `tags` | ordered `tag` array |
 | `deck` | aggregate, see below |
+| `hand_levels` | optional map, keyed only by the allowlisted poker-hand tokens `high_card`, `pair`, `two_pair`, `three`, `straight`, `flush`, `full_house`, `four`, `straight_flush`, `five`, `flush_house`, `flush_five`. Each value is exactly `{ level, chips, mult }` (non-negative ints): the current base values the Run Info "Poker Hands" screen shows. The adapter only includes hands the UI lists (`visible ~= false`), so undiscovered secret hands stay hidden. Unknown names are never traversed. Malformed entries reject the frame (`observation_invalid_field`). |
 
 Spendable money is `money + credit_limit` (matching `dollars - bankrupt_at`);
 it is deliberately not duplicated in the schema, as the sum can exceed int32 and

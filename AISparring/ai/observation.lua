@@ -364,6 +364,42 @@ local function read_deck(t)
 	return nil, out
 end
 
+-- Public poker-hand levels (Run Info > Poker Hands): per visible hand, its
+-- level and current base chips/mult. Read through a fixed name allowlist, so
+-- unknown keys are never traversed.
+local HAND_LEVEL_NAMES = {
+	"high_card", "pair", "two_pair", "three", "straight", "flush", "full_house",
+	"four", "straight_flush", "five", "flush_house", "flush_five",
+}
+
+local function read_hand_levels(t)
+	if t == nil then
+		return nil
+	end
+	if not is_plain_table(t) then
+		return CODE.BAD_FIELD
+	end
+	local out = nil
+	for i = 1, #HAND_LEVEL_NAMES do
+		local name = HAND_LEVEL_NAMES[i]
+		local entry = rawget(t, name)
+		if entry ~= nil then
+			if not is_plain_table(entry) then
+				return CODE.BAD_FIELD
+			end
+			local c1, level = read_int(entry, "level", 0, 100000)
+			local c2, chips = read_int(entry, "chips", 0, INT_MAX)
+			local c3, mult = read_int(entry, "mult", 0, INT_MAX)
+			if c1 ~= nil or c2 ~= nil or c3 ~= nil or level == nil or chips == nil or mult == nil then
+				return CODE.BAD_FIELD
+			end
+			out = out or {}
+			out[name] = { level = level, chips = chips, mult = mult }
+		end
+	end
+	return nil, out
+end
+
 local function read_match(t)
 	if t == nil then
 		return CODE.MISSING_MATCH
@@ -439,6 +475,13 @@ local function read_self(t, state, rules)
 	end
 	if deck ~= nil then
 		out.deck = deck
+	end
+	local levels_code, levels = read_hand_levels(rawget(t, "hand_levels"))
+	if levels_code ~= nil then
+		return levels_code
+	end
+	if levels ~= nil then
+		out.hand_levels = levels
 	end
 	return nil, out
 end
