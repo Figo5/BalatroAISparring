@@ -647,12 +647,22 @@ local function run(modules)
 	end
 
 	local ai = modules.ai_mode.resolve(modules.host.read_ai_flag(SMODS, MOD_ID))
-	logger:log("info", "ai_mode_resolved", { status = ai.status, code = ai.code })
+	local companion = read_companion(SMODS, MOD_ID)
+	local boots_companion = companion ~= nil and ai.requested == true
+	-- Log what actually happens next: an inert scaffold, or a companion boot
+	-- (whose own `companion_boot` line follows).
+	if boots_companion then
+		logger:log("info", "ai_mode_resolved", {
+			status = modules.ai_mode.STATUS_COMPANION,
+			code = modules.ai_mode.CODE_COMPANION,
+		})
+	else
+		logger:log("info", "ai_mode_resolved", { status = ai.status, code = ai.code })
+	end
 
 	local result = modules.status.ready({ version = spec.version, ai = ai })
 
-	local companion = read_companion(SMODS, MOD_ID)
-	if companion ~= nil and ai.requested == true then
+	if boots_companion then
 		local ok_boot, detail = pcall(boot_companion, modules, companion)
 		if not ok_boot or type(detail) ~= "table" then
 			detail = { code = "companion_internal_error", fatal = true }

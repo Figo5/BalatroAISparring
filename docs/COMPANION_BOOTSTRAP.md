@@ -38,7 +38,7 @@ With the default install:
 
 Setting `ai_enabled = true` without an installed `companion` descriptor still
 loads only the five M1 modules and reports
-`ai.status = requested_blocked_gates_not_implemented`. The companion is only
+`ai.status = requested_no_companion_config`. The companion is only
 attempted when **all** of the following hold:
 
 - the Multiplayer dependency is present, enabled, loadable, structurally

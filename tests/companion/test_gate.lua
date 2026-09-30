@@ -41,7 +41,7 @@ return function(ctx)
 		local ok, result = fixture:run()
 		eq(ok, true, "entrypoint ok")
 		eq(result.ai.requested, true, "requested")
-		eq(result.ai.status, "requested_blocked_gates_not_implemented", "blocked")
+		eq(result.ai.status, "requested_no_companion_config", "blocked")
 		eq(count_loads(fixture.record), #M1_MODULES, "only M1 modules loaded")
 	end)
 
@@ -96,6 +96,16 @@ return function(ctx)
 		eq(result.scaffold_only, false, "companion build")
 		-- The live companion is unchanged: it never stages a window.
 		eq(#fixture.record.window.calls, 0, "live never stages a window")
+		-- Startup log describes the actual boot, not the legacy M1 gate text
+		-- (NATIVE_TEST_PROGRESS: "ai_gates_not_implemented ... misleading").
+		local resolved = nil
+		for _, line in ipairs(fixture.record.logs) do
+			is_true(not string.find(line, "not_implemented", 1, true), line)
+			if string.find(line, "ai_mode_resolved", 1, true) then
+				resolved = line
+			end
+		end
+		is_true(resolved ~= nil and string.find(resolved, "ai_companion_configured", 1, true) ~= nil, tostring(resolved))
 	end)
 
 	test("staged AI companion reads the strict launcher environment", function()

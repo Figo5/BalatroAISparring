@@ -753,4 +753,49 @@ return function(ctx)
 		ctx.eq(#sent, 1)
 		ctx.eq(sent[1], "getEndGameJokers")
 	end)
+
+	test("known_mod_sends_are_suppressed_once_and_still_refused", function()
+		for _, role in ipairs({ "human", "ai" }) do
+			local MP, funcs = fake_engine({ code = "ABC12" })
+			local records = {}
+			local sent = {}
+			local client = { send = function(message) sent[#sent + 1] = message.action return true end }
+			local logger = { record = function(fields) records[#records + 1] = fields end }
+			local driver = MPDriver.factory({ role = role, mp = MP, funcs = funcs, client = client, logger = logger })
+			ctx.is_true(driver.install_send_guard() ~= nil)
+			for _ = 1, 3 do
+				ctx.eq(client.send({ action = "handyMPExtensionDisable" }), false)
+				ctx.eq(client.send({ action = "handyMPExtensionEnable" }), false)
+				ctx.eq(client.send({ action = "streamLogLines", gameId = "g", lines = "x" }), false)
+				ctx.eq(client.send({ action = "mysteryAction" }), false)
+			end
+			ctx.eq(#sent, 0, "nothing reaches the transport")
+			local suppressed, blocked = {}, 0
+			for _, record in ipairs(records) do
+				if record.code == "driver_send_suppressed" then
+					suppressed[record.action] = (suppressed[record.action] or 0) + 1
+				elseif record.code == "driver_send_blocked" then
+					blocked = blocked + 1
+					ctx.eq(record.action, "mysteryAction")
+				end
+			end
+			ctx.eq(suppressed.handyMPExtensionDisable, 1, role)
+			ctx.eq(suppressed.handyMPExtensionEnable, 1, role)
+			ctx.eq(suppressed.streamLogLines, 1, role)
+			ctx.eq(blocked, 3, "unknown blocked sends are logged every time")
+		end
+	end)
+
+	test("suppressed_reasons_never_allow_anything", function()
+		local MP, funcs = fake_engine()
+		for action in pairs(MPDriver.SEND_SUPPRESSED_REASONS) do
+			ctx.eq(MPDriver.SEND_ALLOWLIST[action], nil, action)
+			ctx.eq(MPDriver.ENDGAME_REVEAL[action], nil, action)
+			for _, role in ipairs({ "human", "ai" }) do
+				local driver = MPDriver.factory({ role = role, mp = MP, funcs = funcs })
+				ctx.eq(driver.guard_allows(action), false, role .. " " .. action)
+			end
+		end
+	end)
 end
+

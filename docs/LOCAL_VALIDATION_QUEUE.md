@@ -75,3 +75,51 @@ needs the full re-certification and a companion reinstall, not
   stuck. Check for a `ready_blind` that stays true after the blind starts. That
   would stall the match (no leak). The earlier behaviour was noisy but correct.
 
+## LV-3 Stale previous-build `practice_host.json` recovery
+
+- **Commit:** see `git log --grep "stale practice host marker"`.
+- **Change:** `practice_host.py discovery_state` now checks a well-formed marker
+  from a previous host build for liveness instead of calling it `foreign`. When
+  its exact PID and create time are proven gone (exited, exited-but-held handle,
+  or PID reused), it is `stale_previous_build` and is replaced on `serve`. It is
+  refused while that process runs (`practice_host_previous_build_running`) or
+  cannot be verified. Unreadable or other-schema markers stay `foreign`.
+- **Local test (Windows):**
+  1. With the old daemon running, run `python tools/practice_host.py status`.
+     Expect `previous_build_live` (once `practice_host.py` differs from the
+     running daemon's build). `serve` must refuse, and the marker must be
+     unchanged.
+  2. Stop the old daemon normally, then run `status`. Expect
+     `stale_previous_build`. Then run `serve` and check the start result shows
+     `stale_replaced: true` and `replaced.pid` equal to the old PID.
+  3. Run `reissue-certificate` in both situations: refused while the old daemon
+     runs, allowed after it has exited.
+- **Expected:** no manual marker rename is needed after a host update.
+- **Evidence to capture:** the `status` and `serve` JSON output, plus the marker
+  file before and after.
+- **Risk if it fails:** the worst plausible failure is a refusal. That is the
+  same as the old behaviour and is fixed by the manual rename. Replacing a
+  marker whose daemon is still running would be a defect: the running daemon
+  keeps its port, but the menu would find the new one.
+
+## LV-4 Startup log wording and Handy suppression logging
+
+- **Commit:** see `git log --grep "startup log"`.
+- **Change:** the boot line is now `ai_mode_resolved
+  status=requested_companion_configured code=ai_companion_configured` when a
+  companion is installed. With no companion descriptor it is
+  `requested_no_companion_config`. The old `ai_gates_not_implemented` is gone. The
+  send guard logs known harmless refusals (Handy `handyMPExtension*`,
+  Multiplayer `streamLogLines`/`submitLogHashes`) once per action as
+  `driver_send_suppressed`. Nothing new is allowed. See
+  `docs/HANDY_COMPATIBILITY.md`.
+- **Local test:** start live Balatro and one practice match with Handy 2.0.6
+  enabled.
+- **Expected:** no `not_implemented` text anywhere in the Lovely log. Each staged
+  runtime log has at most one `driver_send_suppressed` line per action, and
+  Handy produces no `driver_send_blocked` lines. The match runs at 1x with normal
+  animations, which is Handy's own MP-lobby behaviour.
+- **Evidence to capture:** the Lovely logs for live, human and AI.
+- **Risk if it fails:** logging only. The guard decision is unchanged and
+  test-enforced.
+

@@ -41,6 +41,7 @@ MPDriver.CODE = {
 	NOT_READY = "driver_not_ready",
 	WRONG_ROLE = "driver_wrong_role",
 	SEND_BLOCKED = "driver_send_blocked",
+	SEND_SUPPRESSED = "driver_send_suppressed",
 	NO_UNLOCK_OVERLAY = "driver_no_unlock_overlay",
 	INTERNAL = "driver_internal_error",
 }
@@ -193,6 +194,25 @@ MPDriver.SEND_BLOCKED = {
 	uploadResult = true,
 	resultSubmit = true,
 	moddedAction = true,
+}
+
+-- Known, reviewed sends that stay blocked in a private practice match but are
+-- expected from ordinary mods, so they are logged once per action as
+-- `driver_send_suppressed` with a reason instead of a `driver_send_blocked`
+-- line per attempt (docs/HANDY_COMPATIBILITY.md). Still refused: this table
+-- only changes logging and never allows anything.
+--   * Handy 2.0.6 `src/mp_extension/pre_release.lua:24-35` toggles its lobby
+--     extension (speed/animation-skip/"dangerous actions" modes) with an
+--     action-name-only message; the pinned server keeps a per-client flag that
+--     defaults to false (`Lobby.ts:236,267`), so suppressing it keeps the
+--     extension off, exactly as when both players leave it disabled.
+--   * Multiplayer's replay-log stream/fingerprints (`lib/replay_log.lua:118-
+--     223`) are periodic server logging, never needed for practice.
+MPDriver.SEND_SUPPRESSED_REASONS = {
+	handyMPExtensionEnable = "handy_mp_extension_off",
+	handyMPExtensionDisable = "handy_mp_extension_off",
+	streamLogLines = "mp_replay_log_off",
+	submitLogHashes = "mp_replay_log_off",
 }
 
 local CODE = MPDriver.CODE
@@ -951,13 +971,23 @@ function MPDriver.factory(ports)
 			return nil, CODE.BAD_ENGINE
 		end
 		local original = client.send
+		local suppressed_logged = {}
 		local function guarded(message)
 			local action = nil
 			if type(message) == "table" then
 				action = rawget(message, "action")
 			end
 			if not instance.guard_allows(action) then
-				emit({ event = "mp_driver", code = CODE.SEND_BLOCKED, action = token_of(action, TOKEN_PATTERN, MPDriver.LIMITS.max_token) })
+				local token = token_of(action, TOKEN_PATTERN, MPDriver.LIMITS.max_token)
+				local reason = token ~= nil and MPDriver.SEND_SUPPRESSED_REASONS[token] or nil
+				if reason ~= nil then
+					if suppressed_logged[token] ~= true then
+						suppressed_logged[token] = true
+						emit({ event = "mp_driver", code = CODE.SEND_SUPPRESSED, action = token, reason = reason })
+					end
+				else
+					emit({ event = "mp_driver", code = CODE.SEND_BLOCKED, action = token })
+				end
 				return false, CODE.SEND_BLOCKED
 			end
 			return original(message)

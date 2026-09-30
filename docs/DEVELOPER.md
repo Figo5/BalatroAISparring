@@ -80,9 +80,9 @@ The status snapshot reports both facts explicitly (`manifest.skips_load_when_dep
 The flag expresses intent only. `src/ai_mode.lua` always returns `enabled = false`:
 
 - absent/false -> status `disabled_default_off`
-- `true` -> status `requested_blocked_gates_not_implemented`, with the blocking prototype gate ids (`P0`-`P5`)
+- `true` -> status `requested_no_companion_config`, with the blocking prototype gate ids (`P0`-`P5`)
 
-Setting the flag cannot start practice, hook gameplay, connect, send protocol actions or change a human lobby. Enabling AI practice requires the unpassed prototype gates and later milestones.
+Setting the flag alone cannot start practice, hook gameplay, connect, send protocol actions or change a human lobby. AI practice runs only when the installer has also written a `companion` descriptor into the installed copy of `config.lua`. `core.lua` then boots the companion, logs `ai_mode_resolved status=requested_companion_configured code=ai_companion_configured`, and replaces this status with the companion's own (see `COMPANION_BOOTSTRAP.md`).
 
 ## Bootstrap status API
 
