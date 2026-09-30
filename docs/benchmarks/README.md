@@ -174,7 +174,8 @@ scaling Jokers or opponents, so this is **not** a Balatro win rate.
 
 ```
 python tests/benchmark_runs.py --runs 60 --json docs/benchmarks/runs_report.json
-python tests/benchmark_runs.py --paired OLD_baseline_policy.lua --seed 37 --runs 150   # A/B on the same seeds
+git show 5b0cd64:AISparring/ai/baseline_policy.lua > /tmp/old.lua     # pre-retune policy
+python tests/benchmark_runs.py --paired /tmp/old.lua --seed 37 --runs 150   # A/B on the same seeds
 ```
 
 60 runs (seed 11, LuaJIT), from `runs_report.json`:

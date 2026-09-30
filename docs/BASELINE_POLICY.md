@@ -507,7 +507,9 @@ nothing, and clearing fewer blinds than Competitive. Their shop settings now
 use Competitive's reroll and leave values with a reserve of 12, still graded
 above Competitive's 10. The retune was chosen on seed 11. It was then judged
 on held-out seeds 37 and 41 (150 paired runs each, no credit,
-`python tests/benchmark_runs.py --paired <old policy> --seed 37 --runs 150`):
+against the pre-retune policy from `5b0cd64`:
+`git show 5b0cd64:AISparring/ai/baseline_policy.lua > /tmp/old.lua`, then
+`python tests/benchmark_runs.py --paired /tmp/old.lua --seed 37 --runs 150`):
 
 | Held-out seed | Major League | Expert |
 |---|---|---|
