@@ -50,6 +50,12 @@ Constraints on all of it:
     most had spent them first. Neither change moved the clear rate, so the
     remaining losses look like draw luck within this model. Play-side
     headroom in the blind simulator appears small.
+  - Expert's `joker_gain_value` 500 vs 400: −0.01 blinds per run (t −1.0,
+    150 paired runs on held-out seed 37). Not a lever.
+  - **Plateau:** play thresholds, structural play changes and Joker weight
+    all move the simulators by less than noise, so the strong tiers look near
+    the ceiling of these models. Real separation evidence should now come from
+    local Gauntlet runs (LV-7/LV-8), not more simulator tuning.
   - give Major League and Expert a real edge: after the economy retune
     (held-out ≈ +0.33 / +0.51 blinds per run) they match Competitive in run metrics, so
     their play-side difference is still unproven.
