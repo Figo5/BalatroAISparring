@@ -100,6 +100,42 @@ The `boss` and `scaling` families still show about 100% agreement. That is
 exactly the shared blind spot: neither side models those effects, so this
 agreement means nothing about play quality there.
 
+## Blind simulator (`tests/benchmark_blinds.py`)
+
+A first step towards full-run (Gauntlet) metrics:
+
+- **Deal and act:** each blind deals from a shuffled 52-card deck, and the
+  policy plays and discards repeatedly through the real adapter → reader →
+  sandbox pipeline, drawing back to 8, until the requirement is met or no
+  hands remain.
+- **Same luck for everyone:** every difficulty sees the same deck order.
+- **Blinds:** antes 1–4 (base 300 / 800 / 2,000 / 5,000); small ×1, big ×1.5,
+  boss ×2, with no boss effects.
+
+Plays are scored with the shared reference model. So this measures how well
+play and discard decisions are sequenced under real random draws within that
+model. It is **not** a Balatro win rate.
+
+```
+python tests/benchmark_blinds.py --blinds 360 --json docs/benchmarks/blinds_report.json
+```
+
+360 blinds (seed 7, LuaJIT), from `blinds_report.json`:
+
+| | Rookie | Competitive | Major League | Expert |
+|---|---|---|---|---|
+| blinds cleared | 63.3% | 83.1% | 82.8% | 83.6% |
+| cleared, ante 1 / 2 / 3 / 4 | 89 / 79 / 51 / 34% | 100 / 91 / 83 / 58% | 100 / 90 / 83 / 58% | 99 / 93 / 80 / 62% |
+| mean score ÷ requirement (capped at 3) | 1.21 | 1.41 | 1.41 | 1.42 |
+| mean discards per blind | 0.57 | 1.50 | 1.52 | 1.70 |
+| failures | 0 | 0 | 0 | 0 |
+| max sandbox instructions | 155k | 830k | 823k | 972k |
+
+Major League is barely distinguishable from Competitive on blind clears. Its
+extra caution lives mostly in shop and reserve settings, which this simulator
+does not exercise. Expert's deeper draw search clears slightly more
+late-ante blinds.
+
 ### Not yet covered (prepared, continuing)
 
 These need a model that differs from the policy's, or multi-decision
@@ -117,4 +153,5 @@ simulation, before any metric is meaningful:
   buying power trade off against clearing the next blind. This needs a
   multi-round simulation, not a single-decision grade.
 
-Full-run strength still needs Gauntlet metrics (planned).
+Full-run strength still needs Gauntlet metrics: shops, bosses and money
+across a whole run (planned; the blind simulator is the first piece).

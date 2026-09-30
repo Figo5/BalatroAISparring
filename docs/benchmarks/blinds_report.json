@@ -1,0 +1,73 @@
+{
+  "blinds": 360,
+  "difficulties": {
+    "competitive": {
+      "clear_rate": 0.8306,
+      "clear_rate_by_ante": {
+        "1": 1.0,
+        "2": 0.9111,
+        "3": 0.8333,
+        "4": 0.5778
+      },
+      "decisions": 1390,
+      "failures": 0,
+      "latency_ms_p95": 25.098,
+      "max_instructions": 830000,
+      "mean_discards": 1.5,
+      "mean_hands_used": 2.361,
+      "mean_score_ratio": 1.4056
+    },
+    "expert": {
+      "clear_rate": 0.8361,
+      "clear_rate_by_ante": {
+        "1": 0.9889,
+        "2": 0.9333,
+        "3": 0.8,
+        "4": 0.6222
+      },
+      "decisions": 1421,
+      "failures": 0,
+      "latency_ms_p95": 29.542,
+      "max_instructions": 972000,
+      "mean_discards": 1.7,
+      "mean_hands_used": 2.247,
+      "mean_score_ratio": 1.4212
+    },
+    "major_league": {
+      "clear_rate": 0.8278,
+      "clear_rate_by_ante": {
+        "1": 1.0,
+        "2": 0.9,
+        "3": 0.8333,
+        "4": 0.5778
+      },
+      "decisions": 1400,
+      "failures": 0,
+      "latency_ms_p95": 28.275,
+      "max_instructions": 823000,
+      "mean_discards": 1.522,
+      "mean_hands_used": 2.367,
+      "mean_score_ratio": 1.4075
+    },
+    "rookie": {
+      "clear_rate": 0.6333,
+      "clear_rate_by_ante": {
+        "1": 0.8889,
+        "2": 0.7889,
+        "3": 0.5111,
+        "4": 0.3444
+      },
+      "decisions": 1281,
+      "failures": 0,
+      "latency_ms_p95": 22.869,
+      "max_instructions": 155000,
+      "mean_discards": 0.567,
+      "mean_hands_used": 2.992,
+      "mean_score_ratio": 1.2125
+    }
+  },
+  "interpretation": "blind clears under real random draws, scored with the shared reference model; not a Balatro win rate (no bosses, scaling Jokers, shops or opponents)",
+  "runtime": "lupa.luajit21",
+  "seed": 7,
+  "wall_seconds": 136.66
+}
