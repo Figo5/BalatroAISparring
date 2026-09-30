@@ -1094,7 +1094,7 @@ local RANK_VALUE = {
 -- from face-up, unmasked cards (`grouping_identity`): a face-down or
 -- Stone/no_rank/no_suit card appears positionally but never groups, so hidden
 -- identities cannot change or leak through the policy-visible catalogue.
-local function hand_selections(cards, count, max_k, cap)
+local function hand_selections(cards, count, max_k, cap, pad)
 	local out = {}
 	local seen = {}
 	local function add(selection)
@@ -1152,6 +1152,64 @@ local function hand_selections(cards, count, max_k, cap)
 	end
 	table.sort(rank_order, byte_less)
 	table.sort(suit_order, byte_less)
+
+	-- 0. (The Psychic only) rank groups and two pair padded to five cards with
+	-- the highest other visible-rank cards, so a scoring five-card play exists.
+	if pad and max_k >= 5 then
+		local kickers = {}
+		for i = 1, count do
+			if rank_values[i] ~= nil then
+				kickers[#kickers + 1] = i
+			end
+		end
+		table.sort(kickers, function(a, b)
+			if rank_values[a] ~= rank_values[b] then
+				return rank_values[a] > rank_values[b]
+			end
+			return a < b
+		end)
+		local function padded(base)
+			local used = {}
+			local out_sel = {}
+			for i = 1, #base do
+				used[base[i]] = true
+				out_sel[#out_sel + 1] = base[i]
+			end
+			for i = 1, #kickers do
+				if #out_sel >= 5 then
+					break
+				end
+				if not used[kickers[i]] then
+					out_sel[#out_sel + 1] = kickers[i]
+				end
+			end
+			return #out_sel == 5 and out_sel or nil
+		end
+		local bases = {}
+		local pairs_list = {}
+		for k = 1, #rank_order do
+			local group = ranks[rank_order[k]]
+			if #group >= 2 and #group <= 4 then
+				bases[#bases + 1] = group
+				if #group == 2 then
+					pairs_list[#pairs_list + 1] = group
+				end
+			end
+		end
+		for a = 1, #pairs_list - 1 do
+			for b = a + 1, #pairs_list do
+				bases[#bases + 1] = { pairs_list[a][1], pairs_list[a][2], pairs_list[b][1], pairs_list[b][2] }
+			end
+		end
+		local five = {}
+		for i = 1, #bases do
+			local sel = padded(bases[i])
+			if sel ~= nil then
+				five[#five + 1] = sel
+			end
+		end
+		add_type(five, 10)
+	end
 
 	-- 1. rank groups, largest multiplicity first.
 	local rank_groups = {}
@@ -1491,9 +1549,9 @@ local function selection_has_forced(selection, forced)
 	return true
 end
 
-local function cert_play_discard(builder, t, hand_cards, max_k, forced)
+local function cert_play_discard(builder, t, hand_cards, max_k, forced, pad)
 	local cap = LIMITS.selection
-	local selections = hand_selections(hand_cards, #hand_cards, max_k, cap)
+	local selections = hand_selections(hand_cards, #hand_cards, max_k, cap, pad)
 	if t == "DISCARD_CARDS" then
 		-- Targeted discards first, then the generic selections, same total cap.
 		local targeted = discard_selections(hand_cards, #hand_cards, max_k, 12)
@@ -1958,7 +2016,10 @@ local function build_certificates(G, MP, phase, context, hand_cards, target)
 		if hand_cards ~= nil and #hand_cards > 0 then
 			local forced = forced_hand_ordinals(G)
 			if is_int(hands_left) and hands_left > 0 and (block_play == nil or block_play == false) then
-				cert_play_discard(builder, "PLAY_CARDS", hand_cards, LIMITS.max_play, forced)
+				-- The Psychic (public boss key, not disabled): pad plays to five.
+				local psychic = rpath(game, "blind", "config", "blind", "key") == "bl_psychic"
+					and rget(rget(game, "blind"), "disabled") ~= true
+				cert_play_discard(builder, "PLAY_CARDS", hand_cards, LIMITS.max_play, forced, psychic)
 			end
 			if is_int(discards_left) and discards_left > 0 then
 				cert_play_discard(builder, "DISCARD_CARDS", hand_cards, LIMITS.max_play, forced)

@@ -59,8 +59,9 @@ Constraints on all of it:
 - **Done:** The Psychic. A play of fewer than five cards is estimated at 0.
   Paired A/B gave +0.7% overall.
 - **Open (review Lows):**
-  - the adapter offers few five-card plays (rank groups have no kickers), so
-    a split two pair has no five-card candidate under The Psychic;
+  - ~~the adapter offers few five-card plays under The Psychic~~: fixed with
+    padded rank groups and two pair (Psychic clears 68% → 74–84% on 19
+    blinds);
   - ~~discard EV still counts plays of fewer than five cards under The
     Psychic~~: fixed (`MIN_CARDS`); neutral in A/B;
   - a boss disabled by Chicot or Luchador (`G.GAME.blind.disabled`) keeps its
