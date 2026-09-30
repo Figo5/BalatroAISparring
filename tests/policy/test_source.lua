@@ -22,7 +22,7 @@ return function(ctx)
 			ctx.truthy(#source > 0, name .. "_nonempty")
 			ctx.truthy(#source <= 65536, name .. "_cap")
 			ctx.neq(string.byte(source, 1), 27, name .. "_not_bytecode")
-			ctx.truthy(string.find(source, "return function(observation, actions)", 1, true) ~= nil, name .. "_entry")
+			ctx.truthy(string.find(source, "return function(observation,actions)", 1, true) ~= nil, name .. "_entry")
 			ctx.vector("src_len_" .. name, #source)
 			ctx.vector("src_hash_" .. name, env.codec.hash_string(source))
 		end
@@ -97,6 +97,23 @@ return function(ctx)
 		handle:close()
 		ctx.eq(string.find(host, "target_selection", 1, true), nil, "companion_host_wires_no_target_port")
 		ctx.truthy(string.find(Support.source(env, "competitive"), "c_strength", 1, true) ~= nil, "targeted_list_present")
+	end)
+
+	test("squeezed_source_compiles_to_identical_bytecode", function()
+		-- The render-time space squeeze keeps line breaks, so under Lua 5.1
+		-- (whose bytecode records lines but not columns) the stripped and the
+		-- unsqueezed sources must compile to byte-identical functions. LuaJIT
+		-- dumps are not byte-stable between loads, so only Lua 5.1 checks.
+		if jit ~= nil then
+			return
+		end
+		for i = 1, #difficulties do
+			local name = difficulties[i]
+			local tight = string.dump(assert(loadstring(Support.source(env, name), "=policy")))
+			local loose = string.dump(assert(loadstring(baseline.loose_source(name), "=policy")))
+			ctx.eq(tight, loose, name .. "_bytecode")
+			ctx.truthy(#baseline.loose_source(name) > #Support.source(env, name), name .. "_squeezed")
+		end
 	end)
 
 	test("policy_source_is_deterministic", function()

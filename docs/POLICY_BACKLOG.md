@@ -66,8 +66,8 @@ Constraints on all of it:
   - The Psychic: a play of fewer than five cards is estimated at 0 (paired
     A/B +0.7% overall);
   - The Eye and The Mouth (paired A/B +0.7% / +0.4% overall).
-- **Source size:** 55.3 KB, about 2 KB under `SOURCE_GUARD`. The next policy
-  growth needs another space-recovery pass first.
+- **Source size:** 50.2 KB after the render-time space squeeze: about 7 KB
+  under `SOURCE_GUARD` and 15 KB under the hard cap.
 - **Open (review Lows):**
   - ~~the adapter offers few five-card plays under The Psychic~~: fixed with
     padded rank groups and two pair (Psychic clears 68% → 74–84% on 19

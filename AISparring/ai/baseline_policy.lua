@@ -2690,7 +2690,51 @@ local function strip_line(line)
 	return (string.gsub(string.gsub(line, "^%s+", ""), "%s+$", ""))
 end
 
-local function strip_template(text)
+-- Drop a space outside quotes when a neighbour is punctuation, unless that
+-- would join "--" (a comment), a digit with "." (a malformed number) or open
+-- a long bracket ("[[" / "[="). Line breaks are kept, so the token stream and
+-- line numbers are unchanged (tests compare Lua 5.1 bytecode).
+local PUNCT = {}
+for c in string.gmatch("=+-*/,(){}[]<>~.#%^;:", ".") do
+	PUNCT[c] = true
+end
+
+local function squeeze_line(line)
+	local out = {}
+	local quote = nil
+	local n = #line
+	local i = 1
+	while i <= n do
+		local c = string.sub(line, i, i)
+		if quote ~= nil then
+			out[#out + 1] = c
+			if c == "\\" then
+				i = i + 1
+				out[#out + 1] = string.sub(line, i, i)
+			elseif c == quote then
+				quote = nil
+			end
+		elseif c == "\"" or c == "'" then
+			quote = c
+			out[#out + 1] = c
+		elseif c == " " then
+			local a = out[#out] or ""
+			local b = string.sub(line, i + 1, i + 1)
+			local drop = (PUNCT[a] or PUNCT[b]) and not (a == "-" and b == "-")
+				and not (a == "[" and (b == "[" or b == "="))
+				and not (string.find(a, "%d") and b == ".") and not (a == "." and string.find(b, "%d"))
+			if not drop then
+				out[#out + 1] = c
+			end
+		else
+			out[#out + 1] = c
+		end
+		i = i + 1
+	end
+	return table.concat(out)
+end
+
+local function strip_template(text, squeeze)
 	local out = {}
 	for line in string.gmatch(text, "([^\n]*)\n?") do
 		local kept = strip_line(line)
@@ -2698,13 +2742,14 @@ local function strip_template(text)
 			return nil
 		end
 		if #kept > 0 then
-			out[#out + 1] = kept
+			out[#out + 1] = squeeze and squeeze_line(kept) or kept
 		end
 	end
 	return table.concat(out, "\n") .. "\n"
 end
 
-local STRIPPED = strip_template(TEMPLATE)
+local STRIPPED = strip_template(TEMPLATE, true)
+local LOOSE = strip_template(TEMPLATE, false)
 
 -- Practical guard well below the sandbox's hard 65536-byte cap, so policy
 -- growth has to recover space instead of creeping up to the limit.
@@ -2769,6 +2814,16 @@ end
 -- The same policy rendered from the unstripped template (comments kept). Only
 -- for tests proving the stripped source is equivalent; it may exceed the
 -- sandbox cap and is never sent to the policy worker.
+-- Stripped but not squeezed (spaces kept): for the bytecode-equality test.
+function BaselinePolicy.loose_source(difficulty)
+	local config = type(difficulty) == "string" and CONFIGS[difficulty] or nil
+	local literal = config ~= nil and render_config(config) or nil
+	if literal == nil or LOOSE == nil then
+		return nil, CODE.UNKNOWN_DIFFICULTY
+	end
+	return string.format(LOOSE, literal)
+end
+
 function BaselinePolicy.readable_source(difficulty)
 	local config = type(difficulty) == "string" and CONFIGS[difficulty] or nil
 	local literal = config ~= nil and render_config(config) or nil

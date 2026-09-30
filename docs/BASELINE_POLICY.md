@@ -494,7 +494,11 @@ stripped copy, which:
 - keeps line breaks, so tokens never merge;
 - refuses long brackets, so a future template cannot be half-stripped.
 
-`BaselinePolicy.readable_source` renders the unstripped copy for tests only.
+`BaselinePolicy.readable_source` renders the unstripped copy for tests only. A second pass, the **space squeeze**, drops a space outside quotes when a
+neighbour is punctuation. It never joins `--`, a digit with `.`, or `[[` /
+`[=`. Line breaks are kept, so under Lua 5.1 the squeezed and unsqueezed
+(`BaselinePolicy.loose_source`) sources compile to byte-identical bytecode;
+`test_source.lua` checks this for every difficulty.
 
 | | Rendered size |
 |---|---|
@@ -503,6 +507,7 @@ stripped copy, which:
 | This change, stripped | **51,544–51,551 bytes** (≈14.0 KB, 21%, under the cap) |
 | After the follow-up backlog commits | 53,110–53,117 bytes (≈12.4 KB under the cap, 4.2 KB under the guard) |
 | After boss awareness (Psychic, Eye, Mouth), with the fallback rewritten | 55,279–55,286 bytes (≈10.2 KB under the cap, 2.0 KB under the guard) |
+| With the space squeeze | **50,234–50,241 bytes** (≈15.3 KB under the cap, 7.1 KB under the guard) |
 
 `BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).
 `tests/policy/test_source.lua` fails when a rendered source exceeds it or when
