@@ -32,6 +32,15 @@ local ENGINE_GLOBALS = { "G", "MP", "SMODS", "love" }
 
 PolicyEnv.INSTRUCTION_BUDGET = INSTRUCTION_BUDGET
 
+-- Read-only diagnostic: VM instructions (in HOOK_STRIDE units) the most recent
+-- `run` spent inside the budgeted policy call. Used by budget regression tests
+-- and benchmarks; it never influences a decision.
+local last_steps = 0
+
+function PolicyEnv.last_instructions()
+	return last_steps * HOOK_STRIDE
+end
+
 local STRING_FUNCS = {
 	"byte", "char", "sub", "len", "rep", "lower", "upper",
 	"format", "find", "match", "gsub", "gmatch", "reverse",
@@ -319,6 +328,7 @@ local function with_budget(fn)
 	end
 	debug.sethook(hook, "", HOOK_STRIDE)
 	local ok, result, reason = pcall(fn)
+	last_steps = counter
 	if prev_hook ~= nil then
 		debug.sethook(prev_hook, prev_mask, prev_count)
 	else

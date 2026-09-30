@@ -46,6 +46,48 @@ return function(ctx)
 		ctx.truthy(#Support.scan_source(rng) > 0, "real_rng_detected")
 	end)
 
+	test("policy_source_within_size_guard", function()
+		-- Practical guard (M2 of docs/CLAUDE_BATCH2_REVIEW.md): growth must recover
+		-- space rather than creep towards the sandbox's hard 65536-byte cap.
+		ctx.truthy(baseline.SOURCE_GUARD <= 57344, "guard_not_raised")
+		for i = 1, #difficulties do
+			local name = difficulties[i]
+			local source = Support.source(env, name)
+			ctx.truthy(#source <= baseline.SOURCE_GUARD, name .. "_guard:" .. #source)
+			ctx.truthy(#baseline.readable_source(name) > #source, name .. "_stripped")
+		end
+	end)
+
+	test("policy_stripped_source_keeps_no_comments_or_indentation", function()
+		for i = 1, #difficulties do
+			local name = difficulties[i]
+			local source = Support.source(env, name)
+			ctx.eq(string.find(source, "--", 1, true), nil, name .. "_no_comment")
+			ctx.eq(string.find(source, "\n[ \t]"), nil, name .. "_no_indent")
+			ctx.eq(string.find(source, "\n\n", 1, true), nil, name .. "_no_blank")
+		end
+	end)
+
+	test("policy_stripped_source_decides_like_readable_template", function()
+		local frames = {
+			Support.pair_frame(), Support.flush_frame(), Support.high_card_frame(), Support.discard_only_frame(),
+			Support.pvp_frame(), Support.shop_frame(), Support.voucher_frame(), Support.booster_frame(),
+			Support.consumable_frame(), Support.jokers_with_play_frame(), Support.reorder_frame(),
+			Support.requirement_frame("5000", 1, 2, "PLAY_HAND"),
+		}
+		for i = 1, #difficulties do
+			local name = difficulties[i]
+			local stripped = assert(loadstring(Support.source(env, name)))()
+			local readable = assert(loadstring(baseline.readable_source(name)))()
+			for k = 1, #frames do
+				local export = Support.export(env, frames[k])
+				local a = stripped(export, Support.generate(env, frames[k]))
+				local b = readable(export, Support.generate(env, frames[k]))
+				ctx.eq(a and a.id, b and b.id, name .. "_frame" .. k)
+			end
+		end
+	end)
+
 	test("policy_source_is_deterministic", function()
 		for i = 1, #difficulties do
 			local name = difficulties[i]

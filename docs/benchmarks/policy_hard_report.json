@@ -1,0 +1,323 @@
+{
+  "coverage": 0.9575,
+  "difficulties": {
+    "competitive": {
+      "clear_taken": 0.9844,
+      "decisions": 198,
+      "discard_quality": null,
+      "discard_rate": 0.3081,
+      "failures": 0,
+      "forced_discard_quality": null,
+      "illegal": 0,
+      "latency_ms_mean": 14.876,
+      "latency_ms_p95": 28.211,
+      "max_instructions": 893000,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 0.9051,
+      "play_rate": 0.6919,
+      "regret": 0.0545
+    },
+    "expert": {
+      "clear_taken": 0.9844,
+      "decisions": 198,
+      "discard_quality": null,
+      "discard_rate": 0.3333,
+      "failures": 0,
+      "forced_discard_quality": null,
+      "illegal": 0,
+      "latency_ms_mean": 15.398,
+      "latency_ms_p95": 28.642,
+      "max_instructions": 1036000,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 0.9015,
+      "play_rate": 0.6667,
+      "regret": 0.0566
+    },
+    "major_league": {
+      "clear_taken": 0.9844,
+      "decisions": 198,
+      "discard_quality": null,
+      "discard_rate": 0.3131,
+      "failures": 0,
+      "forced_discard_quality": null,
+      "illegal": 0,
+      "latency_ms_mean": 14.39,
+      "latency_ms_p95": 25.108,
+      "max_instructions": 897000,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 0.9044,
+      "play_rate": 0.6869,
+      "regret": 0.0549
+    },
+    "rookie": {
+      "clear_taken": 0.8125,
+      "decisions": 198,
+      "discard_quality": null,
+      "discard_rate": 0.1313,
+      "failures": 0,
+      "forced_discard_quality": null,
+      "illegal": 0,
+      "latency_ms_mean": 13.401,
+      "latency_ms_p95": 24.271,
+      "max_instructions": 168000,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 0.7151,
+      "play_rate": 0.8687,
+      "regret": 0.1222
+    }
+  },
+  "distribution": "hard",
+  "families": {
+    "boss": {
+      "competitive": {
+        "clear_taken": 1.0,
+        "decisions": 48,
+        "discard_rate": 0.4583,
+        "failures": 0,
+        "max_instructions": 710000,
+        "play_optimal": 1.0
+      },
+      "expert": {
+        "clear_taken": 1.0,
+        "decisions": 48,
+        "discard_rate": 0.4792,
+        "failures": 0,
+        "max_instructions": 828000,
+        "play_optimal": 1.0
+      },
+      "major_league": {
+        "clear_taken": 1.0,
+        "decisions": 48,
+        "discard_rate": 0.4792,
+        "failures": 0,
+        "max_instructions": 699000,
+        "play_optimal": 1.0
+      },
+      "rookie": {
+        "clear_taken": 0.7143,
+        "decisions": 48,
+        "discard_rate": 0.2083,
+        "failures": 0,
+        "max_instructions": 128000,
+        "play_optimal": 0.7105
+      }
+    },
+    "large_hand": {
+      "competitive": {
+        "clear_taken": 1.0,
+        "decisions": 43,
+        "discard_rate": 0.2326,
+        "failures": 0,
+        "max_instructions": 846000,
+        "play_optimal": 1.0
+      },
+      "expert": {
+        "clear_taken": 1.0,
+        "decisions": 43,
+        "discard_rate": 0.2558,
+        "failures": 0,
+        "max_instructions": 1036000,
+        "play_optimal": 1.0
+      },
+      "major_league": {
+        "clear_taken": 1.0,
+        "decisions": 43,
+        "discard_rate": 0.2326,
+        "failures": 0,
+        "max_instructions": 844000,
+        "play_optimal": 1.0
+      },
+      "rookie": {
+        "clear_taken": 0.9091,
+        "decisions": 43,
+        "discard_rate": 0.0233,
+        "failures": 0,
+        "max_instructions": 168000,
+        "play_optimal": 0.7381
+      }
+    },
+    "large_hand/pvp": {
+      "competitive": {
+        "clear_taken": null,
+        "decisions": 8,
+        "discard_rate": 0.25,
+        "failures": 0,
+        "max_instructions": 893000,
+        "play_optimal": 1.0
+      },
+      "expert": {
+        "clear_taken": null,
+        "decisions": 8,
+        "discard_rate": 0.5,
+        "failures": 0,
+        "max_instructions": 1019000,
+        "play_optimal": 1.0
+      },
+      "major_league": {
+        "clear_taken": null,
+        "decisions": 8,
+        "discard_rate": 0.25,
+        "failures": 0,
+        "max_instructions": 897000,
+        "play_optimal": 1.0
+      },
+      "rookie": {
+        "clear_taken": null,
+        "decisions": 8,
+        "discard_rate": 0.125,
+        "failures": 0,
+        "max_instructions": 168000,
+        "play_optimal": 0.7143
+      }
+    },
+    "rule": {
+      "competitive": {
+        "clear_taken": 0.9167,
+        "decisions": 36,
+        "discard_rate": 0.0556,
+        "failures": 0,
+        "max_instructions": 89000,
+        "play_optimal": 0.6765
+      },
+      "expert": {
+        "clear_taken": 0.9167,
+        "decisions": 36,
+        "discard_rate": 0.0556,
+        "failures": 0,
+        "max_instructions": 89000,
+        "play_optimal": 0.6765
+      },
+      "major_league": {
+        "clear_taken": 0.9167,
+        "decisions": 36,
+        "discard_rate": 0.0556,
+        "failures": 0,
+        "max_instructions": 89000,
+        "play_optimal": 0.6765
+      },
+      "rookie": {
+        "clear_taken": 0.9167,
+        "decisions": 36,
+        "discard_rate": 0.0556,
+        "failures": 0,
+        "max_instructions": 88000,
+        "play_optimal": 0.6765
+      }
+    },
+    "rule/pvp": {
+      "competitive": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.0,
+        "failures": 0,
+        "max_instructions": 84000,
+        "play_optimal": 0.8333
+      },
+      "expert": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.0,
+        "failures": 0,
+        "max_instructions": 84000,
+        "play_optimal": 0.8333
+      },
+      "major_league": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.0,
+        "failures": 0,
+        "max_instructions": 84000,
+        "play_optimal": 0.8333
+      },
+      "rookie": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.0,
+        "failures": 0,
+        "max_instructions": 84000,
+        "play_optimal": 0.8333
+      }
+    },
+    "scaling": {
+      "competitive": {
+        "clear_taken": 1.0,
+        "decisions": 39,
+        "discard_rate": 0.4872,
+        "failures": 0,
+        "max_instructions": 629000,
+        "play_optimal": 1.0
+      },
+      "expert": {
+        "clear_taken": 1.0,
+        "decisions": 39,
+        "discard_rate": 0.4872,
+        "failures": 0,
+        "max_instructions": 778000,
+        "play_optimal": 1.0
+      },
+      "major_league": {
+        "clear_taken": 1.0,
+        "decisions": 39,
+        "discard_rate": 0.4872,
+        "failures": 0,
+        "max_instructions": 629000,
+        "play_optimal": 1.0
+      },
+      "rookie": {
+        "clear_taken": 0.6875,
+        "decisions": 39,
+        "discard_rate": 0.2051,
+        "failures": 0,
+        "max_instructions": 127000,
+        "play_optimal": 0.6774
+      }
+    },
+    "scaling/pvp": {
+      "competitive": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.5,
+        "failures": 0,
+        "max_instructions": 683000,
+        "play_optimal": 1.0
+      },
+      "expert": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.5833,
+        "failures": 0,
+        "max_instructions": 837000,
+        "play_optimal": 1.0
+      },
+      "major_league": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.5,
+        "failures": 0,
+        "max_instructions": 667000,
+        "play_optimal": 1.0
+      },
+      "rookie": {
+        "clear_taken": null,
+        "decisions": 12,
+        "discard_rate": 0.3333,
+        "failures": 0,
+        "max_instructions": 126000,
+        "play_optimal": 0.75
+      }
+    }
+  },
+  "interpretation": "play_optimal/regret/clear_taken measure agreement with a reference scorer that shares the policy's scoring model; they are not optimality, strength or win-rate claims",
+  "runtime": "lupa.luajit21",
+  "scenarios": 198,
+  "seeds": [
+    11,
+    23,
+    37
+  ],
+  "wall_seconds": 19.96
+}

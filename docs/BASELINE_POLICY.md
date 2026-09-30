@@ -189,9 +189,8 @@ Rookie keeps the per-card heuristic.
 
 On the **last hand** with a known requirement, discards are ranked by the chance
 that the follow-up play reaches what is still needed, and expected value only
-breaks ties: only a clear matters then. To stay inside the 2M-instruction
-sandbox budget, the draw-aware evaluation covers at most 40 discard candidates
-and is skipped for hands over 12 cards (the per-card heuristic then decides).
+breaks ties: only a clear matters then. The draw-aware evaluation is bounded
+by the budget rules in §4.5.
 Drawn cards are priced so they cannot overstate the target: flush fillers use
 ranks nobody kept, and a straight's missing card takes a suit none of the kept
 cards share.
@@ -273,11 +272,36 @@ Director's Cut and Retcon are deliberately +0, as are unknown vouchers.
 Multiplayer gamemodes that ban vouchers (for example Attrition) already remove
 them from the legal actions. Rookie keeps the flat score.
 
-**No crowding out Jokers.** While a Joker slot is free and a visible shop Joker
-is affordable, a voucher's or pack's base score is capped at `item_joker - 20`.
-A strong voucher therefore never pushes out a Joker the estimate cannot value
-(scaling or unmodelled Jokers keep the flat `item_joker`). With every Joker slot
-full, the cap does not apply.
+**No crowding out Jokers (`versus_joker`).** The reference is the best
+*certified* Joker purchase in this shop decision, by its full buy score:
+`item_joker` + edition + estimated gain + economy after its own price. Only a
+Joker scoring above `leave_shop` counts. The adapter certifies a Joker buy only
+when it fits, so full slots mean no reference, except a Negative Joker, which
+needs no slot. Against that Joker, a voucher or pack is scored like this:
+
+- its intrinsic value (`voucher + VOUCHER_VALUE`, or `item_booster +` pack
+  bonus) is capped at that Joker's intrinsic value − 20, so table values cannot
+  crowd out a Joker the estimate values flatly;
+- then each item's economy after its **own** price is added, so the comparison
+  is utility after costs;
+- if the Joker and the voucher/pack both fit the money, the Joker is bought
+  first: the voucher/pack is kept below the Joker's full score. The other item
+  stays affordable afterwards, so this only orders the purchases.
+
+A voucher or pack can still win when only one fits and the Joker would drain
+the money. For example, at $10 an unmodelled $9 Joker loses to a $4 Celestial
+pack. This is not an absolute Joker-first rule. It replaces the earlier flat
+`item_joker - 20` cap, which compared a pack's capped value plus the economy
+after its lower price against a pricier Joker. At $12, a $4 pack could then
+beat a $6–7 Joker purely through the reserve penalty (review M1).
+`tests/policy/test_shop_joker_first.lua` pins these cases:
+
+- Joker, pack and voucher prices;
+- interest breakpoints;
+- a strong Joker against a weak pack;
+- a draining Joker against a strong pack or voucher;
+- full slots, a free slot and a Negative Joker with full slots;
+- Rookie.
 
 **Opening packs.** With `smart_packs`, an `OPEN_BOOSTER` action gets a bonus by
 center prefix:
@@ -318,6 +342,79 @@ made pair, and it prefers to keep made components. The discard score is capped s
 it always stays below a made-pair play. A discard scores `nil` when the visible
 `self.hands` count is `0`, because no hand can be played afterwards (for example
 while waiting on a PvP opponent); the AI then waits instead of discarding.
+
+### 4.5 Instruction budget and source size
+
+The sandbox gives every decision 2,000,000 VM instructions
+(`PolicyEnv.INSTRUCTION_BUDGET`). A decision that exceeds it is refused, and
+three refusals in a row end the AI's match. The play phase is the expensive
+part, so it is bounded deterministically:
+
+- **Work meter.** Every score estimate charges (cards read) × (Jokers applied
+  \+ 2) to `WORK`, which is reset per decision. Each draw-aware discard evaluation
+  also charges its structural cost, `kept × (110 + 20 × discarded)`. Measured on
+  Lua 5.1, one unit costs about 50 VM instructions.
+- **Cheap first pass.** Discard candidates are ranked by the per-card heuristic
+  (`discard_score`), with the id breaking ties. The best ones get the draw-aware
+  evaluation until 40 candidates or `DISCARD_WORK` (24000) units are used.
+  Unevaluated candidates keep their heuristic score, which is below any
+  evaluated one.
+- **Hard stops.** Hands over 12 cards skip the draw-aware search. If the
+  projected play-estimate cost (plays × hand size × (Jokers + 2)) exceeds
+  `PLAY_WORK` (40000), which only happens at absurd sizes (for example
+  32 cards / 40 Jokers), plays keep the category ranking.
+
+Measured worst cases use the real adapter catalogue (≈40 plays + ≈40 discards),
+3 discards and 3 hands left, and cards with enhancements, Red seals and
+editions. Instructions are counted by the sandbox hook (`PolicyEnv.last_instructions`):
+
+| Hand / Jokers | Before (Expert) | After: Competitive / ML | After: Expert | Rookie |
+|---|---|---|---|---|
+| 8 / 5–16 | 1.15–1.58M | ≤ 0.99M | ≤ 1.07M | ≤ 0.18M |
+| 9 / 5–16 | 1.44–1.89M | ≤ 1.05M | ≤ 1.14M | ≤ 0.19M |
+| 10 / 5–16 | 1.75M – **fail** | ≤ 1.13M | ≤ 1.21M | ≤ 0.20M |
+| 11 / 5–16 | **fails most cases** | ≤ 1.16M | ≤ 1.26M | ≤ 0.22M |
+| 12 / 5–16 | **fails almost always** (Comp/ML also fail) | ≤ 1.28M | ≤ 1.33M | ≤ 0.23M |
+| 16 / 16, 24 / 24 (no discard search) | 0.41M, 0.71M | same | same | — |
+| 32 / 40, 48 / 64 (category fallback) | 1.19M, **fail** | ≤ 0.23M | ≤ 0.23M | — |
+
+The "before" column used plain cards with 5 or 8 Jokers (8 seeded deals per
+cell); "after" used 10 enhanced deals per cell with 5, 8 and 16 Jokers.
+These ranges hold for PvP and for non-PvP states where no play clears, on
+Lua 5.1 and on LuaJIT (the sandbox turns the JIT off, so both count
+interpreted instructions). Decision latency in these cases is 35–100 ms
+on Lua 5.1 in the cloud container. Failures after the change: 0.
+`tests/policy/test_budget.lua` runs all of these through the real adapter and
+fails any decision above 1.6M instructions. It records the chosen action ids as
+cross-runtime vectors, so Lua 5.1 and LuaJIT must pick identical actions. With
+the meter disabled, 18 of its cases fail.
+
+The ranking changes how many 8-card discard candidates are evaluated only in
+the costliest states. The discard-quality benchmark is unchanged: forced
+discard quality stays 0.85–0.86 for Competitive and above.
+
+**Source size.** The sandbox rejects sources over 65,536 bytes. The repository
+template keeps its comments and indentation. `BaselinePolicy.source` renders a
+stripped copy, which:
+
+- removes line comments outside strings;
+- removes indentation, trailing whitespace and blank lines;
+- keeps line breaks, so tokens never merge;
+- refuses long brackets, so a future template cannot be half-stripped.
+
+`BaselinePolicy.readable_source` renders the unstripped copy for tests only.
+
+| | Rendered size |
+|---|---|
+| Before (`97358b8`, comments included) | 64,303–64,310 bytes (≈230 bytes of headroom) |
+| This change, if unstripped | 65,248–65,255 bytes (over the cap) |
+| This change, stripped | **50,859–50,866 bytes** (14.7 KB, 22%, under the cap) |
+
+`BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).
+`tests/policy/test_source.lua` fails when a rendered source exceeds it or when
+the guard is raised, so growth has to recover space before it can creep back to
+the hard cap. The same file checks that the stripped and readable sources choose
+the same actions on a spread of play, shop, pack and consumable frames.
 
 ## 5. Difficulties
 
@@ -503,7 +600,8 @@ Conservative denials (do not invent authority):
 
 ## 7. Safety and boundary summary
 
-- Source is text-only and within the 64 KiB cap; bytecode is rejected upstream.
+- Source is text-only, within the 56 KiB practical guard and the 64 KiB cap
+  (§4.5); bytecode is rejected upstream.
 - No global writes; the generated chunk declares only locals.
 - No RNG, seed, clock, filesystem, network, process or engine access; the
   restricted environment exposes none of them.
@@ -564,6 +662,12 @@ offered copy, unaffordable-from-cash price) that must all leave the shop rather
 than sell. Non-SHOP frames with a full board still yield `policy_no_action` for
 every `SELL_*`. Every chosen action is asserted to be a member of the generated
 candidate set and to be stable on repeat, on both runtimes.
+
+`tests/policy/test_budget.lua` drives the real engine adapter with 9–12 card
+hands (and absurd sizes) and asserts every decision stays under a 1.6M
+instruction guard (§4.5). `tests/policy/test_shop_joker_first.lua` pins the
+Joker/voucher/pack comparison (§4.4). `test_source.lua` enforces the source
+guard and stripped-vs-readable equivalence.
 
 Lua fixtures are schema-honest: they are built with the real observation schema
 and asserted to observe/export successfully; they are synthetic frames, not

@@ -8,15 +8,23 @@ requirement. It runs through the *real* trusted pipeline: engine fixture ->
 EngineAdapter certificates -> StateReader -> AIObservation export -> sandboxed
 policy (tools/lua/policy_env.lua), exactly like a live decision.
 
-An independent Python reference scorer (public Balatro rules: base hand
-chips/mult at level 1, card chips, enhancements, editions, red seal and a set of
-simple Jokers) then grades the choice. It is an evaluation aid, not the game:
-scaling Jokers, hand levels, boss effects and probabilistic effects beyond their
-expectation are not modelled, so the numbers measure *relative* policy quality
-and catch regressions. They are not win rates.
+A separate Python reference scorer (public Balatro rules: base hand chips/mult,
+hand levels, card chips, enhancements, editions, red seal and a set of simple
+Jokers) then grades the choice. It is written separately but encodes the *same*
+scoring model as the policy's estimator, so high agreement shows the two
+implementations match, not that the policy plays well or optimally. Scaling
+Jokers, rule-changing Jokers, boss effects and probabilistic effects beyond
+their expectation are not modelled. The numbers catch regressions and compare
+difficulties; they are not win rates or strength claims.
+
+--hard cycles stress families the shared model does not cover (9-12 card hands,
+scaling Jokers, rule-changing Jokers, boss blinds). For those, the agreement
+metrics are reported but only reliability (failures, instruction budget,
+latency) is trustworthy.
 
 Metrics per difficulty:
-  play_optimal    share of PLAY choices whose reference score is the best offered play
+  play_optimal    share of PLAY choices whose reference score is the best offered
+                  play (agreement with the shared scoring model, not optimality)
   regret          mean 1 - chosen/best over PLAY choices
   clear_taken     when an offered play clears the remaining requirement, share of
                   decisions that played a clearing hand
@@ -304,13 +312,30 @@ FAMILIES = {
 
 STAGES = ("early", "mid", "late")
 
+# Stress families (--hard): outside the shared model, so only reliability is
+# meaningful. Unmodelled Jokers count as no effect in the reference scorer.
+SCALING_JOKERS = ["j_ride_the_bus", "j_green_joker", "j_supernova", "j_obelisk", "j_hologram",
+                  "j_constellation", "j_lucky_cat", "j_runner", "j_square", "j_spare_trousers"]
+RULE_JOKERS = ["j_four_fingers", "j_shortcut", "j_smeared", "j_splash", "j_pareidolia"]
+# Boss blinds and the cards they debuff (suit bosses, The Plant); others change
+# the rules without debuffing (The Psychic, The Eye, The Mouth, The Flint...).
+BOSS_DEBUFF = {"bl_club": "Clubs", "bl_goad": "Spades", "bl_window": "Diamonds", "bl_head": "Hearts", "bl_plant": "face"}
+BOSSES = sorted(BOSS_DEBUFF) + ["bl_psychic", "bl_eye", "bl_mouth", "bl_flint", "bl_arm", "bl_needle", "bl_water"]
+FAMILIES.update({
+    "large_hand": dict(FAMILIES["mid"], hand_sizes=[9, 10, 11, 12], jokers=[2, 3, 4, 5]),
+    "scaling": dict(FAMILIES["mid"], extra=SCALING_JOKERS),
+    "rule": dict(FAMILIES["mid"], extra=RULE_JOKERS),
+    "boss": dict(FAMILIES["mid"], bosses=BOSSES),
+})
+HARD = ("large_hand", "scaling", "rule", "boss")
+
 
 def make_scenario(rng, family="mixed"):
     shape = FAMILIES[family]
     deck = [(r, s) for r in RANKS for s in SUITS]
     rng.shuffle(deck)
     hand = []
-    for rank, suit in deck[:8]:
+    for rank, suit in deck[: rng.choice(shape.get("hand_sizes", [8]))]:
         card = {"rank": rank, "suit": suit}
         roll = rng.random()
         if roll < shape["enhance"]:
@@ -321,6 +346,14 @@ def make_scenario(rng, family="mixed"):
             card["seal"] = "Red"
         hand.append(card)
     jokers = rng.sample(JOKER_KEYS, rng.choice(shape["jokers"]))
+    if shape.get("extra"):
+        jokers.insert(rng.randrange(len(jokers) + 1), rng.choice(shape["extra"]))
+    boss = rng.choice(shape["bosses"]) if shape.get("bosses") else None
+    if boss in BOSS_DEBUFF:
+        for card in hand:
+            target = BOSS_DEBUFF[boss]
+            if card["suit"] == target or (target == "face" and card["rank"] in ("Jack", "Queen", "King")):
+                card["debuff"] = True
     levels = {}
     for name in rng.sample(sorted(LEVEL_UP), rng.choice(shape["levels"])):
         level = rng.choice(shape["level_values"])
@@ -331,7 +364,7 @@ def make_scenario(rng, family="mixed"):
             "chips": base_chips + add_chips * (level - 1),
             "mult": base_mult + add_mult * (level - 1),
         }
-    pvp = rng.random() < 0.2
+    pvp = boss is None and rng.random() < 0.2
     requirement = rng.choice(shape["requirements"])
     scored = int(requirement * rng.choice([0, 0, 0.2, 0.5, 0.8]))
     return {
@@ -344,6 +377,7 @@ def make_scenario(rng, family="mixed"):
         "pvp": pvp,
         "levels": levels,
         "family": family + ("/pvp" if pvp else ""),
+        "boss": boss,
     }
 
 
@@ -379,7 +413,7 @@ return function(repo, scenarios, difficulties)
 			hand[i] = support.card({
 				rank = c.rank, suit = c.suit, center = center,
 				center_set = c.center and "Enhanced" or "Default",
-				edition = c.edition, seal = c.seal,
+				edition = c.edition, seal = c.seal, debuff = c.debuff,
 			})
 		end
 		local jokers = {}
@@ -393,7 +427,7 @@ return function(repo, scenarios, difficulties)
 			hands_left = sc.hands_left,
 			discards_left = sc.discards_left,
 			chips = sc.chips,
-			blind_key = sc.pvp and "bl_mp_nemesis" or "bl_small",
+			blind_key = sc.pvp and "bl_mp_nemesis" or sc.boss or "bl_small",
 			blind_pvp = sc.pvp or nil,
 		})
 		engine.G.GAME.blind.chips = sc.requirement
@@ -442,7 +476,8 @@ return function(repo, scenarios, difficulties)
 				local started = clock()
 				local result = policy_env.run(sources[name], export)
 				local elapsed = clock() - started
-				local choice = { difficulty = name, seconds = elapsed, ok = result.ok == true, code = result.code }
+				local choice = { difficulty = name, seconds = elapsed, ok = result.ok == true, code = result.code,
+					instructions = policy_env.last_instructions() }
 				if result.ok == true and type(result.action) == "table" then
 					choice.id = result.action.id
 					choice.type = result.action.type
@@ -532,7 +567,7 @@ def evaluate(rows, scenarios, discard_samples=0):
             "decisions": 0, "plays": 0, "discards": 0, "other": 0, "no_action": 0,
             "failures": 0, "illegal": 0, "optimal": 0, "regret_sum": 0.0,
             "clear_chances": 0, "clear_taken": 0, "latency": [],
-            "discard_quality": [], "forced_quality": [],
+            "discard_quality": [], "forced_quality": [], "max_instructions": 0,
         }
     coverage = []
     families = {}
@@ -542,7 +577,9 @@ def evaluate(rows, scenarios, discard_samples=0):
             for difficulty in DIFFICULTIES:
                 metrics[difficulty]["failures"] += 1
             continue
-        hand, jokers = scenario["hand"], scenario["jokers"]
+        hand = scenario["hand"]
+        # Unmodelled (scaling / rule-changing) Jokers count as no effect here.
+        jokers = [key for key in scenario["jokers"] if key in JOKERS]
         levels = scenario.get("levels")
         play_scores = {}
         for candidate in row["candidates"]:
@@ -588,6 +625,13 @@ def evaluate(rows, scenarios, discard_samples=0):
             m = metrics[choice["difficulty"]]
             m["decisions"] += 1
             m["latency"].append(choice["seconds"])
+            m["max_instructions"] = max(m["max_instructions"], choice.get("instructions") or 0)
+            fam_all = families.setdefault(scenario.get("family", "mixed"), {}).setdefault(
+                choice["difficulty"], {"decisions": 0, "optimal": 0, "plays": 0, "clear_chances": 0, "clear_taken": 0, "discards": 0}
+            )
+            fam_all["max_instructions"] = max(fam_all.get("max_instructions", 0), choice.get("instructions") or 0)
+            if not choice["ok"] and choice.get("code") != "policy_no_action":
+                fam_all["failures"] = fam_all.get("failures", 0) + 1
             if not choice["ok"]:
                 if choice.get("code") == "policy_no_action":
                     m["no_action"] += 1
@@ -638,6 +682,8 @@ def evaluate(rows, scenarios, discard_samples=0):
                 "play_optimal": round(f["optimal"] / f["plays"], 4) if f["plays"] else None,
                 "clear_taken": round(f["clear_taken"] / f["clear_chances"], 4) if f["clear_chances"] else None,
                 "discard_rate": round(f["discards"] / max(1, f["decisions"]), 4),
+                "failures": f.get("failures", 0),
+                "max_instructions": f.get("max_instructions", 0),
             }
             for difficulty, f in sorted(by_difficulty.items())
         }
@@ -661,7 +707,12 @@ def evaluate(rows, scenarios, discard_samples=0):
             "latency_ms_p95": round(1000 * latency[int(0.95 * (len(latency) - 1))], 3),
             "discard_quality": round(statistics.mean(quality), 4) if quality else None,
             "forced_discard_quality": round(statistics.mean(forced_quality), 4) if forced_quality else None,
+            "max_instructions": m["max_instructions"],
         }
+    report["interpretation"] = (
+        "play_optimal/regret/clear_taken measure agreement with a reference scorer that shares the "
+        "policy's scoring model; they are not optimality, strength or win-rate claims"
+    )
     return report
 
 
@@ -701,6 +752,7 @@ def main(argv=None):
     parser.add_argument("--json", type=Path)
     parser.add_argument("--check", type=Path)
     parser.add_argument("--families", action="store_true", help="cycle early/mid/late stage families instead of the mixed baseline distribution")
+    parser.add_argument("--hard", action="store_true", help="cycle stress families outside the shared model (large hands, scaling/rule Jokers, bosses)")
     parser.add_argument("--discard-samples", type=int, default=0, help="Monte Carlo draws per discard candidate (slow)")
     args = parser.parse_args(argv)
     seeds = args.seed or [11, 23, 37]
@@ -708,7 +760,9 @@ def main(argv=None):
     for seed in seeds:
         rng = random.Random(seed)
         count = args.scenarios // len(seeds)
-        if args.families:
+        if args.hard:
+            scenarios.extend(make_scenario(rng, HARD[i % len(HARD)]) for i in range(count))
+        elif args.families:
             scenarios.extend(make_scenario(rng, STAGES[i % len(STAGES)]) for i in range(count))
         else:
             scenarios.extend(make_scenario(rng) for _ in range(count))
@@ -720,7 +774,7 @@ def main(argv=None):
     report = evaluate(rows, scenarios, args.discard_samples)
     report["scenarios"] = len(scenarios)
     report["seeds"] = seeds
-    report["distribution"] = "families" if args.families else "mixed"
+    report["distribution"] = "hard" if args.hard else ("families" if args.families else "mixed")
     report["runtime"] = args.runtime
     report["wall_seconds"] = round(elapsed, 2)
     print(json.dumps(report, indent=2, sort_keys=True))

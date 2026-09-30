@@ -181,6 +181,13 @@ local CONF = %s
 local PLAY = nil
 -- The displayed poker-hand levels (self.hand_levels) for this decision, or nil.
 local LEVELS = nil
+-- Deterministic work meter, reset per decision: every score estimate charges
+-- (cards read) x (Jokers applied + 2), which tracks its VM instruction cost.
+-- Optional searches stop once their share is spent, so the sandbox budget is
+-- not reached whatever the hand size or Joker count.
+local WORK = 0
+-- The best certified Joker purchase in this shop decision (best_joker), or false.
+local SHOP_BEST = false
 
 local function byte_less(a, b)
 	local na = #a
@@ -573,8 +580,12 @@ local RULE_JOKERS = {
 }
 -- Estimates are clamped here (also NaN), far above any meaningful score.
 local ESTIMATE_CAP = 1e15
--- At most this many discard candidates get the draw-aware evaluation.
+-- Draw-aware discard search: at most this many candidates, best cheap
+-- heuristic first, while WORK stays under DISCARD_WORK (measured worst cases
+-- in docs/BASELINE_POLICY.md).
 local DISCARD_EV_LIMIT = 40
+local DISCARD_WORK = 24000
+local PLAY_WORK = 40000
 -- Estimate-based Joker ordering is limited to small Joker rows and a bounded
 -- number of candidates per decision, so it always fits the sandbox budget.
 local REORDER_EST_MAX_JOKERS = 8
@@ -887,6 +898,7 @@ local function estimate_score(played, held, jokers)
 			mult = mult * 1.5
 		end
 	end
+	WORK = WORK + (#played + (held ~= nil and #held or 0)) * (#effects + 2)
 	return chips * mult, name
 end
 
@@ -1118,6 +1130,8 @@ local function discard_ev(observation, discard_refs, jokers, need)
 		end
 	end
 	local d = #discard_refs
+	-- Structural search cost that estimate_score does not charge.
+	WORK = WORK + #kept * (110 + 20 * d)
 	local pool = 52 - #hand
 	local deck = s.deck
 	if type(deck) == "table" and type(deck.total) == "number" and deck.total > 0 and deck.total < pool then
@@ -1219,6 +1233,15 @@ local function discard_ev(observation, discard_refs, jokers, need)
 			end
 		end
 	end
+	-- Drawn straight cards take a suit none of the kept cards share, so a
+	-- straight target is never priced as a straight flush.
+	local fill_suit = "D"
+	for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
+		if (kept_suit[candidate_suit] or 0) == 0 then
+			fill_suit = candidate_suit
+			break
+		end
+	end
 	-- Straights missing exactly one rank (open or gutshot).
 	if d >= 1 then
 		for low = 1, 10 do
@@ -1239,21 +1262,6 @@ local function discard_ev(observation, discard_refs, jokers, need)
 				local outs = 4 - (seen_rank[missing] or 0)
 				if outs > 0 then
 					local play = {}
-					-- The drawn card takes a suit none of the kept four share, so a
-					-- straight is never priced as a straight flush.
-					local fill_suit = "D"
-					for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
-						local clash = false
-						for i = 1, #kept do
-							if suit_key(kept[i].suit) == candidate_suit then
-								clash = true
-							end
-						end
-						if not clash then
-							fill_suit = candidate_suit
-							break
-						end
-					end
 					for v = low, low + 4 do
 						local rv = v
 						if v == 1 then
@@ -1323,21 +1331,6 @@ local function discard_ev(observation, discard_refs, jokers, need)
 						if p < 0 then
 							p = 0
 						end
-						-- Drawn cards take a suit none of the kept cards share, so the
-						-- target is never priced as a straight flush.
-						local fill_suit = "D"
-						for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
-							local clash = false
-							for i = 1, #kept do
-								if suit_key(kept[i].suit) == candidate_suit then
-									clash = true
-								end
-							end
-							if not clash then
-								fill_suit = candidate_suit
-								break
-							end
-						end
 						local play = {}
 						for v = low, low + 4 do
 							local rv = v
@@ -1359,109 +1352,6 @@ local function discard_ev(observation, discard_refs, jokers, need)
 		end
 	end
 	return ev, p_clear
-end
-
-local function analyse_plays(observation, actions, count)
-	local info = {
-		est = {}, best = nil, remaining = nil, clears = false, discard_mode = false,
-		-- Per-decision Joker-order budget (see reorder_score).
-		reorders_left = REORDER_EST_LIMIT, panel_now = nil,
-	}
-	local s = observation.self
-	if type(s) ~= "table" or type(s.hand) ~= "table" then
-		return info
-	end
-	local jokers = nil
-	if CONF.est_jokers then
-		jokers = s.jokers
-	end
-	-- Jokers that change what a hand is (Four Fingers, Shortcut, Smeared,
-	-- Splash, Pareidolia) make the estimate wrong: keep the category ranking.
-	if type(s.jokers) == "table" then
-		for i = 1, #s.jokers do
-			local j = s.jokers[i]
-			if type(j) == "table" and RULE_JOKERS[j.center] then
-				return info
-			end
-		end
-	end
-	local best = nil
-	local best_name = nil
-	for i = 1, count do
-		local a = actions[i]
-		if type(a) == "table" and a.type == "PLAY_CARDS" then
-			local cards = cards_for(observation, a.card_refs)
-			if cards ~= nil and #cards > 0 then
-				local value, name = estimate_score(cards, held_after(s.hand, a.card_refs), jokers)
-				if value ~= nil and (value ~= value or value >= ESTIMATE_CAP) then
-					value = ESTIMATE_CAP
-				end
-				if value ~= nil then
-					info.est[a.id] = value
-					if best == nil or value > best then
-						best = value
-						best_name = name
-					end
-				end
-			end
-		end
-	end
-	info.best = best
-	if CONF.use_requirement and observation.phase ~= "MULTIPLAYER_PVP" then
-		local need = display_number(s.blind_requirement)
-		local have = display_number(s.current_score) or 0
-		if need ~= nil and need > 0 then
-			info.remaining = need - have
-		end
-	end
-	if best ~= nil and info.remaining ~= nil and best >= info.remaining then
-		info.clears = true
-	end
-	local discards = s.discards
-	local hands = s.hands
-	local can_discard = type(discards) == "number" and discards > 0 and type(hands) == "number" and hands > 0
-	-- Draw-aware discards stay inside the instruction budget: skipped for very
-	-- large hands and evaluated for at most DISCARD_EV_LIMIT candidates.
-	if CONF.discard_ev and can_discard and not info.clears and #s.hand <= 12 then
-		info.discard_ev = {}
-		info.last_hand = hands == 1 and info.remaining ~= nil
-		local need = nil
-		if info.last_hand then
-			need = info.remaining
-			info.discard_clear = {}
-		end
-		local best_ev = nil
-		local evaluated = 0
-		for i = 1, count do
-			local a = actions[i]
-			if evaluated < DISCARD_EV_LIMIT and type(a) == "table" and a.type == "DISCARD_CARDS" and type(a.card_refs) == "table" then
-				evaluated = evaluated + 1
-				local value, p_clear = discard_ev(observation, a.card_refs, jokers, need)
-				info.discard_ev[a.id] = value
-				if info.discard_clear ~= nil then
-					info.discard_clear[a.id] = p_clear
-				end
-				if best_ev == nil or value > best_ev then
-					best_ev = value
-				end
-			end
-		end
-		info.best_discard_ev = best_ev
-	end
-	if best ~= nil and not info.clears and can_discard then
-		if best_name == "high_card" then
-			info.discard_mode = true
-		elseif info.remaining ~= nil and hands == 1 then
-			-- Last hand and nothing clears: improving is the only chance.
-			info.discard_mode = true
-		elseif info.remaining ~= nil and best * hands * 100 < info.remaining * CONF.discard_need_pct then
-			info.discard_mode = true
-		elseif info.best_discard_ev ~= nil and info.best_discard_ev * 100 > best * CONF.discard_gain_pct then
-			-- Drawing is expected to beat the best play now by a clear margin.
-			info.discard_mode = true
-		end
-	end
-	return info
 end
 
 local function hand_aggregates(hand)
@@ -1543,6 +1433,138 @@ local function discard_score(observation, action)
 		score = cap
 	end
 	return score
+end
+
+local function analyse_plays(observation, actions, count)
+	local info = {
+		est = {}, best = nil, remaining = nil, clears = false, discard_mode = false,
+		-- Per-decision Joker-order budget (see reorder_score).
+		reorders_left = REORDER_EST_LIMIT, panel_now = nil,
+	}
+	local s = observation.self
+	if type(s) ~= "table" or type(s.hand) ~= "table" then
+		return info
+	end
+	local jokers = nil
+	if CONF.est_jokers then
+		jokers = s.jokers
+	end
+	-- Jokers that change what a hand is (Four Fingers, Shortcut, Smeared,
+	-- Splash, Pareidolia) make the estimate wrong: keep the category ranking.
+	if type(s.jokers) == "table" then
+		for i = 1, #s.jokers do
+			local j = s.jokers[i]
+			if type(j) == "table" and RULE_JOKERS[j.center] then
+				return info
+			end
+		end
+	end
+	-- Projected estimate cost; past PLAY_WORK (only absurd hand and Joker
+	-- counts) keep the category ranking rather than risk the budget.
+	local plays = 0
+	for i = 1, count do
+		local a = actions[i]
+		if type(a) == "table" and a.type == "PLAY_CARDS" then
+			plays = plays + 1
+		end
+	end
+	if plays * #s.hand * ((type(jokers) == "table" and #jokers or 0) + 2) > PLAY_WORK then
+		return info
+	end
+	local best = nil
+	local best_name = nil
+	for i = 1, count do
+		local a = actions[i]
+		if type(a) == "table" and a.type == "PLAY_CARDS" then
+			local cards = cards_for(observation, a.card_refs)
+			if cards ~= nil and #cards > 0 then
+				local value, name = estimate_score(cards, held_after(s.hand, a.card_refs), jokers)
+				if value ~= nil and (value ~= value or value >= ESTIMATE_CAP) then
+					value = ESTIMATE_CAP
+				end
+				if value ~= nil then
+					info.est[a.id] = value
+					if best == nil or value > best then
+						best = value
+						best_name = name
+					end
+				end
+			end
+		end
+	end
+	info.best = best
+	if CONF.use_requirement and observation.phase ~= "MULTIPLAYER_PVP" then
+		local need = display_number(s.blind_requirement)
+		local have = display_number(s.current_score) or 0
+		if need ~= nil and need > 0 then
+			info.remaining = need - have
+		end
+	end
+	if best ~= nil and info.remaining ~= nil and best >= info.remaining then
+		info.clears = true
+	end
+	local discards = s.discards
+	local hands = s.hands
+	local can_discard = type(discards) == "number" and discards > 0 and type(hands) == "number" and hands > 0
+	-- Draw-aware discards stay inside the instruction budget: skipped for very
+	-- large hands; otherwise candidates are ranked by the cheap per-card
+	-- heuristic (id breaks ties) and the best ones are evaluated until
+	-- DISCARD_EV_LIMIT candidates or the DISCARD_WORK share of WORK is used.
+	if CONF.discard_ev and can_discard and not info.clears and #s.hand <= 12 then
+		info.discard_ev = {}
+		info.last_hand = hands == 1 and info.remaining ~= nil
+		local need = nil
+		if info.last_hand then
+			need = info.remaining
+			info.discard_clear = {}
+		end
+		local ranked = {}
+		for i = 1, count do
+			local a = actions[i]
+			if type(a) == "table" and a.type == "DISCARD_CARDS" and type(a.card_refs) == "table" then
+				local h = discard_score(observation, a)
+				if h ~= nil then
+					ranked[#ranked + 1] = { a = a, h = h, id = type(a.id) == "string" and a.id or "" }
+				end
+			end
+		end
+		table.sort(ranked, function(x, y)
+			if x.h ~= y.h then
+				return x.h > y.h
+			end
+			return byte_less(x.id, y.id)
+		end)
+		local best_ev = nil
+		local limit = WORK + DISCARD_WORK
+		for i = 1, #ranked do
+			local a = ranked[i].a
+			if i <= DISCARD_EV_LIMIT and WORK < limit then
+				local value, p_clear = discard_ev(observation, a.card_refs, jokers, need)
+				info.discard_ev[a.id] = value
+				if info.discard_clear ~= nil then
+					info.discard_clear[a.id] = p_clear
+				end
+				if best_ev == nil or value > best_ev then
+					best_ev = value
+				end
+			end
+		end
+		info.best_discard_ev = best_ev
+	end
+	if best ~= nil and not info.clears and can_discard then
+		if best_name == "high_card" then
+			info.discard_mode = true
+		elseif info.remaining ~= nil and hands == 1 then
+			-- Last hand and nothing clears: improving is the only chance.
+			info.discard_mode = true
+		elseif info.remaining ~= nil and best * hands * 100 < info.remaining * CONF.discard_need_pct then
+			info.discard_mode = true
+		elseif info.best_discard_ev ~= nil and info.best_discard_ev * 100 > best * CONF.discard_gain_pct then
+			-- Drawing is expected to beat the best play now by a clear margin.
+			info.discard_mode = true
+		end
+	end
+	return info
 end
 
 local function spendable(observation)
@@ -1758,36 +1780,6 @@ local function pack_value(observation, center)
 	return PACK_VALUE[i][2]
 end
 
--- A visible shop Joker that is affordable while a Joker slot is free. Vouchers
--- and packs are capped below a Joker buy then, so a strong voucher never
--- crowds out a Joker the estimate cannot value (scaling/unmodelled Jokers keep
--- the flat item_joker score).
-local function joker_on_offer(observation, spend)
-	if joker_room(observation) ~= true then
-		return false
-	end
-	local shop = observation.shop
-	if type(shop) ~= "table" or type(shop.items) ~= "table" then
-		return false
-	end
-	for i = 1, #shop.items do
-		local item = shop.items[i]
-		if type(item) == "table" and item.redacted ~= true and item.kind == "joker"
-			and type(item.cost) == "number" and item.cost <= spend then
-			return true
-		end
-	end
-	return false
-end
-
-local function below_joker(observation, spend, base)
-	local cap = CONF.item_joker - 20
-	if base > cap and joker_on_offer(observation, spend) then
-		return cap
-	end
-	return base
-end
-
 -- Pack pick: a planet for an already-levelled hand compounds (the policy
 -- keeps playing what it has levelled), so it gets points per displayed level.
 local function planet_pick_value(observation, center)
@@ -1883,6 +1875,45 @@ local function buy_score(observation, action)
 end
 
 
+-- The best certified Joker purchase this shop decision, by its full buy score
+-- (edition, estimated gain and economy after its own price), or false. Only
+-- Jokers worth buying over leaving count. Computed once per decision.
+local function best_joker(observation, actions, count)
+	local best = false
+	local spend = spendable(observation)
+	for i = 1, count do
+		local a = actions[i]
+		if type(a) == "table" and a.type == "BUY_ITEM" then
+			local item = find_by_id(observation.shop.items, a.item_ref)
+			local score = item ~= nil and item.kind == "joker" and buy_score(observation, a) or nil
+			if score ~= nil and score > CONF.leave_shop and (not best or score > best.score) then
+				best = { score = score, cost = item.cost, intrinsic = score - economy_bonus(spend - item.cost) }
+			end
+		end
+	end
+	return best
+end
+
+-- Final score of a voucher or pack with intrinsic value `base` and price
+-- `cost`, measured against the best Joker purchase (M1 of
+-- docs/CLAUDE_BATCH2_REVIEW.md). Its intrinsic value never exceeds that
+-- Joker's, so table values cannot crowd it out; economy after each price is
+-- then compared honestly, so a Joker that would drain the money can lose. When
+-- both fit the money the Joker is bought first (the other stays affordable).
+local function versus_joker(observation, spend, base, cost)
+	local best = SHOP_BEST
+	if best then
+		if base > best.intrinsic - 20 then
+			base = best.intrinsic - 20
+		end
+	end
+	local score = base + economy_bonus(spend - cost)
+	if best and best.cost + cost <= spend and score > best.score - 20 then
+		score = best.score - 20
+	end
+	return score
+end
+
 local function voucher_score(observation, action)
 	local shop = observation.shop
 	if type(shop) ~= "table" then
@@ -1900,11 +1931,10 @@ local function voucher_score(observation, action)
 	if spend == nil or spend < cost then
 		return nil
 	end
-	local base = CONF.voucher
 	if CONF.voucher_values and type(item.center) == "string" then
-		base = below_joker(observation, spend, base + (VOUCHER_VALUE[item.center] or 0))
+		return versus_joker(observation, spend, CONF.voucher + (VOUCHER_VALUE[item.center] or 0), cost)
 	end
-	return base + economy_bonus(spend - cost)
+	return CONF.voucher + economy_bonus(spend - cost)
 end
 
 local function open_booster_score(observation, action)
@@ -1931,7 +1961,7 @@ local function open_booster_score(observation, action)
 			-- Every Joker slot is full: only a Negative Joker could be taken.
 			return nil
 		end
-		base = below_joker(observation, spend, base + pack_value(observation, item.center))
+		return versus_joker(observation, spend, base + pack_value(observation, item.center), cost)
 	end
 	return base + economy_bonus(spend - cost)
 end
@@ -2464,11 +2494,16 @@ return function(observation, actions)
 	end
 	PLAY = nil
 	LEVELS = nil
+	WORK = 0
+	SHOP_BEST = false
 	if CONF.use_levels and type(observation.self) == "table" and type(observation.self.hand_levels) == "table" then
 		LEVELS = observation.self.hand_levels
 	end
 	if CONF.estimate_plays then
 		PLAY = analyse_plays(observation, actions, count)
+	end
+	if (CONF.smart_packs or CONF.voucher_values) and type(observation.shop) == "table" then
+		SHOP_BEST = best_joker(observation, actions, count)
 	end
 	local best = nil
 	local best_score = nil
@@ -2491,6 +2526,63 @@ return function(observation, actions)
 	return best
 end
 ]==]
+
+-- The template keeps its comments and indentation for readers; the rendered
+-- sandbox source drops them (line breaks stay, so tokens never merge). A line
+-- comment starts at the first "--" outside a quoted string. Long brackets are
+-- refused rather than half-handled, so a future template cannot be mangled.
+local function strip_line(line)
+	if string.find(line, "[[", 1, true) or string.find(line, "--[", 1, true) then
+		return nil
+	end
+	local cut = string.find(line, "--", 1, true)
+	if cut ~= nil and string.find(line, "[\"']") ~= nil then
+		cut = nil
+		local quote = nil
+		local i = 1
+		local n = #line
+		while i <= n do
+			local c = string.sub(line, i, i)
+			if quote ~= nil then
+				if c == "\\" then
+					i = i + 1
+				elseif c == quote then
+					quote = nil
+				end
+			elseif c == "\"" or c == "'" then
+				quote = c
+			elseif c == "-" and string.sub(line, i + 1, i + 1) == "-" then
+				cut = i
+				break
+			end
+			i = i + 1
+		end
+	end
+	if cut ~= nil then
+		line = string.sub(line, 1, cut - 1)
+	end
+	return (string.gsub(string.gsub(line, "^%s+", ""), "%s+$", ""))
+end
+
+local function strip_template(text)
+	local out = {}
+	for line in string.gmatch(text, "([^\n]*)\n?") do
+		local kept = strip_line(line)
+		if kept == nil then
+			return nil
+		end
+		if #kept > 0 then
+			out[#out + 1] = kept
+		end
+	end
+	return table.concat(out, "\n") .. "\n"
+end
+
+local STRIPPED = strip_template(TEMPLATE)
+
+-- Practical guard well below the sandbox's hard 65536-byte cap, so policy
+-- growth has to recover space instead of creeping up to the limit.
+BaselinePolicy.SOURCE_GUARD = 57344
 
 local function render_value(value)
 	if type(value) == "number" then
@@ -2548,6 +2640,18 @@ function BaselinePolicy.describe()
 	return out
 end
 
+-- The same policy rendered from the unstripped template (comments kept). Only
+-- for tests proving the stripped source is equivalent; it may exceed the
+-- sandbox cap and is never sent to the policy worker.
+function BaselinePolicy.readable_source(difficulty)
+	local config = type(difficulty) == "string" and CONFIGS[difficulty] or nil
+	local literal = config ~= nil and render_config(config) or nil
+	if literal == nil then
+		return nil, CODE.UNKNOWN_DIFFICULTY
+	end
+	return string.format(TEMPLATE, literal)
+end
+
 function BaselinePolicy.source(difficulty)
 	if type(difficulty) ~= "string" then
 		return nil, CODE.UNKNOWN_DIFFICULTY
@@ -2560,7 +2664,10 @@ function BaselinePolicy.source(difficulty)
 	if literal == nil then
 		return nil, CODE.BAD_CONFIG
 	end
-	local rendered = string.format(TEMPLATE, literal)
+	if STRIPPED == nil then
+		return nil, CODE.BAD_SOURCE
+	end
+	local rendered = string.format(STRIPPED, literal)
 	if type(rendered) ~= "string" or #rendered == 0 then
 		return nil, CODE.BAD_SOURCE
 	end

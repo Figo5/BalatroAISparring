@@ -398,6 +398,7 @@ class LocalLogger:
         "version",
         "errors",
         "seed",
+        "ui",
     )
     SUMMARY_KEYS = (
         "timestamp",
@@ -2114,7 +2115,41 @@ class PracticeService:
             reason=code,
             latency=round(latency, 6) if isinstance(latency, (int, float)) else None,
             errors=None if ok or no_action else code,
+            ui=_ui_facts(job.observation),
         )
+
+
+_UI_TEXT_MAX = 32
+_UI_LEVELS_MAX = 16
+
+
+def _ui_facts(observation) -> Optional[dict]:
+    """The AI's own UI-visible play-phase facts, so a local run can be checked
+    against the Balatro screen (LV-7): hand size, the displayed blind
+    requirement and score, and Run Info hand levels. Bounded; nothing that is
+    not already in the sanitized observation."""
+    if not isinstance(observation, dict):
+        return None
+    own = observation.get("self")
+    if not isinstance(own, dict) or not isinstance(own.get("hand"), list):
+        return None
+    facts: dict = {"hand_size": len(own["hand"])}
+    for key in ("blind_requirement", "current_score"):
+        value = own.get(key)
+        if isinstance(value, str) and len(value) <= _UI_TEXT_MAX:
+            facts[key] = value
+    levels = own.get("hand_levels")
+    if isinstance(levels, dict):
+        out = {}
+        for name in sorted(levels)[:_UI_LEVELS_MAX]:
+            entry = levels[name]
+            if isinstance(name, str) and len(name) <= _UI_TEXT_MAX and isinstance(entry, dict):
+                triple = [entry.get("level"), entry.get("chips"), entry.get("mult")]
+                if all(isinstance(v, int) and not isinstance(v, bool) for v in triple):
+                    out[name] = triple
+        if out:
+            facts["hand_levels"] = out
+    return facts
 
 
 def _canonical_hash(canonical: str) -> str:

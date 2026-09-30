@@ -176,27 +176,70 @@ needs the full re-certification and a companion reinstall, not
 
 ## LV-7 Stronger play, discard, shop and Joker-order decisions
 
-- **Commits:** see `git log --grep "estimate plays"` and `git log --grep "hand levels"`.
-- **Change:** the policy estimates chips × mult (visible Jokers, enhancements,
-  editions, hand levels), prefers plays that clear the displayed requirement,
-  ranks discards by an expected follow-up play, values shop Jokers by their
-  marginal effect on a panel of hands, and orders Jokers (+mult before ×mult).
-  The adapter now also sends `blind_requirement` (non-PvP, hand phases),
-  `hand_levels` (hands listed in Run Info) and discard-specific candidates.
-  None of this is live-proven. The benchmark only compares against its own rules
-  model.
-- **Local test:** play three matches at Major League difficulty with the
-  Gauntlet seeds and three at Rookie. Where you can, compare against the
-  pre-change build on the same seeds.
-- **Expected:** no rejected or illegal decisions, policy latency comparable to
-  before (a few tens of ms), the AI clears small and big blinds more reliably and
-  reaches a later ante, and there are no pointless repeated Joker reorders.
-- **Evidence to capture:** `results.jsonl` and `decisions.jsonl` for each match
-  (ante reached, lives, decisions, rejected, errors, latency), plus a note of any
-  obviously bad play.
-- **Risk if it fails:** the AI gets weaker. The first things to check are
-  over-discarding (unmodelled scaling Jokers and boss effects) and Joker
-  purchases. Rolling back `baseline_policy.lua` is self-contained.
+- **Commits:** see `git log --grep "estimate plays"`, `git log --grep "hand levels"`
+  and `git log --grep "discard search"`.
+- **Change:** the policy:
+  - estimates chips × mult from visible Jokers, enhancements, editions and hand
+    levels;
+  - prefers plays that clear the displayed requirement;
+  - ranks discards by an expected follow-up play, with bounded work
+    (`docs/BASELINE_POLICY.md` §4.5);
+  - values shop Jokers by their marginal effect on a panel of hands;
+  - orders Jokers (+mult before ×mult).
+
+  The adapter sends `blind_requirement` (non-PvP, hand phases), `hand_levels`
+  (hands listed in Run Info) and discard-specific candidates.
+  `decisions.jsonl` now logs these facts per decision in a `ui` field:
+  `hand_size`, `blind_requirement`, `current_score` and `hand_levels`
+  (`name: [level, chips, mult]`). None of this is live-proven. The benchmark
+  only checks agreement with its own shared rules model
+  (`docs/benchmarks/README.md`).
+- **Local test:**
+  - Play three Major League matches on the Gauntlet seeds and three at Rookie.
+    Where you can, compare against the pre-change build on the same seeds.
+  - **Values against the UI.** At least three times per match, screenshot the
+    blind panel ("Score at least" and the round score) and Run Info → Poker
+    Hands. Compare them with the `ui` field of the matching `decisions.jsonl`
+    row (same round, same `tick` order).
+  - **Budget states (H1).** Reach, or set up with a debug seed or Juggler /
+    Turtle Bean / Paint Brush, both of these with 10 or more cards in hand:
+    - a PvP blind with discards left;
+    - a normal blind where no current play clears, with discards left.
+
+    Use a row of 5 or more Jokers if possible. The `ui.hand_size` field confirms
+    the hand size.
+- **Expected:**
+  - `ui.blind_requirement` and `ui.current_score` equal the numbers on screen.
+    `ui.hand_levels` levels, chips and mult equal Run Info.
+    `blind_requirement` is absent during a PvP blind.
+  - Also check the cases only the real game shows:
+    - secret hands appear in `hand_levels` only once Run Info lists them;
+    - The Arm's level decrease is reflected in `hand_levels`;
+    - a boss blind's requirement matches the number on screen;
+    - Multiplayer's `-1` after a non-PvP blind ends never appears as a
+      requirement.
+  - **Zero** `policy_budget_exceeded` in `decisions.jsonl`, `results.jsonl` or
+    the AI runtime log, including every 10+ card state above. No match ends
+    from repeated decision failures.
+  - No rejected or illegal decisions. Policy latency is a few tens of ms,
+    under about 200 ms even at 12 cards.
+  - The AI clears small and big blinds more reliably and reaches a later ante.
+  - There are no pointless repeated Joker reorders.
+- **Evidence to capture:**
+  - `results.jsonl` and `decisions.jsonl` for each match (ante reached, lives,
+    decisions, rejected, errors, latency);
+  - the screenshots with their matching `decisions.jsonl` rows;
+  - the rows for the 10+ card PvP and no-clear states, with their `latency` and
+    `errors`;
+  - a note of any obviously bad play.
+- **Risk if it fails:**
+  - The AI gets weaker. Check over-discarding first (unmodelled scaling Jokers
+    and boss effects), then Joker purchases.
+  - A `ui` mismatch means the adapter reads the wrong engine field. Record which
+    value differs.
+  - A budget error on a large hand means §4.5's calibration does not match the
+    live interpreter: lower `DISCARD_WORK`.
+  - Rolling back `baseline_policy.lua` is self-contained.
 
 ## LV-8 Expert difficulty in the menu and match
 
@@ -206,14 +249,23 @@ needs the full re-certification and a companion reinstall, not
   practice service and the policy. The host marker publishes the service's list,
   and the companion requires an exact set match, so host and companion must come
   from the same build (full re-certification and reinstall).
-- **Local test:** open Play → AI Sparring and check the menu shows four difficulty
-  choices that fit on screen. Select Expert and start a match, then play one PvP
-  round.
-- **Expected:** the menu layout is not clipped. The host accepts `expert`, and
-  `results.jsonl` / `summary.jsonl` record `difficulty=expert`. The AI plays
-  normally with no budget errors (`policy_budget_exceeded` must not appear).
-- **Evidence to capture:** a screenshot of the menu, the log lines with the
-  start request, and `summary.jsonl`.
+- **Local test:**
+  - Open Play → AI Sparring and check the menu layout with **four** difficulty
+    options.
+  - Select Expert and start a match. Confirm the host and companion agree on it.
+  - Play at least one PvP round and time the AI's live decisions.
+- **Expected:**
+  - All four options (Rookie, Competitive, Major League, Expert) fit on screen,
+    unclipped and selectable.
+  - Host and companion difficulty match: the host accepts `expert`, there is no
+    `companion_marker_enums_mismatch`, and `results.jsonl` / `summary.jsonl`
+    record `difficulty=expert`.
+  - Live decision speed: the AI acts without visible stalls. Expert `latency` in
+    `decisions.jsonl` stays within a few tens of ms per decision (well under the
+    worker timeout), comparable to Major League.
+  - `policy_budget_exceeded` never appears.
+- **Evidence to capture:** a screenshot of the menu, the log lines with the start
+  request, `summary.jsonl`, and the `latency` column for the Expert match.
 - **Risk if it fails:** `companion_marker_enums_mismatch` means host and
   companion builds differ, so reinstall both. If the menu layout clips, shorten
   the labels. Failure is fail-closed: the menu reports it cannot start.
@@ -233,15 +285,31 @@ needs the full re-certification and a companion reinstall, not
 - **Local test:** play practice matches until the AI opens a Spectral pack or
   holds a Spectral card. A debug seed with an early Spectral pack helps. Also
   confirm that an Arcana or Celestial pick, and planet use, still happen.
-- **Expected:** a Spectral pack offering only refused cards is skipped
-  (`SKIP_BOOSTER`), and a harmless card in the same pack is picked. A held
-  Ectoplasm or Ouija is sold on the next shop visit. Planets are used promptly.
-  There are no rejected decisions.
+- **Expected, refusals (negative cases):**
+  - A Spectral pack offering only refused cards is skipped (`SKIP_BOOSTER`), and
+    a harmless card in the same pack is picked.
+  - Wraith at $10 or more, and Ankh or Hex with two or more Jokers, are not
+    used, bought or picked.
+  - A held Ectoplasm or Ouija is sold on the next shop visit.
+- **Expected, allowed uses (positive cases):** each should be used or picked
+  when offered:
+  - **Wraith below $10** (for example at $6);
+  - **Ankh with exactly one Joker**;
+  - **Hex with exactly one Joker**.
+
+  The floor refuses only the harmful case, so these must not be skipped or
+  sold.
+- **Expected, general:** planets are used promptly, and there are no rejected
+  decisions.
 - **Evidence to capture:** the `decisions.jsonl` rows around the pack or shop
-  (action type and refs), and `results.jsonl` accepted flags.
+  (action type and refs), the money and Joker count on screen at that moment,
+  and `results.jsonl` accepted flags. Capture each positive case above.
 - **Risk if it fails:**
   - The AI might skip packs it should take. That is a mild weakness, not a
     stall, because `SKIP_BOOSTER` and `LEAVE_SHOP` are always legal.
+  - If a positive case is skipped, check the money / Joker count the
+    observation carried. The floor thresholds are `money >= 10` and
+    `jokers >= 2`.
   - If the game rejects `SELL_CONSUMABLE`, the result shows as a rejected
     decision and the loop continues.
   - Pack cards reach the policy as playing-card records, and the policy
@@ -253,38 +321,52 @@ needs the full re-certification and a companion reinstall, not
 
 ## LV-10 Voucher values and smarter packs
 
-- **Commit:** see `git log --grep "voucher values"`.
-- **Change:** at Competitive and above, the policy:
+- **Commit:** see `git log --grep "voucher values"` and
+  `git log --grep "best affordable Joker"`.
+- **Change:** at **Competitive and above** (Rookie intentionally keeps the
+  simpler flat voucher and pack scores), the policy:
   - values vouchers by effect, and skips Hieroglyph/Petroglyph;
   - prefers Buffoon packs while a Joker slot is free, then Celestial packs;
   - picks the Joker with the largest estimated gain, the planet for its
-    most-levelled hand, and improved playing cards.
+    most-levelled hand, and improved playing cards;
+  - compares vouchers and packs against the best certified Joker purchase
+    after prices and economy (`docs/BASELINE_POLICY.md` §4.4).
 
   This is a policy-only change (certified), so it needs re-certification and a
-  reinstall.
+  reinstall. Pure valuation and crowd-out behaviour is covered by repository
+  tests (`tests/policy/test_shop_values.lua`,
+  `tests/policy/test_shop_joker_first.lua`), not by this live item. Those tests
+  cover:
+  - Joker, pack and voucher price combinations;
+  - interest breakpoints;
+  - a strong Joker against a weak pack, and a draining Joker against a strong
+    pack;
+  - full and free slots.
 - **Local test:** play two or three Competitive or Major League practice
   matches past ante 3. Note which vouchers and packs the AI buys, and what it
-  picks from them.
+  picks from them. Try to see at least one shop with **all Joker slots full**,
+  and one that offers a **Negative Joker** (a debug seed helps).
 - **Expected:**
-  - Vouchers are bought when affordable: Grabber, Wasteful, Paint Brush,
-    Antimatter and similar before the minor ones.
+  - The actions the game receives are legal and accepted, with no rejected
+    decisions.
   - Hieroglyph and Petroglyph are never bought.
-  - A Buffoon pack is not opened when all Joker slots are full.
-  - While a Joker slot is free, an affordable shop Joker is bought before a
-    voucher or pack.
+  - With every Joker slot full, a Buffoon pack is not opened and no
+    non-Negative Joker is bought. A Negative Joker can still be bought: it
+    needs no slot, and the game must accept it.
+  - After a Negative Joker is bought, the Joker count on screen can exceed the
+    base slots, and later shops treat the row as full or not full exactly as
+    the game shows.
   - Celestial picks favour the hand the AI has been levelling.
-  - There are no rejected decisions.
 - **Evidence to capture:**
-  - `decisions.jsonl` rows for `BUY_VOUCHER`, `OPEN_BOOSTER` and
-    `SELECT_BOOSTER_ITEM` (refs), with the shop and pack contents from the
-    screen or a screenshot;
+  - `decisions.jsonl` rows for `BUY_ITEM`, `BUY_VOUCHER`, `OPEN_BOOSTER` and
+    `SELECT_BOOSTER_ITEM` (refs), with the shop and pack contents and Joker
+    count from the screen or a screenshot;
   - `python tools/match_history.py review <session>` output.
 - **Risk if it fails:**
   - Only choice quality is at risk, because every action is still certified
     and legal.
-  - If vouchers are still bought too often or too rarely, tune `VOUCHER_VALUE`.
-    The Joker cap (`item_joker - 20`) applies only while a slot is free and a
-    Joker is affordable.
+  - If a Negative Joker buy is rejected with full slots, the adapter's
+    `slot_room` rule (one over the limit) disagrees with the game. Record the
+    slot count and the result code.
   - If pack center names differ from `p_buffoon*`/`p_celestial*`/…, the pack
     bonus is 0 and behaviour falls back to the previous flat score.
-

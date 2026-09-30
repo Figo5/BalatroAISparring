@@ -369,6 +369,10 @@ return function(ctx)
 			-- Harmless situations are still allowed.
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_wraith" }, 3, 1)).action.type, "USE_CONSUMABLE")
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_ankh" }, 5, 1)).action.type, "USE_CONSUMABLE")
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hex" }, 5, 1)).action.type, "USE_CONSUMABLE", difficulty .. " hex one joker")
+			-- The Wraith boundary: $9 is allowed, $10 is refused.
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_wraith" }, 9, 1)).action.type, "USE_CONSUMABLE", difficulty .. " wraith $9")
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_wraith" }, 10, 1)).action.type, "LEAVE_SHOP", difficulty .. " wraith $10")
 		end
 	end)
 

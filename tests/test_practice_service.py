@@ -1224,6 +1224,11 @@ def test_end_logging_summary_and_decision_rows():
         assert any(row["reason"] == "practice_ok" and row["action"]["type"] == "PLAY_CARDS" for row in decision_rows)
         assert all("credential" not in row and "observation" not in row for row in decision_rows)
         assert decision_rows[-1]["seed"] == "AISP0001"
+        # LV-7: the AI's UI-visible play facts are logged for comparison with
+        # the Balatro screen, bounded and without the raw observation.
+        played = [row for row in decision_rows if isinstance(row.get("ui"), dict)]
+        assert played and isinstance(played[-1]["ui"]["hand_size"], int)
+        assert set(played[-1]["ui"]) <= {"hand_size", "blind_requirement", "current_score", "hand_levels"}
         summaries = read_jsonl(summary_path, lambda row: row.get("result") == "human_win")
         assert summaries and summaries[-1]["result"] == "human_win"
         assert summaries[-1]["seed"] == "AISP0001"
@@ -1231,6 +1236,28 @@ def test_end_logging_summary_and_decision_rows():
         assert summaries[-1]["ai_lives"] == 0
         # ended session rejects further ordinary ops
         assert session.send("ai", "decide_begin", _valid_export())["code"] == ps.CODE_ENDED
+
+
+def test_ui_facts_are_bounded_and_visible_only():
+    observation = {
+        "phase": "PLAY_HAND",
+        "self": {
+            "hand": [{"id": "hand:1"}] * 10,
+            "blind_requirement": "1200",
+            "current_score": "300",
+            "hand_levels": {"pair": {"level": 3, "chips": 30, "mult": 4}, "bad": {"level": "x"}},
+            "secret": "no",
+        },
+    }
+    facts = ps._ui_facts(observation)
+    assert facts == {
+        "hand_size": 10,
+        "blind_requirement": "1200",
+        "current_score": "300",
+        "hand_levels": {"pair": [3, 30, 4]},
+    }
+    assert ps._ui_facts({"phase": "SHOP", "self": {}}) is None
+    assert ps._ui_facts({"self": {"hand": [], "blind_requirement": "9" * 40}}) == {"hand_size": 0}
 
 
 def test_canonicalization_blocks_poisoned_observation():
