@@ -257,6 +257,53 @@ The same rule applies wherever the card could hurt or waste a slot:
 Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
 first. Every other consumable keeps the flat `use_consumable` score.
 
+### 4.4 Vouchers and packs (Competitive and above)
+
+**Vouchers.** With `voucher_values`, a voucher scores `voucher + VOUCHER_VALUE`
++ economy. The ranking is:
+
+- +1 Joker slot, hands or hand size first (Antimatter 260; Grabber, Nacho Tong
+  200; Paint Brush, Palette 160);
+- then discards and shop slots (130/120);
+- then shop economy and planet vouchers (80 down to 20).
+
+Hieroglyph and Petroglyph (-1 ante, but a hand or discard lost every round)
+get -300, so leaving the shop beats them. Omen Globe, Magic Trick, Illusion,
+Director's Cut and Retcon are deliberately +0, as are unknown vouchers.
+Multiplayer gamemodes that ban vouchers (for example Attrition) already remove
+them from the legal actions. Rookie keeps the flat score.
+
+**No crowding out Jokers.** While a Joker slot is free and a visible shop Joker
+is affordable, a voucher's or pack's base score is capped at `item_joker - 20`.
+A strong voucher therefore never pushes out a Joker the estimate cannot value
+(scaling or unmodelled Jokers keep the flat `item_joker`). With every Joker slot
+full, the cap does not apply.
+
+**Opening packs.** With `smart_packs`, an `OPEN_BOOSTER` action gets a bonus by
+center prefix:
+
+| Pack | Bonus |
+|---|---|
+| Buffoon, with a free Joker slot | +60 |
+| Buffoon, all Joker slots full | never opened (only a Negative Joker could be taken) |
+| Buffoon, slot count unknown | 0 |
+| Celestial | +30 |
+| Arcana | +10 |
+| Spectral | 0 |
+| Standard (`p_standard*`, Multiplayer `p_mp_standard*`) | -20 |
+
+**Picking inside a pack.**
+
+- A Joker adds its panel-estimate gain, as a shop Joker does (§4.2), plus its
+  edition value.
+- A planet adds `planet_level_pick` (6) × the displayed level of the hand it
+  upgrades, capped at level 20, so an already-levelled hand keeps compounding.
+  Black Hole adds 40.
+- A playing card adds half its edition value, 15 for a seal and 10 for an
+  enhancement other than Stone (Stone loses rank and suit).
+
+The safety floor (§4.3) applies first.
+
 Purchases are scored by item kind plus a small edition weight: a recognized
 non-negative edition (`foil`/`holo`/`polychrome`) adds a fixed bonus over an
 un-editioned copy and the `negative` edition keeps its bounded slot-saving bonus.
@@ -296,6 +343,8 @@ information or authority differences).
 | `discard_ev` (draw-aware discard ranking) | off | on | on |
 | `use_levels` (displayed poker-hand levels in the estimate) | off | on | on |
 | `joker_gain_value` (panel-based shop Joker value; order by panel) | used only with `est_jokers` (off) | 400 | 400 |
+| `voucher_values` (per-voucher values, §4.4) | off | on | on |
+| `smart_packs` (pack kind preference and value-aware picks, §4.4) | off | on | on |
 
 **Expert** (`expert`, fourth tier) is Major League with a deeper draw search and a more
 willing discard and shop profile. It adds two draw targets: full house from two

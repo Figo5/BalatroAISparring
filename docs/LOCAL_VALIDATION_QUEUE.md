@@ -251,3 +251,40 @@ needs the full re-certification and a companion reinstall, not
     example), the floor does not apply to it: check the `SELECT_BOOSTER_ITEM`
     refs against the pack shown on screen.
 
+## LV-10 Voucher values and smarter packs
+
+- **Commit:** see `git log --grep "voucher values"`.
+- **Change:** at Competitive and above, the policy:
+  - values vouchers by effect, and skips Hieroglyph/Petroglyph;
+  - prefers Buffoon packs while a Joker slot is free, then Celestial packs;
+  - picks the Joker with the largest estimated gain, the planet for its
+    most-levelled hand, and improved playing cards.
+
+  This is a policy-only change (certified), so it needs re-certification and a
+  reinstall.
+- **Local test:** play two or three Competitive or Major League practice
+  matches past ante 3. Note which vouchers and packs the AI buys, and what it
+  picks from them.
+- **Expected:**
+  - Vouchers are bought when affordable: Grabber, Wasteful, Paint Brush,
+    Antimatter and similar before the minor ones.
+  - Hieroglyph and Petroglyph are never bought.
+  - A Buffoon pack is not opened when all Joker slots are full.
+  - While a Joker slot is free, an affordable shop Joker is bought before a
+    voucher or pack.
+  - Celestial picks favour the hand the AI has been levelling.
+  - There are no rejected decisions.
+- **Evidence to capture:**
+  - `decisions.jsonl` rows for `BUY_VOUCHER`, `OPEN_BOOSTER` and
+    `SELECT_BOOSTER_ITEM` (refs), with the shop and pack contents from the
+    screen or a screenshot;
+  - `python tools/match_history.py review <session>` output.
+- **Risk if it fails:**
+  - Only choice quality is at risk, because every action is still certified
+    and legal.
+  - If vouchers are still bought too often or too rarely, tune `VOUCHER_VALUE`.
+    The Joker cap (`item_joker - 20`) applies only while a slot is free and a
+    Joker is affordable.
+  - If pack center names differ from `p_buffoon*`/`p_celestial*`/…, the pack
+    bonus is 0 and behaviour falls back to the previous flat score.
+

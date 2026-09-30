@@ -84,6 +84,12 @@ local BASE = {
 	slot_sell = 220,
 	-- Selling a held consumable the safety floor refuses: points over leave_shop.
 	sell_harmful = 30,
+	-- Per-voucher values (VOUCHER_VALUE) instead of one flat voucher score.
+	voucher_values = true,
+	-- Pack kind preference (PACK_VALUE) and value-aware picks inside a pack.
+	smart_packs = true,
+	-- Pack pick: points per displayed level of the hand a planet upgrades.
+	planet_level_pick = 6,
 	reroll_base = 55,
 	reroll_surplus_cap = 120,
 	leave_shop = 90,
@@ -110,6 +116,8 @@ end
 local CONFIGS = {
 	rookie = make_config("rookie", {
 		start_timer = 0,
+		voucher_values = false,
+		smart_packs = false,
 		est_jokers = false,
 		use_requirement = false,
 		discard_ev = false,
@@ -1680,6 +1688,127 @@ local function harmful_use(observation, center)
 	return false
 end
 
+-- Voucher values added to the flat `voucher` score (voucher_values tiers).
+-- Permanent hands, discards, hand size and slots come first, then economy and
+-- shop vouchers. Ante-lowering vouchers that permanently cost a hand or a
+-- discard score below leave_shop, so they are not bought. Unknown vouchers add
+-- nothing.
+local VOUCHER_VALUE = {
+	v_antimatter = 260, v_grabber = 200, v_nacho_tong = 200, v_paint_brush = 160, v_palette = 160,
+	v_wasteful = 130, v_recyclomancy = 130, v_overstock_norm = 120, v_overstock_plus = 120,
+	v_clearance_sale = 80, v_liquidation = 80, v_observatory = 80, v_telescope = 60, v_glow_up = 60,
+	v_seed_money = 50, v_money_tree = 50, v_hone = 40, v_reroll_surplus = 40, v_reroll_glut = 40,
+	v_crystal_ball = 40, v_planet_merchant = 30, v_planet_tycoon = 30, v_tarot_merchant = 20,
+	v_tarot_tycoon = 20, v_blank = 10, v_hieroglyph = -300, v_petroglyph = -300,
+	-- Deliberately neutral: situational, or banned in some Multiplayer modes.
+	v_omen_globe = 0, v_magic_trick = 0, v_illusion = 0, v_directors_cut = 0, v_retcon = 0,
+}
+
+-- Pack kind by center prefix (smart_packs tiers): Jokers first while a slot is
+-- free, then planets; Standard packs rarely beat keeping the money. A Buffoon
+-- pack with every Joker slot full is not opened at all (open_booster_score).
+local PACK_VALUE = {
+	{ "p_buffoon", 60 }, { "p_celestial", 30 }, { "p_arcana", 10 }, { "p_spectral", 0 }, { "p_standard", -20 },
+	{ "p_mp_standard", -20 },
+}
+
+-- The poker hand each planet levels (observation hand_levels names).
+local PLANET_HAND = {
+	c_pluto = "high_card", c_mercury = "pair", c_uranus = "two_pair", c_venus = "three",
+	c_saturn = "straight", c_jupiter = "flush", c_earth = "full_house", c_mars = "four",
+	c_neptune = "straight_flush", c_planet_x = "five", c_ceres = "flush_house", c_eris = "flush_five",
+}
+
+-- true/false when the visible Joker count and slot limit are known (the limit
+-- already includes Negative Jokers' extra slots), nil when either is unknown.
+local function joker_room(observation)
+	local s = observation.self
+	local match = observation.match
+	if type(s) ~= "table" or type(s.jokers) ~= "table" or type(match) ~= "table" then
+		return nil
+	end
+	if type(match.joker_slots) ~= "number" then
+		return nil
+	end
+	return #s.jokers < match.joker_slots
+end
+
+local function pack_prefix(center)
+	if type(center) ~= "string" then
+		return nil
+	end
+	for i = 1, #PACK_VALUE do
+		local prefix = PACK_VALUE[i][1]
+		if string.sub(center, 1, #prefix) == prefix then
+			return i
+		end
+	end
+	return nil
+end
+
+local function pack_value(observation, center)
+	local i = pack_prefix(center)
+	if i == nil then
+		return 0
+	end
+	if PACK_VALUE[i][1] == "p_buffoon" and joker_room(observation) ~= true then
+		-- Unknown room: no Buffoon preference either way.
+		return 0
+	end
+	return PACK_VALUE[i][2]
+end
+
+-- A visible shop Joker that is affordable while a Joker slot is free. Vouchers
+-- and packs are capped below a Joker buy then, so a strong voucher never
+-- crowds out a Joker the estimate cannot value (scaling/unmodelled Jokers keep
+-- the flat item_joker score).
+local function joker_on_offer(observation, spend)
+	if joker_room(observation) ~= true then
+		return false
+	end
+	local shop = observation.shop
+	if type(shop) ~= "table" or type(shop.items) ~= "table" then
+		return false
+	end
+	for i = 1, #shop.items do
+		local item = shop.items[i]
+		if type(item) == "table" and item.redacted ~= true and item.kind == "joker"
+			and type(item.cost) == "number" and item.cost <= spend then
+			return true
+		end
+	end
+	return false
+end
+
+local function below_joker(observation, spend, base)
+	local cap = CONF.item_joker - 20
+	if base > cap and joker_on_offer(observation, spend) then
+		return cap
+	end
+	return base
+end
+
+-- Pack pick: a planet for an already-levelled hand compounds (the policy
+-- keeps playing what it has levelled), so it gets points per displayed level.
+local function planet_pick_value(observation, center)
+	if center == "c_black_hole" then
+		return 40
+	end
+	local hand = PLANET_HAND[center]
+	if hand == nil then
+		return 0
+	end
+	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
+	local level = 1
+	if type(levels) == "table" and type(levels[hand]) == "table" and type(levels[hand].level) == "number" then
+		level = levels[hand].level
+	end
+	if level > 20 then
+		level = 20
+	end
+	return level * CONF.planet_level_pick
+end
+
 -- The adapter builds every pack card as a playing-card record (kind "card"),
 -- so a pack card's real kind comes from its public center key: "j_*" is a
 -- Joker, any other "c_*" but the plain "c_base" is a Tarot/Planet/Spectral.
@@ -1771,7 +1900,11 @@ local function voucher_score(observation, action)
 	if spend == nil or spend < cost then
 		return nil
 	end
-	return CONF.voucher + economy_bonus(spend - cost)
+	local base = CONF.voucher
+	if CONF.voucher_values and type(item.center) == "string" then
+		base = below_joker(observation, spend, base + (VOUCHER_VALUE[item.center] or 0))
+	end
+	return base + economy_bonus(spend - cost)
 end
 
 local function open_booster_score(observation, action)
@@ -1791,7 +1924,16 @@ local function open_booster_score(observation, action)
 	if spend == nil or spend < cost then
 		return nil
 	end
-	return CONF.item_booster + economy_bonus(spend - cost)
+	local base = CONF.item_booster
+	if CONF.smart_packs then
+		local i = pack_prefix(item.center)
+		if i ~= nil and PACK_VALUE[i][1] == "p_buffoon" and joker_room(observation) == false then
+			-- Every Joker slot is full: only a Negative Joker could be taken.
+			return nil
+		end
+		base = below_joker(observation, spend, base + pack_value(observation, item.center))
+	end
+	return base + economy_bonus(spend - cost)
 end
 
 local function reroll_score(observation, action)
@@ -1855,6 +1997,26 @@ local function booster_select_score(observation, action)
 			score = score + CONF.booster_kind_consumable
 		elseif kind == "card" then
 			score = score + CONF.booster_kind_card
+		end
+		if CONF.smart_packs then
+			if kind == "joker" then
+				score = score + edition_value(card.edition)
+				if CONF.est_jokers and CONF.joker_gain_value > 0 then
+					score = score + math.floor(joker_gain(observation, card.center, card.edition) * CONF.joker_gain_value)
+				end
+			elseif kind == "consumable" then
+				score = score + planet_pick_value(observation, card.center)
+			elseif kind == "card" then
+				-- Standard pack: an edition, seal or enhancement beats a plain card.
+				score = score + math.floor(edition_value(card.edition) / 2)
+				if card.seal ~= nil then
+					score = score + 15
+				end
+				-- Stone loses rank and suit, so it is not an upgrade here.
+				if type(card.center) == "string" and card.center ~= "c_base" and card.center ~= "m_stone" then
+					score = score + 10
+				end
+			end
 		end
 	end
 	return score
