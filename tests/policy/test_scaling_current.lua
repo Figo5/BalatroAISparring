@@ -72,6 +72,31 @@ return function(ctx)
 		end
 	end)
 
+	test("new_additive_joker_is_priced_before_an_owned_grown_xmult", function()
+		-- A new +4 Mult is priced in the slot before an owned x3 Hologram (its
+		-- shown value), as before a known x3 Cavendish, so it beats Sly's +50
+		-- chips on pairs. Priced after the Hologram it would lose.
+		local function pick(d, owned)
+			local frame = Support.shop_frame()
+			frame.self.money = 20
+			frame.self.jokers = { owned }
+			frame.shop.items = {
+				{ kind = "joker", center = "j_joker", cost = 5, sell_cost = 2, face_down = false },
+				{ kind = "joker", center = "j_sly", cost = 5, sell_cost = 2, face_down = false },
+			}
+			frame.certificates.items = {
+				{ type = "BUY_ITEM", certified = true, item_ref = "shop:1", capacity_ok = true },
+				{ type = "BUY_ITEM", certified = true, item_ref = "shop:2", capacity_ok = true },
+				{ type = "LEAVE_SHOP", certified = true },
+			}
+			return Support.run(env, d, frame).action.item_ref
+		end
+		for _, d in ipairs(STRONG) do
+			ctx.eq(pick(d, Support.joker("j_cavendish")), "shop:1", d .. " cavendish")
+			ctx.eq(pick(d, scaled("j_hologram", "xmult", 300)), "shop:1", d .. " hologram x3")
+		end
+	end)
+
 	test("owned_grown_xmult_is_ordered_after_additive_jokers", function()
 		local frame = Support.shop_frame()
 		frame.shop.items = {}

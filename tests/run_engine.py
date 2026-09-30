@@ -194,6 +194,23 @@ def static_cases() -> list[dict]:
     add("executor_stale_revision_code", "exec_stale_revision" in executor_src)
     add("executor_production_sentinel", '"M3_PRODUCTION"' in executor_src and "broker_ports" in executor_src)
     add("adapter_reports_cash_out_control", '"cash_out"' in adapter_src)
+
+    # Owned scaling Joker values (docs/SCALING_VALUES_DESIGN.md): the reader
+    # recomputes what the adapter exports, so both copies must be identical.
+    reader_src = (INTEGRATION / "state_reader.lua").read_text(encoding="utf-8")
+
+    def lua_block(src: str, head: str, end: str) -> str | None:
+        start = src.find(head)
+        if start == -1:
+            return None
+        stop = src.find(end, start)
+        return None if stop == -1 else src[start:stop + len(end)]
+
+    same = []
+    for head, end in (("local SCALING_CURRENT = {", "\n}\n"), ("local function scaling_number(", "\nend\n")):
+        a_block, r_block = lua_block(adapter_src, head, end), lua_block(reader_src, head, end)
+        same.append(a_block is not None and a_block == r_block)
+    add("adapter_reader_scaling_tables_identical", all(same), str(same))
     add(
         "executor_routes_pvp_ready_through_select_blind",
         "pvp_blind_on_deck" in executor_src and "mp_toggle_ready" in executor_src and "select_blind" in executor_src,
