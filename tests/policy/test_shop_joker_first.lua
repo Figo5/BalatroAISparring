@@ -87,6 +87,13 @@ return function(ctx)
 		expect({ money = 30, joker = "j_ride_the_bus", joker_cost = 6, voucher = "v_grabber", voucher_cost = 5 }, "BUY_ITEM", "i30_6_5")
 	end)
 
+	test("joker_wins_when_only_one_fits_and_the_pack_is_slightly_cheaper", function()
+		-- Review N3: $9 Ride the Bus $6 vs Celestial $4; $10 Ride the Bus $7 vs
+		-- Buffoon $4. Only one fits; the $2-3 price gap no longer decides.
+		expect({ money = 9, joker = "j_ride_the_bus", joker_cost = 6, pack = "p_celestial_normal_1", pack_cost = 4 }, "BUY_ITEM", "n3_9_6_4")
+		expect({ money = 10, joker = "j_ride_the_bus", joker_cost = 7, pack = "p_buffoon_normal_1", pack_cost = 4 }, "BUY_ITEM", "n3_10_7_4")
+	end)
+
 	test("strong_joker_beats_weak_pack", function()
 		expect({ money = 12, joker = "j_cavendish", joker_cost = 8, pack = "p_standard_normal_1", pack_cost = 4 }, "BUY_ITEM", "cavendish_standard")
 		expect({ money = 12, joker = "j_cavendish", joker_cost = 8, pack = "p_celestial_normal_1", pack_cost = 4 }, "BUY_ITEM", "cavendish_celestial")

@@ -294,7 +294,7 @@ when it fits, so full slots mean no reference, except a Negative Joker, which
 needs no slot. Against that Joker, a voucher or pack is scored like this:
 
 - its intrinsic value (`voucher + VOUCHER_VALUE`, or `item_booster +` pack
-  bonus) is capped at that Joker's intrinsic value − 20, so table values cannot
+  bonus) is capped at that Joker's intrinsic value − `JOKER_MARGIN` (50), so table values cannot
   crowd out a Joker the estimate values flatly;
 - then each item's economy after its **own** price is added, so the comparison
   is utility after costs;
@@ -378,8 +378,13 @@ part, so it is bounded deterministically:
   evaluated one.
 - **Hard stops.** Hands over 12 cards skip the draw-aware search. If the
   projected play-estimate cost (plays × hand size × (Jokers + 2)) exceeds
-  `PLAY_WORK` (40000), which only happens at absurd sizes (for example
-  32 cards / 40 Jokers), plays keep the category ranking.
+  `PLAY_WORK` (24000), which only happens at absurd sizes (for example
+  12 cards / 64 Jokers or 32 / 40), plays keep the category ranking.
+- **Absolute cap.** The discard allowance is `WORK + DISCARD_WORK`, but never
+  more than `TOTAL_WORK` (30000) for the whole decision. Before this cap, a play
+  estimate close to `PLAY_WORK` plus the full discard share could reach the
+  budget with 12 cards and 48+ Jokers (re-review N2). Absurd shapes now measure
+  at most 1.11M, and `test_budget.lua` holds them to a 1.25M guard.
 
 Measured worst cases use the real adapter catalogue (≈40 plays + ≈40 discards),
 3 discards and 3 hands left, and cards with enhancements, Red seals and
@@ -404,8 +409,9 @@ review's grid: 30 seeded hands per cell, 9–12 cards, 5 and 8 Jokers, PvP and
 no-clear, 1 or 3 hands left, plain and enhanced cards, 5,760 decisions per
 runtime. It found 0 failures, with peaks of 1.337M on Lua 5.1 and 1.356M on
 LuaJIT. A wider sweep with 20 Jokers peaked at 1.43M. Shapes below
-`PLAY_WORK`, such as 30 cards / 31 Jokers or 50 / 18, run the full play
-estimate and measured at most 1.22M. Shapes past it fall back. After held-card pricing (Steel, Baron,
+`PLAY_WORK` run the full play estimate. Before `TOTAL_WORK`, 12-card shapes
+with 48–64 Jokers could still exceed the budget (re-review N2); with it, they
+measure at most 1.11M. Shapes past `PLAY_WORK` fall back. After held-card pricing (Steel, Baron,
 Shoot the Moon) was added, a stress run found a peak of 1.295M over 2,304
 decisions per runtime. It used 9–12 card hands of Steel cards, Kings and
 Queens, with Red seals and Polychrome, 2–16 Jokers including Baron and Shoot
@@ -434,10 +440,10 @@ stripped copy, which:
 
 | | Rendered size |
 |---|---|
-| Before (`97358b8`, comments included) | 64,303–64,310 bytes (≈230 bytes of headroom) |
+| Before (`97358b8`, comments included) | 64,303–64,310 bytes (≈1,230 bytes of headroom) |
 | This change, if unstripped | 66,538–66,545 bytes (over the cap) |
 | This change, stripped | **51,544–51,551 bytes** (≈14.0 KB, 21%, under the cap) |
-| After the follow-up backlog commits | 52,991–52,998 bytes (≈12.5 KB under the cap, 4.3 KB under the guard) |
+| After the follow-up backlog commits | 53,110–53,117 bytes (≈12.4 KB under the cap, 4.2 KB under the guard) |
 
 `BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).
 `tests/policy/test_source.lua` fails when a rendered source exceeds it or when

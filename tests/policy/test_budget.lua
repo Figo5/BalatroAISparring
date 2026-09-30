@@ -15,6 +15,7 @@ return function(ctx)
 	-- Regression guard: measured worst case is about 1.33M (docs/BASELINE_POLICY.md);
 	-- failing here leaves a margin before a live decision would be refused.
 	local GUARD = 1600000
+	local ABSURD_GUARD = 1250000
 	local DIFFICULTIES = { "rookie", "competitive", "major_league", "expert" }
 	local RANKS = { "2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King", "Ace" }
 	local SUITS = { "Hearts", "Diamonds", "Clubs", "Spades" }
@@ -116,7 +117,7 @@ return function(ctx)
 
 	-- One sandboxed decision; asserts it succeeded under the guard and returns
 	-- the chosen id.
-	local function decide(label, difficulty, export)
+	local function decide(label, difficulty, export, guard)
 		local source = Support.source(env, difficulty)
 		local result = env.policy_env.run(source, export)
 		local used = env.policy_env.last_instructions()
@@ -125,7 +126,7 @@ return function(ctx)
 		end
 		ctx.truthy(result.code ~= "policy_budget_exceeded", label .. "_budget_exceeded")
 		ctx.is_true(result.ok == true, label .. "_ok:" .. tostring(result.code))
-		ctx.truthy(used <= GUARD, label .. "_instructions:" .. used)
+		ctx.truthy(used <= (guard or GUARD), label .. "_instructions:" .. used)
 		ctx.truthy(used < budget, label .. "_under_budget")
 		return result.action
 	end
@@ -191,11 +192,16 @@ return function(ctx)
 
 	test("budget_holds_for_absurd_hands_and_joker_rows", function()
 		-- Far beyond real play: the metered/fallback paths must still bound it.
-		for _, shape in ipairs({ { 16, 16 }, { 24, 24 }, { 32, 40 }, { 48, 64 } }) do
+		-- 12 cards with 32-64 Jokers exceeded the budget before TOTAL_WORK
+		-- (review N2 in docs/CLAUDE_BATCH2_REREVIEW.md).
+		for _, shape in ipairs({ { 16, 16 }, { 24, 24 }, { 32, 40 }, { 48, 64 }, { 12, 32 }, { 12, 48 }, { 12, 64 }, { 9, 64 }, { 10, 40 } }) do
 			local export = frame(deal(shape[1] * 7 + shape[2], shape[1], true), shape[2], false)
 			for _, difficulty in ipairs({ "competitive", "expert" }) do
 				local label = string.format("absurd_%d_%dj_%s", shape[1], shape[2], difficulty)
-				local action = decide(label, difficulty, export)
+				-- Tighter than GUARD: with TOTAL_WORK these measure <= 1.11M; with
+				-- only a relative discard allowance 12 x 64 reached ~1.5M here
+				-- (and over 2M in the reviewer's harness).
+				local action = decide(label, difficulty, export, ABSURD_GUARD)
 				ctx.vector("budget_" .. label, action.type .. ":" .. tostring(action.id))
 			end
 		end

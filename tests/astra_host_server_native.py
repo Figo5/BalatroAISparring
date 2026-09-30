@@ -43,7 +43,13 @@ def main():
                     break
                 time.sleep(.05)
             assert verdict.get('ok'),verdict
-            assert (session/'data'/'log_hashes.db').is_file(),'session-local database was not created'
+            # The listener can open before the server writes its database, so
+            # wait for it within the same deadline (re-review N4).
+            database=session/'data'/'log_hashes.db'
+            while not database.is_file() and time.monotonic()<deadline:
+                assert owned.handle.poll() is None,'owned Node exited early'
+                time.sleep(.05)
+            assert database.is_file(),'session-local database was not created'
             result=owned.terminate(timeout=3)
             assert result['terminated'] and owned.handle.poll() is not None,result
             print('PASS verified pinned Node via actual host runner; exact owning PID, both-family loopback inventory, no admin listener')

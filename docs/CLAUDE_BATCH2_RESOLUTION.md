@@ -26,9 +26,12 @@ metered draw-aware evaluation (`docs/BASELINE_POLICY.md` §4.5). The global
 limit was not raised. On the original review's 30-hand grid (9–12 cards, 5 and
 8 Jokers, PvP and no-clear, all three strong tiers, 5,760 decisions per runtime)
 the worst cases are 1.337M instructions on Lua 5.1 and 1.356M on LuaJIT (68%),
-with 0 failures. A wider sweep up to 20 Jokers peaks at 1.43M. Oversized shapes
-below `PLAY_WORK` measured at most 1.22M. Shapes past it, up to 48 cards /
-64 Jokers, fall back to category ranking and stay under 0.25M.
+with 0 failures. A wider sweep up to 20 Jokers peaks at 1.43M. The local
+re-review (`docs/CLAUDE_BATCH2_REREVIEW.md`, N2) showed that 12-card hands with
+48–64 Jokers could still exceed the budget, because the discard allowance was
+relative. An absolute `TOTAL_WORK` cap closes this: such shapes now measure at
+most 1.11M. Shapes past `PLAY_WORK` fall back to category ranking and stay
+under 0.25M.
 
 `tests/policy/test_budget.lua` covers:
 
@@ -119,7 +122,8 @@ LV-7 through LV-10 were corrected:
 ## Fresh-context re-review
 
 An independent fresh-context Claude review of `a33ce99..ca02b7b` found no
-Critical, High or Medium issues. It raised three Lows, all addressed in the
+Critical, High or Medium issues. It missed that `ca02b7b` broke the benchmark
+`--check` gate. The local re-review recorded that as N1, and `c37537c` fixed it. It raised three Lows, all addressed in the
 follow-up commit:
 
 - **L1:** `best_joker` recomputed every shop Joker's buy score, doubling shop
@@ -129,6 +133,21 @@ follow-up commit:
 - **L2:** stale size and instruction figures were refreshed.
 - **L3:** the work meter under-counts Red-seal retriggers. This is now
   documented in §4.5.
+
+## Local re-review (`docs/CLAUDE_BATCH2_REREVIEW.md`)
+
+- **N1 (Medium):** broken benchmark gate. Already fixed in `c37537c`.
+- **N2 (Low):** relative work meter. Fixed with an absolute `TOTAL_WORK` cap
+  and a lower `PLAY_WORK`. 12 × 32/48/64, 9 × 64 and 10 × 40 cases were added
+  under a 1.25M guard; the old limits fail it.
+- **N3 (Low, tuning):** Joker vs a slightly cheaper pack when only one fits.
+  The intrinsic margin is now `JOKER_MARGIN` = 50, so a $2–3 price gap no
+  longer decides. A Joker that drains the money still loses. Both of the
+  review's cases are pinned in `test_shop_joker_first.lua`.
+- **N4 (Low):** `astra_host_server_native.py` now waits for the database
+  within its deadline. It needs the local game reference, so it is unverified
+  in the cloud.
+- **Doc nits:** fixed (pre-fix headroom ≈1,230 bytes; current sizes).
 
 ## Lower-priority observations
 

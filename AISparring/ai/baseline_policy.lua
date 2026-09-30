@@ -592,7 +592,10 @@ local ESTIMATE_CAP = 1e15
 -- in docs/BASELINE_POLICY.md).
 local DISCARD_EV_LIMIT = 40
 local DISCARD_WORK = 24000
-local PLAY_WORK = 40000
+local PLAY_WORK = 24000
+-- Absolute cap on play plus discard work in one decision (review N2): the
+-- discard share is also cut when the play estimate already used a lot.
+local TOTAL_WORK = 30000
 -- Estimate-based Joker ordering is limited to small Joker rows and a bounded
 -- number of candidates per decision, so it always fits the sandbox budget.
 local REORDER_EST_MAX_JOKERS = 8
@@ -1577,6 +1580,9 @@ local function analyse_plays(observation, actions, count)
 		end)
 		local best_ev = nil
 		local limit = WORK + DISCARD_WORK
+		if limit > TOTAL_WORK then
+			limit = TOTAL_WORK
+		end
 		for i = 1, #ranked do
 			local a = ranked[i].a
 			if i <= DISCARD_EV_LIMIT and WORK < limit then
@@ -1984,11 +1990,17 @@ end
 -- Joker's, so table values cannot crowd it out; economy after each price is
 -- then compared honestly, so a Joker that would drain the money can lose. When
 -- both fit the money the Joker is bought first (the other stays affordable).
+-- Intrinsic margin a Joker keeps over a voucher/pack when only one fits: 50
+-- points is $5 below the reserve, so a slightly cheaper pack no longer wins on
+-- the reserve penalty alone (review N3), but a Joker that drains the money
+-- still loses.
+local JOKER_MARGIN = 50
+
 local function versus_joker(observation, spend, base, cost)
 	local best = SHOP_BEST
 	if best then
-		if base > best.intrinsic - 20 then
-			base = best.intrinsic - 20
+		if base > best.intrinsic - JOKER_MARGIN then
+			base = best.intrinsic - JOKER_MARGIN
 		end
 	end
 	local score = base + economy_bonus(spend - cost)
