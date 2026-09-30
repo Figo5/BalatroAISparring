@@ -40,6 +40,16 @@ Constraints on all of it:
     - `discard_need_pct` 100 or 125: +0.1% (t 0.6) and −1.0% (t −2.3);
     - `discard_gain_pct` 115 or 150: −0.7% (t −1.9) and +0.4% (t 1.3);
     - at most 9 of 720 blinds changed, so all four were left unchanged;
+  - Structural play changes tested and **rejected** (720 paired blinds, seed 7,
+    Competitive / Expert):
+    - keep the last discard while 3+ hands remain: +0.7% (t 0.9) / −0.1%;
+    - with no discards and the blind out of reach, dig by playing more cards:
+      +0.6% (t 1.1) / +0.1%.
+
+    Diagnosis: all 70 of Expert's failed blinds ended with no discards left;
+    most had spent them first. Neither change moved the clear rate, so the
+    remaining losses look like draw luck within this model. Play-side
+    headroom in the blind simulator appears small.
   - give Major League and Expert a real edge: after the economy retune
     (held-out ≈ +0.33 / +0.51 blinds per run) they match Competitive in run metrics, so
     their play-side difference is still unproven.
