@@ -159,18 +159,31 @@ MPDriver.GUEST_ONLY = {
 	joinLobby = true,
 }
 
+-- End-screen Joker reveal (docs/PROTOTYPE_GATES.md: no *pre-end*
+-- getEndGameJokers). The pinned end screen (ui/game/game_end.lua:53) sends
+-- `getEndGameJokers`; the pinned server relays it to the opponent
+-- (src/actionHandlers.ts getEndGameJokersAction), whose handler answers with
+-- `receiveEndGameJokers` carrying its own `G.jokers:save()`
+-- (networking/action_handlers.lua:902-925). Each action is allowed only for the
+-- one trusted role that needs it for the human to see the AI's Jokers, and only
+-- once `match_complete()` holds. The reverse direction (the AI requesting the
+-- human's Jokers) stays blocked, so the human's build never reaches the AI
+-- runtime, even after the match.
+MPDriver.ENDGAME_REVEAL = {
+	getEndGameJokers = "human",
+	receiveEndGameJokers = "ai",
+}
+
 -- Real wire actions that must never leave a staged runtime: ranked/server
--- logging, end-game result exchange and private opponent deck queries, plus
+-- logging, end-game stats exchange and private opponent deck queries, plus
 -- auth and modded actions.
 MPDriver.SEND_BLOCKED = {
 	submitLogHashes = true,
 	streamLogLines = true,
 	endGameStatsRequested = true,
 	sendGameStats = true,
-	getEndGameJokers = true,
 	getNemesisDeck = true,
 	nemesisEndGameStats = true,
-	receiveEndGameJokers = true,
 	receiveNemesisDeck = true,
 	auth = true,
 	authenticate = true,
@@ -342,6 +355,55 @@ function MPDriver.factory(ports)
 	local function lobby_joined()
 		local code = rpath(mp, "LOBBY", "code")
 		return type(code) == "string" and #code > 0
+	end
+
+	-- Whether the real match has legitimately ended for this runtime. In a
+	-- non-ghost match the pinned client sets `MP.GAME.won = true` only in the
+	-- inbound winGame handler and `G.STATE = G.STATES.GAME_OVER` only in the
+	-- inbound loseGame handler (networking/action_handlers.lua:545-566); the
+	-- other GAME_OVER writers are ghost-replay paths (ui/game/game_state.lua,
+	-- lib/ghost_replay.lua) and the speedlatro layer, which Major League does not
+	-- use. Once seen, completion is latched to that match's own `MP.GAME`
+	-- table, so a later engine event that moves `G.STATE` off GAME_OVER cannot
+	-- close the reveal before the opponent's request arrives. MP.reset_game_states
+	-- (startGame, return to lobby) builds a new `MP.GAME` table, which ends the
+	-- latch, and leaving the lobby closes it too. Requires a started match in a
+	-- joined lobby and no active ghost replay.
+	local completed_game = nil
+	local function match_complete()
+		if not match_started() or not lobby_joined() then
+			return false
+		end
+		local game = rget(mp, "GAME")
+		if type(game) ~= "table" then
+			return false
+		end
+		local ghost = rget(mp, "GHOST")
+		local ghost_active = type(ghost) == "table" and rget(ghost, "is_active") or nil
+		if ghost_active ~= nil then
+			if type(ghost_active) ~= "function" then
+				return false
+			end
+			-- Pinned lib/ghost_replay.lua:253: `MP.GHOST.active and ...`, so an
+			-- inactive ghost answers nil or false.
+			local ok, active = pcall(ghost_active)
+			if not ok or active then
+				return false
+			end
+		end
+		if completed_game ~= nil and rawequal(completed_game, game) then
+			return true
+		end
+		local ended = rget(game, "won") == true
+		if not ended then
+			local game_over = rpath(G, "STATES", "GAME_OVER")
+			local state_value = rget(G, "STATE")
+			ended = is_int(game_over) and is_int(state_value) and state_value == game_over
+		end
+		if ended then
+			completed_game = game
+		end
+		return ended
 	end
 
 	-- The server-confirmed host flag. The pinned Multiplayer source sets it
@@ -777,6 +839,11 @@ function MPDriver.factory(ports)
 		return match_started()
 	end
 
+	-- Whether the real match has legitimately ended (see match_complete).
+	function instance.is_complete()
+		return match_complete()
+	end
+
 	-- Human start through the real lobby start callback, only once the guest is
 	-- confirmed ready and the ruleset options are frozen.
 	function instance.host_start_game()
@@ -838,6 +905,9 @@ function MPDriver.factory(ports)
 	--     host, and never after the match starts.
 	--   * `joinLobby` only for the AI, and never while the server
 	--     has confirmed a host (a forged `is_host = true` must not open them).
+	--   * `getEndGameJokers` only for the human and `receiveEndGameJokers` only
+	--     for the AI, and each only once the match has legitimately ended
+	--     (ENDGAME_REVEAL).
 	-- Returns true when the action may be sent.
 	function instance.guard_allows(action)
 		if type(action) ~= "string" or #action == 0 then
@@ -845,6 +915,13 @@ function MPDriver.factory(ports)
 		end
 		if MPDriver.SEND_BLOCKED[action] == true then
 			return false
+		end
+		-- The reveal entries are exactly two role-bound end-screen actions and are
+		-- never also host-only, guest-only or blocked (test-enforced), so
+		-- returning here skips no other gate.
+		local reveal_role = MPDriver.ENDGAME_REVEAL[action]
+		if reveal_role ~= nil then
+			return role == reveal_role and match_complete()
 		end
 		if MPDriver.HOST_ONLY[action] == true then
 			if role ~= "human" then

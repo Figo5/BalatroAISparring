@@ -178,6 +178,8 @@ def static_cases() -> list[dict]:
     add(
         "driver_protocol_send_allowlist",
         "SEND_BLOCKED" in driver_src
+        and "ENDGAME_REVEAL" in driver_src
+        and "match_complete()" in driver_src
         and "getEndGameJokers" in driver_src
         and "getNemesisDeck" in driver_src
         and "guard_allows" in driver_src,
