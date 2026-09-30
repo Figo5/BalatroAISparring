@@ -12,7 +12,22 @@ python tests/benchmark_policy.py --scenarios 300 --check docs/benchmarks/policy_
 python tests/benchmark_policy.py --seed 5 --seed 99 --scenarios 600  # other seed families
 python tests/benchmark_policy.py --scenarios 150 --discard-samples 6  # + discard quality (slower)
 python tests/benchmark_policy.py --runtime lupa.lua51                 # strict instruction-budget runtime
+python tests/benchmark_policy.py --families --scenarios 300           # per-stage report (early/mid/late)
 ```
+
+By default scenarios come from one `mixed` distribution, the one the stored
+baselines were generated with, so `--check` stays comparable. `--families`
+cycles three stage shapes instead, and the report's `families` section splits
+results by stage, with PvP scenarios as `<stage>/pvp`:
+
+- `early`: small requirement, 0–2 Jokers, few low levels, sparse enhancements;
+- `mid`: 1–4 Jokers, levels 2–4;
+- `late`: requirement 11k–50k, 3–5 Jokers, levels 4–8, denser enhancements.
+
+`clear_taken` is always null for PvP families, because a PvP blind has no
+visible requirement. A family's `decisions` counts only valid (ok, legal)
+choices, so it can be lower than the difficulty totals. Do not compare a
+`--families` report against the mixed baselines.
 
 | File | What it is |
 |---|---|
@@ -22,16 +37,16 @@ python tests/benchmark_policy.py --runtime lupa.lua51                 # strict i
 
 Summary (300 scenarios, seeds 11/23/37, LuaJIT):
 
-| Metric | before | competitive / major_league now | rookie now |
+| Metric | before | competitive / major_league / expert now | rookie now |
 |---|---|---|---|
-| best offered play chosen | 75.2% | 100% | 86.2% |
-| mean regret vs best offered | 12.2% | 0% | 6.7% |
-| clearing hand taken when one existed | 84% | 100% | 87% |
-| adapter candidate coverage | 96.9% | 97.2% | 97.2% |
+| best offered play chosen | 75.2% | 100% | 78.1% |
+| mean regret vs best offered | 12.2% | 0% | 8.9% |
+| clearing hand taken when one existed | 84% | 100% | 81% |
+| adapter candidate coverage | 96.9% | 97.8% | 97.8% |
 | discard quality (`--discard-samples 6`, 150 scenarios): chosen / best offered discard expected follow-up, over the decisions where the policy chose to discard | ~68% | ~79–84% | ~51–68% |
 | forced-discard quality: the same observation with only its discard certificates, so every difficulty ranks discards on identical states | n/a | ~84.5% | ~70% |
 | failures / illegal | 0 / 0 | 0 / 0 | 0 / 0 |
-| mean decision latency (LuaJIT; Lua 5.1 ≈ 2×) | ~10 ms | ~15 ms | ~11 ms |
+| mean decision latency (LuaJIT; Lua 5.1 ≈ 2×) | ~10 ms | ~15–17 ms | ~12 ms |
 
 The plain discard-quality metric depends on *when* a policy chooses to
 discard, so it is not comparable across policies that discard in different

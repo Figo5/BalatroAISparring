@@ -289,24 +289,41 @@ def reference_score(played, held, jokers, levels=None):
     return chips * mult
 
 
-def make_scenario(rng):
+# Scenario families: game stage shapes the requirement, Joker count, hand
+# levels and enhancement density. Reported separately so tuning cannot quietly
+# favour one stage. "mixed" is the original distribution and stays the default
+# so stored baselines (docs/benchmarks/*.json) remain comparable; --families
+# cycles early/mid/late instead.
+FAMILIES = {
+    "mixed": {"requirements": [300, 450, 600, 800, 1200, 2000, 3000, 5000, 11000], "jokers": [0, 1, 2, 2, 3, 3, 4, 5], "levels": [0, 0, 1, 2, 3], "level_values": [2, 3, 4, 6], "enhance": 0.12},
+    "early": {"requirements": [300, 450, 600, 800], "jokers": [0, 0, 1, 1, 2], "levels": [0, 0, 1], "level_values": [2], "enhance": 0.05},
+    "mid": {"requirements": [1200, 2000, 3000, 5000], "jokers": [1, 2, 3, 3, 4], "levels": [0, 1, 2, 3], "level_values": [2, 3, 4], "enhance": 0.12},
+    "late": {"requirements": [11000, 20000, 35000, 50000], "jokers": [3, 4, 5, 5], "levels": [2, 3, 4], "level_values": [4, 6, 8], "enhance": 0.25},
+}
+
+
+STAGES = ("early", "mid", "late")
+
+
+def make_scenario(rng, family="mixed"):
+    shape = FAMILIES[family]
     deck = [(r, s) for r in RANKS for s in SUITS]
     rng.shuffle(deck)
     hand = []
     for rank, suit in deck[:8]:
         card = {"rank": rank, "suit": suit}
         roll = rng.random()
-        if roll < 0.12:
+        if roll < shape["enhance"]:
             card["center"] = rng.choice(ENHANCEMENTS)
         if rng.random() < 0.05:
             card["edition"] = rng.choice(EDITIONS)
         if rng.random() < 0.05:
             card["seal"] = "Red"
         hand.append(card)
-    jokers = rng.sample(JOKER_KEYS, rng.choice([0, 1, 2, 2, 3, 3, 4, 5]))
+    jokers = rng.sample(JOKER_KEYS, rng.choice(shape["jokers"]))
     levels = {}
-    for name in rng.sample(sorted(LEVEL_UP), rng.choice([0, 0, 1, 2, 3])):
-        level = rng.choice([2, 3, 4, 6])
+    for name in rng.sample(sorted(LEVEL_UP), rng.choice(shape["levels"])):
+        level = rng.choice(shape["level_values"])
         add_chips, add_mult, _ = LEVEL_UP[name]
         base_chips, base_mult = HAND_BASE[name]
         levels[name] = {
@@ -315,7 +332,7 @@ def make_scenario(rng):
             "mult": base_mult + add_mult * (level - 1),
         }
     pvp = rng.random() < 0.2
-    requirement = rng.choice([300, 450, 600, 800, 1200, 2000, 3000, 5000, 11000])
+    requirement = rng.choice(shape["requirements"])
     scored = int(requirement * rng.choice([0, 0, 0.2, 0.5, 0.8]))
     return {
         "hand": hand,
@@ -326,6 +343,7 @@ def make_scenario(rng):
         "requirement": requirement,
         "pvp": pvp,
         "levels": levels,
+        "family": family + ("/pvp" if pvp else ""),
     }
 
 
@@ -517,6 +535,7 @@ def evaluate(rows, scenarios, discard_samples=0):
             "discard_quality": [], "forced_quality": [],
         }
     coverage = []
+    families = {}
     for row in rows:
         scenario = scenarios[row["scenario"] - 1]
         if row.get("error"):
@@ -580,6 +599,20 @@ def evaluate(rows, scenarios, discard_samples=0):
                 continue
             if can_clear:
                 m["clear_chances"] += 1
+            fam = families.setdefault(scenario.get("family", "mixed"), {}).setdefault(
+                choice["difficulty"], {"decisions": 0, "optimal": 0, "plays": 0, "clear_chances": 0, "clear_taken": 0, "discards": 0}
+            )
+            fam["decisions"] += 1
+            if can_clear:
+                fam["clear_chances"] += 1
+            if choice["type"] == "DISCARD_CARDS":
+                fam["discards"] += 1
+            if choice["type"] == "PLAY_CARDS":
+                fam["plays"] += 1
+                if best_offered > 0 and play_scores.get(choice["id"], 0.0) >= best_offered - 1e-9:
+                    fam["optimal"] += 1
+                if can_clear and play_scores.get(choice["id"], 0.0) >= remaining:
+                    fam["clear_taken"] += 1
             if choice["type"] == "PLAY_CARDS":
                 m["plays"] += 1
                 score = play_scores.get(choice["id"], 0.0)
@@ -597,7 +630,17 @@ def evaluate(rows, scenarios, discard_samples=0):
                         m["discard_quality"].append(discard_values.get(choice["id"], 0.0) / best_discard)
             else:
                 m["other"] += 1
-    report = {"coverage": round(statistics.mean(coverage), 4) if coverage else None, "difficulties": {}}
+    report = {"coverage": round(statistics.mean(coverage), 4) if coverage else None, "difficulties": {}, "families": {}}
+    for family, by_difficulty in sorted(families.items()):
+        report["families"][family] = {
+            difficulty: {
+                "decisions": f["decisions"],
+                "play_optimal": round(f["optimal"] / f["plays"], 4) if f["plays"] else None,
+                "clear_taken": round(f["clear_taken"] / f["clear_chances"], 4) if f["clear_chances"] else None,
+                "discard_rate": round(f["discards"] / max(1, f["decisions"]), 4),
+            }
+            for difficulty, f in sorted(by_difficulty.items())
+        }
     for difficulty, m in metrics.items():
         latency = sorted(m.pop("latency")) or [0.0]
         quality = m.pop("discard_quality")
@@ -657,13 +700,18 @@ def main(argv=None):
     parser.add_argument("--runtime", default="lupa.luajit21")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--check", type=Path)
+    parser.add_argument("--families", action="store_true", help="cycle early/mid/late stage families instead of the mixed baseline distribution")
     parser.add_argument("--discard-samples", type=int, default=0, help="Monte Carlo draws per discard candidate (slow)")
     args = parser.parse_args(argv)
     seeds = args.seed or [11, 23, 37]
     scenarios = []
     for seed in seeds:
         rng = random.Random(seed)
-        scenarios.extend(make_scenario(rng) for _ in range(args.scenarios // len(seeds)))
+        count = args.scenarios // len(seeds)
+        if args.families:
+            scenarios.extend(make_scenario(rng, STAGES[i % len(STAGES)]) for i in range(count))
+        else:
+            scenarios.extend(make_scenario(rng) for _ in range(count))
     lua = importlib.import_module(args.runtime).LuaRuntime(unpack_returned_tuples=True)
     harness = lua.execute(HARNESS)
     started = time.perf_counter()
@@ -672,6 +720,7 @@ def main(argv=None):
     report = evaluate(rows, scenarios, args.discard_samples)
     report["scenarios"] = len(scenarios)
     report["seeds"] = seeds
+    report["distribution"] = "families" if args.families else "mixed"
     report["runtime"] = args.runtime
     report["wall_seconds"] = round(elapsed, 2)
     print(json.dumps(report, indent=2, sort_keys=True))
