@@ -191,7 +191,9 @@ On the **last hand** with a known requirement, discards are ranked by the chance
 that the follow-up play reaches what is still needed, and expected value only
 breaks ties: only a clear matters then. The draw-aware evaluation is bounded
 by the budget rules in §4.5.
-Target plays are priced with the kept cards whose effect applies while held
+Imagined drawn cards (rank groups, full house, straight fillers) take a suit
+no owned suit Joker rewards where possible. This is conservative: a real draw
+could land on a bonus suit. Target plays are priced with the kept cards whose effect applies while held
 (Steel; Kings with Baron; Queens with Shoot the Moon), the same way the current
 best play is priced. Other held cards add nothing and are left out for the
 budget. Drawn cards are priced so they cannot overstate the target: flush fillers use

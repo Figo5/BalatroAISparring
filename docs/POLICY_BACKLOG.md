@@ -34,9 +34,12 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
   Steel-heavy seeded hands. Forced-discard quality moved from 0.852/0.863/0.850
   to 0.854/0.868/0.854 (shared-model check only). LV-7 should watch
   Steel/Baron runs.
-- **Imagined draw suits inflate some suit-Joker estimates.** Synthetic draws
-  take fixed suits (for example a Spades rank filler), which can add a
-  Wrathful Joker bonus that a random draw would not.
+- ~~**Imagined draw suits inflate some suit-Joker estimates.**~~ Changed:
+  imagined rank and full-house draws take a suit no owned suit Joker rewards,
+  and straight fillers prefer one too. This swaps a small upward bias for a
+  small conservative one: a real draw hits a bonus suit about ¼ of the time.
+  Pricing the expected suit bonus exactly is left open. Forced-discard quality
+  moved within noise (0.854→0.852, 0.868→0.868, 0.854→0.852).
 - ~~**New-Joker valuation assumes end-of-row placement.**~~ Fixed: an additive
   Joker-level effect is priced before the first owned x-mult or Polychrome
   Joker, where the reorder step puts it (`tests/policy/test_joker_slot.lua`).
@@ -54,6 +57,12 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
 - ~~**Match-history list may show Windows junctions.**~~ Fixed: listing and
   `review` share `is_session_dir`, which requires a real directory (not a
   symlink or junction) that resolves directly under the root.
+
+- **Joker slot pricing, residual (Low).** In 6 of 855 sampled rows (0.7%) a
+  new additive Joker is still priced 0.3–13% above what the greedy reorder
+  reaches. This happens when two hand-conditional x-mult Jokers never overlap
+  (for example Cavendish then Trio with Mad). The fix is to simulate the
+  greedy adjacent-swap reorder inside `joker_gain`.
 
 ## Measurement notes
 

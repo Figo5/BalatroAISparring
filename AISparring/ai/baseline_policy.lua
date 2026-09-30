@@ -1167,6 +1167,25 @@ local function discard_ev(observation, discard_refs, jokers, need)
 			end
 		end
 	end
+	-- Suits an owned suit Joker rewards: an imagined drawn card avoids them
+	-- where it can, so a random draw is not priced as a bonus suit.
+	local bonus = {}
+	if jokers ~= nil then
+		for i = 1, #jokers do
+			local j = jokers[i]
+			local je = type(j) == "table" and j.debuff ~= true and JOKER_EFFECTS[j.center] or nil
+			if je ~= nil and je[1] == "suit_mult" then
+				bonus[je[3]] = true
+			end
+		end
+	end
+	local neutral = "S"
+	for _, sk in ipairs({ "S", "C", "H", "D" }) do
+		if not bonus[sk] then
+			neutral = sk
+			break
+		end
+	end
 	local held_fx = {}
 	for i = 1, #kept do
 		local c = kept[i]
@@ -1272,7 +1291,7 @@ local function discard_ev(observation, discard_refs, jokers, need)
 				local play = kept_where(function(c)
 					return rank_value(c.rank) == rv
 				end, 4)
-				play[#play + 1] = synthetic(rv, "S")
+				play[#play + 1] = synthetic(rv, neutral)
 				consider(p_at_least(1, d, outs, pool), play)
 			end
 		end
@@ -1280,10 +1299,13 @@ local function discard_ev(observation, discard_refs, jokers, need)
 	-- Drawn straight cards take a suit none of the kept cards share, so a
 	-- straight target is never priced as a straight flush.
 	local fill_suit = "D"
+	local fill_rank = 0
 	for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
-		if (kept_suit[candidate_suit] or 0) == 0 then
+		-- Prefer a suit no kept card shares, then one no suit Joker rewards.
+		local r = ((kept_suit[candidate_suit] or 0) == 0 and 2 or 0) + (bonus[candidate_suit] and 0 or 1)
+		if r > fill_rank then
 			fill_suit = candidate_suit
-			break
+			fill_rank = r
 		end
 	end
 	-- Straights missing exactly one rank (open or gutshot).
@@ -1341,7 +1363,7 @@ local function discard_ev(observation, discard_refs, jokers, need)
 					local rv = rank_value(c.rank)
 					return rv == a or rv == b
 				end, 4)
-				play[#play + 1] = synthetic(a, "C")
+				play[#play + 1] = synthetic(a, neutral)
 				consider(p_at_least(1, d, outs, pool), play)
 			end
 		end
