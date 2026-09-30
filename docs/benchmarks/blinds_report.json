@@ -2,10 +2,10 @@
   "blinds": 360,
   "difficulties": {
     "competitive": {
-      "clear_rate": 0.7778,
+      "clear_rate": 0.775,
       "clear_rate_by_ante": {
         "1": 0.9667,
-        "2": 0.8111,
+        "2": 0.8,
         "3": 0.7667,
         "4": 0.5667
       },
@@ -15,7 +15,7 @@
         "bl_eye": 0.4444,
         "bl_goad": 0.6364,
         "bl_head": 0.9167,
-        "bl_mouth": 0.2857,
+        "bl_mouth": 0.2143,
         "bl_needle": 0.6667,
         "bl_plant": 0.0,
         "bl_psychic": 0.7368,
@@ -23,20 +23,20 @@
         "bl_window": 0.7619,
         "small": 0.9
       },
-      "decisions": 1433,
+      "decisions": 1434,
       "failures": 0,
-      "latency_ms_p95": 18.348,
+      "latency_ms_p95": 22.421,
       "max_instructions": 730000,
       "mean_discards": 1.489,
-      "mean_hands_used": 2.492,
-      "mean_score_ratio": 1.3803,
+      "mean_hands_used": 2.494,
+      "mean_score_ratio": 1.3745,
       "step_cap_stops": 0
     },
     "expert": {
-      "clear_rate": 0.7806,
+      "clear_rate": 0.7778,
       "clear_rate_by_ante": {
         "1": 0.9222,
-        "2": 0.8222,
+        "2": 0.8111,
         "3": 0.7667,
         "4": 0.6111
       },
@@ -46,7 +46,7 @@
         "bl_eye": 0.4444,
         "bl_goad": 0.6364,
         "bl_head": 0.75,
-        "bl_mouth": 0.3571,
+        "bl_mouth": 0.2857,
         "bl_needle": 0.6667,
         "bl_plant": 0.0,
         "bl_psychic": 0.7895,
@@ -56,18 +56,18 @@
       },
       "decisions": 1474,
       "failures": 0,
-      "latency_ms_p95": 19.811,
+      "latency_ms_p95": 22.688,
       "max_instructions": 827000,
       "mean_discards": 1.697,
       "mean_hands_used": 2.397,
-      "mean_score_ratio": 1.3789,
+      "mean_score_ratio": 1.3731,
       "step_cap_stops": 0
     },
     "major_league": {
-      "clear_rate": 0.7778,
+      "clear_rate": 0.775,
       "clear_rate_by_ante": {
         "1": 0.9444,
-        "2": 0.8111,
+        "2": 0.8,
         "3": 0.7667,
         "4": 0.5889
       },
@@ -77,7 +77,7 @@
         "bl_eye": 0.4444,
         "bl_goad": 0.6364,
         "bl_head": 0.75,
-        "bl_mouth": 0.2857,
+        "bl_mouth": 0.2143,
         "bl_needle": 0.6667,
         "bl_plant": 0.0,
         "bl_psychic": 0.7368,
@@ -85,13 +85,13 @@
         "bl_window": 0.7619,
         "small": 0.9083
       },
-      "decisions": 1445,
+      "decisions": 1446,
       "failures": 0,
-      "latency_ms_p95": 19.037,
+      "latency_ms_p95": 19.827,
       "max_instructions": 726000,
       "mean_discards": 1.528,
-      "mean_hands_used": 2.486,
-      "mean_score_ratio": 1.364,
+      "mean_hands_used": 2.489,
+      "mean_score_ratio": 1.3582,
       "step_cap_stops": 0
     },
     "rookie": {
@@ -118,16 +118,16 @@
       },
       "decisions": 1296,
       "failures": 0,
-      "latency_ms_p95": 15.991,
+      "latency_ms_p95": 18.016,
       "max_instructions": 142000,
       "mean_discards": 0.558,
       "mean_hands_used": 3.042,
-      "mean_score_ratio": 1.1361,
+      "mean_score_ratio": 1.1352,
       "step_cap_stops": 0
     }
   },
   "interpretation": "blind clears under real random draws, scored with the shared reference model; not a Balatro win rate (only debuff/hand/discard/Psychic/Eye/Mouth boss effects; no scaling Jokers, shops or opponents)",
   "runtime": "lupa.luajit21",
   "seed": 7,
-  "wall_seconds": 106.94
+  "wall_seconds": 110.81
 }

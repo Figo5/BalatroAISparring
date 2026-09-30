@@ -790,6 +790,10 @@ local function owned_voucher_keys(G)
 	return keys
 end
 
+-- Phases inside a round, where `played_this_round` is current. Booster and
+-- consumable selection can happen in the shop, where it is last round's.
+local ROUND_PHASES = { PLAY_HAND = true, DISCARD = true, MULTIPLAYER_PVP = true }
+
 local function build_self(G, phase, hand_cards)
 	local out = {}
 	local game = rget(G, "GAME")
@@ -825,7 +829,7 @@ local function build_self(G, phase, hand_cards)
 					-- while a hand is being played: elsewhere the counts are stale
 					-- (docs/HAND_HISTORY_DESIGN.md).
 					local played = int_field(rget(entry, "played_this_round"))
-					if PHASE_ALLOWS_HAND[phase] == true and played ~= nil and played >= 0 and played <= 1000 then
+					if ROUND_PHASES[phase] == true and played ~= nil and played >= 0 and played <= 1000 then
 						levels[name].played_this_round = played
 					end
 				end

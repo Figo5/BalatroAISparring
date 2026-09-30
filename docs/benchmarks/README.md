@@ -135,12 +135,12 @@ brackets:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| blinds cleared | 55.6% | 77.8% | 77.8% | 78.1% |
-| cleared, ante 1 / 2 / 3 / 4 | 79 / 60 / 52 / 31% | 97 / 81 / 77 / 57% | 94 / 81 / 77 / 59% | 92 / 82 / 77 / 61% |
+| blinds cleared | 55.6% | 77.5% | 77.5% | 77.8% |
+| cleared, ante 1 / 2 / 3 / 4 | 79 / 60 / 52 / 31% | 97 / 80 / 77 / 57% | 94 / 80 / 77 / 59% | 92 / 81 / 77 / 61% |
 | small (120) / big (120) | 76 / 62% | 90 / 85% | 91 / 85% | 92 / 85% |
 | Club (12) / Goad (11) / Window (21) / Head (12) | 42 / 27 / 62 / 50% | 75 / 64 / 76 / 92% | 83 / 64 / 76 / 75% | 67 / 64 / 76 / 75% |
 | The Psychic (19) | 11% | 74% | 74% | 79% |
-| The Mouth (14) / The Eye (9) | 14 / 33% | 29 / 44% | 29 / 44% | 36 / 44% |
+| The Mouth (14) / The Eye (9) | 14 / 33% | 21 / 44% | 21 / 44% | 29 / 44% |
 | The Needle (6) / The Water (12) | 0 / 8% | 67 / 8% | 67 / 8% | 67 / 8% |
 | The Plant (4, ante 4 only) | 0% | 0% | 0% | 0% |
 | failures / step-cap stops | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
@@ -198,11 +198,11 @@ and the current policy:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| mean blinds cleared (of 18) | 5.1 | 11.4 | 11.3 | 10.7 |
-| mean ante reached | 2.4 | 4.4 | 4.4 | 4.2 |
-| reached ante 4 / 6 | 20 / 7% | 77 / 25% | 73 / 28% | 68 / 25% |
-| planets / rerolls per run | 2.9 / 1.0 | 7.7 / 3.2 | 7.1 / 3.2 | 6.5 / 3.2 |
-| money at the end | $7 | $31 | $34 | $33 |
+| mean blinds cleared (of 18) | 5.1 | 11.2 | 11.0 | 10.7 |
+| mean ante reached | 2.3 | 4.3 | 4.3 | 4.2 |
+| reached ante 4 / 6 | 18 / 7% | 73 / 23% | 70 / 27% | 68 / 25% |
+| planets / rerolls per run | 2.9 / 1.0 | 7.5 / 3.1 | 6.9 / 3.1 | 6.5 / 3.2 |
+| money at the end | $7 | $30 | $33 | $33 |
 | failures | 0 | 0 | 0 | 0 |
 | max sandbox instructions | 139k | 780k | 780k | 907k |
 

@@ -1,21 +1,21 @@
 {
   "difficulties": {
     "competitive": {
-      "decisions": 3687,
+      "decisions": 3602,
       "failures": 0,
       "max_instructions": 780000,
-      "mean_ante_reached": 4.417,
-      "mean_blinds_cleared": 11.4,
-      "mean_jokers_bought": 4.583,
-      "mean_money_end": 31.15,
-      "mean_planets_bought": 7.717,
-      "mean_rerolls": 3.183,
+      "mean_ante_reached": 4.317,
+      "mean_blinds_cleared": 11.15,
+      "mean_jokers_bought": 4.55,
+      "mean_money_end": 30.17,
+      "mean_planets_bought": 7.5,
+      "mean_rerolls": 3.133,
       "reached_ante": {
         "2": 0.917,
-        "3": 0.883,
-        "4": 0.767,
-        "5": 0.483,
-        "6": 0.25,
+        "3": 0.867,
+        "4": 0.733,
+        "5": 0.45,
+        "6": 0.233,
         "7": 0.117
       }
     },
@@ -39,38 +39,38 @@
       }
     },
     "major_league": {
-      "decisions": 3615,
+      "decisions": 3530,
       "failures": 0,
       "max_instructions": 780000,
-      "mean_ante_reached": 4.35,
-      "mean_blinds_cleared": 11.283,
-      "mean_jokers_bought": 4.5,
-      "mean_money_end": 34.07,
-      "mean_planets_bought": 7.117,
-      "mean_rerolls": 3.183,
+      "mean_ante_reached": 4.25,
+      "mean_blinds_cleared": 11.033,
+      "mean_jokers_bought": 4.467,
+      "mean_money_end": 32.98,
+      "mean_planets_bought": 6.9,
+      "mean_rerolls": 3.133,
       "reached_ante": {
         "2": 0.9,
-        "3": 0.85,
-        "4": 0.733,
-        "5": 0.467,
-        "6": 0.283,
+        "3": 0.833,
+        "4": 0.7,
+        "5": 0.433,
+        "6": 0.267,
         "7": 0.117
       }
     },
     "rookie": {
-      "decisions": 1755,
+      "decisions": 1735,
       "failures": 0,
       "max_instructions": 139000,
-      "mean_ante_reached": 2.35,
-      "mean_blinds_cleared": 5.133,
-      "mean_jokers_bought": 2.917,
-      "mean_money_end": 7.43,
-      "mean_planets_bought": 2.933,
-      "mean_rerolls": 1.033,
+      "mean_ante_reached": 2.317,
+      "mean_blinds_cleared": 5.067,
+      "mean_jokers_bought": 2.9,
+      "mean_money_end": 7.23,
+      "mean_planets_bought": 2.9,
+      "mean_rerolls": 1.017,
       "reached_ante": {
         "2": 0.567,
-        "3": 0.4,
-        "4": 0.2,
+        "3": 0.383,
+        "4": 0.183,
         "5": 0.083,
         "6": 0.067,
         "7": 0.033
@@ -82,5 +82,5 @@
   "runs": 60,
   "runtime": "lupa.luajit21",
   "seed": 11,
-  "wall_seconds": 172.82
+  "wall_seconds": 175.66
 }

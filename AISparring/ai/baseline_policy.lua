@@ -1528,7 +1528,11 @@ local function analyse_plays(observation, actions, count)
 		info.best_discard_ev = best_ev
 	end
 	if best ~= nil and not info.clears and can_discard then
-		if best_name == "high_card" then
+		if best == 0 then
+			-- Every play scores nothing (a blocked type under The Eye / The
+			-- Mouth, or The Psychic): discard even without a requirement.
+			info.discard_mode = true
+		elseif best_name == "high_card" then
 			info.discard_mode = true
 		elseif info.remaining ~= nil and hands == 1 then
 			-- Last hand and nothing clears: improving is the only chance.

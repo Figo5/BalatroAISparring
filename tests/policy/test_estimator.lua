@@ -494,6 +494,11 @@ return function(ctx)
 			-- Both types already played under The Eye: every play scores
 			-- nothing, so a discard is preferred.
 			ctx.eq(pick(difficulty, eye_mouth_frame("bl_eye", { flush = 1, pair = 1 })), "DISCARD_CARDS", difficulty .. " all blocked")
+			-- The same without a displayed requirement (no requirement-based
+			-- discard trigger): still a discard (code review L6).
+			local no_req = eye_mouth_frame("bl_eye", { flush = 1, pair = 1 })
+			no_req.self.blind_requirement = nil
+			ctx.eq(pick(difficulty, no_req), "DISCARD_CARDS", difficulty .. " all blocked, no requirement")
 		end
 		-- Rookie is not boss-aware.
 		ctx.eq(pick("rookie", eye_mouth_frame("bl_eye", { flush = 1 })), "flush", "rookie")

@@ -8,14 +8,25 @@ all applied:
     rule-changing Jokers (a test with Four Fingers covers it);
   - the fairness justification is corrected (see below).
 - **Medium:**
-  - `played_this_round` is exported only in hand phases, because elsewhere
-    the counts are stale;
+  - `played_this_round` is exported only in round phases (`PLAY_HAND`,
+    `DISCARD`, `MULTIPLAYER_PVP`), because elsewhere, including booster and
+    consumable selection in the shop, the counts are last round's;
   - the filter is per decision (`EYE_PLAYED` / `MOUTH_ONLY`, reset at entry)
     and applies to the estimate, the discard search and the fallback;
-  - when every play is blocked, a discard wins;
+  - when every play is blocked, a discard wins, even without a requirement
+    or a draw-aware discard search (code review L6);
   - the reader rejects anything but an integer 0..1000 (`reader_bad_view`).
 - **Low:** the reader does not cross-check `hand_levels` against the engine.
   A wrong value would only hurt the AI's own play and would leak nothing.
+
+Code review Lows:
+
+- **Accepted:**
+  - the Mouth ambiguity after a forced off-type hand;
+  - hand names under rule-changing Jokers differ from the engine's;
+  - full-house and wheel-straight tie-breaks in the fallback.
+- **Fixed:** the round-phase gate, discard when every play is blocked, and
+  the simulators recording only the first Mouth type.
 
 Re-certification is required; `schema_version` stays 1 (an optional field).
 

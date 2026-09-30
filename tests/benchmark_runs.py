@@ -191,6 +191,7 @@ def play_blind(fn, run, blind, difficulty, stats):
     chips, hands_left, discards_left = 0, effect.get("hands", bb.HANDS), effect.get("discards", bb.DISCARDS)
     levels = {name: {"chips": e["chips"], "mult": e["mult"]} for name, e in run["levels"].items()}
     played = {}
+    first_type = None
     history = effect.get("history")
     for step in range(bb.MAX_STEPS + 1):
         if chips >= blind["requirement"] or hands_left == 0:
@@ -216,8 +217,11 @@ def play_blind(fn, run, blind, difficulty, stats):
         rest = [hand[i] for i in range(len(hand)) if i not in idx]
         if result["type"] == "PLAY_CARDS":
             name = bp.classify(chosen)[0]
+            # Vanilla The Mouth allows only the first type played this round.
             blocked = (history == "eye" and played.get(name, 0) > 0) or (
-                history == "mouth" and played and name not in played)
+                history == "mouth" and played and name != first_type)
+            if not played:
+                first_type = name
             played[name] = played.get(name, 0) + 1
             if len(chosen) >= effect.get("min_cards", 0) and not blocked:
                 chips += int(bp.reference_score(chosen, rest, [j["center"] for j in run["jokers"]], levels))

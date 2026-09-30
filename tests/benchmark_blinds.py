@@ -166,6 +166,7 @@ def simulate(decide, blind, difficulty):
     hand = [deck.pop(0) for _ in range(HAND_SIZE)]
     chips, hands_left, discards_left = 0, effect.get("hands", HANDS), effect.get("discards", DISCARDS)
     played = {}
+    first_type = None
     stats = {"decisions": 0, "failures": 0, "discards": 0, "latency": [], "instructions": 0, "step_cap": 0}
     for step in range(MAX_STEPS + 1):
         if chips >= blind["requirement"] or hands_left == 0:
@@ -195,8 +196,11 @@ def simulate(decide, blind, difficulty):
         if result["type"] == "PLAY_CARDS":
             name = bp.classify(chosen)[0]
             history = effect.get("history")
+            # Vanilla The Mouth allows only the first type played this round.
             blocked = (history == "eye" and played.get(name, 0) > 0) or (
-                history == "mouth" and played and name not in played)
+                history == "mouth" and played and name != first_type)
+            if not played:
+                first_type = name
             played[name] = played.get(name, 0) + 1
             if len(chosen) >= effect.get("min_cards", 0) and not blocked:
                 chips += int(bp.reference_score(chosen, rest, blind["jokers"]))
