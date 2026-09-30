@@ -1146,13 +1146,47 @@ local function discard_ev(observation, discard_refs, jokers, need)
 	if need ~= nil and base >= need then
 		p_clear = 1
 	end
-	-- `play` is the exact target play (kept cards plus synthetic draws); it is
-	-- priced once, without held-card effects, to stay within the budget.
+	-- Kept cards whose effect applies while held (Steel; Kings with Baron;
+	-- Queens with Shoot the Moon), so targets are priced like the current best
+	-- play. Other held cards add nothing and are left out for the budget.
+	local baron, moon = false, false
+	if jokers ~= nil then
+		for i = 1, #jokers do
+			local j = jokers[i]
+			if type(j) == "table" and j.debuff ~= true then
+				baron = baron or j.center == "j_baron"
+				moon = moon or j.center == "j_shoot_the_moon"
+			end
+		end
+	end
+	local held_fx = {}
+	for i = 1, #kept do
+		local c = kept[i]
+		local rv = (not is_stone(c)) and rank_value(c.rank) or nil
+		if c.center == "m_steel" or (baron and rv == 13) or (moon and rv == 12) then
+			held_fx[#held_fx + 1] = c
+		end
+	end
+	-- `play` is the exact target play (kept cards plus synthetic draws), priced
+	-- with the effect-bearing kept cards it leaves in hand.
 	local function consider(p, play)
 		if p <= 0 or #play == 0 or #play > 5 then
 			return
 		end
-		local value = estimate_score(play, nil, jokers)
+		local held = nil
+		if #held_fx > 0 then
+			local in_play = {}
+			for i = 1, #play do
+				in_play[play[i]] = true
+			end
+			held = {}
+			for i = 1, #held_fx do
+				if not in_play[held_fx[i]] then
+					held[#held + 1] = held_fx[i]
+				end
+			end
+		end
+		local value = estimate_score(play, held, jokers)
 		if value == nil then
 			return
 		end

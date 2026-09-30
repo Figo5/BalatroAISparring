@@ -28,10 +28,12 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
 - **Rookie keeps simpler voucher and pack behaviour.** This is intentional.
   It is documented in LV-10 and §4.4. Revisit only if Rookie should buy
   Hieroglyph less often.
-- **Discard evaluator ignores held Steel / Baron / Shoot the Moon.** In
-  `discard_ev` target plays are priced with `held = nil`. Keeping Steel cards
-  or Kings (with Baron) and Queens (with Shoot the Moon) in hand is therefore
-  undervalued.
+- ~~**Discard evaluator ignores held Steel / Baron / Shoot the Moon.**~~ Fixed:
+  draw targets are priced with the effect-bearing kept cards they leave in hand
+  (`tests/policy/test_held_effects.lua`). 20% of decisions changed on
+  Steel-heavy seeded hands. Forced-discard quality moved from 0.852/0.863/0.850
+  to 0.854/0.868/0.854 (shared-model check only). LV-7 should watch
+  Steel/Baron runs.
 - **Imagined draw suits inflate some suit-Joker estimates.** Synthetic draws
   take fixed suits (for example a Spades rank filler), which can add a
   Wrathful Joker bonus that a random draw would not.
