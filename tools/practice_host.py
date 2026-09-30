@@ -3789,6 +3789,80 @@ def generate_developer_launcher(config: HostConfig, directory=None) -> dict:
     }
 
 
+# Only these bound tools may differ for a receipt-reusing reissue. Their changes
+# alter no staging, Lua patch, mod byte or measured launch behaviour, so the
+# existing phase receipts still describe the same staged runtimes.
+REISSUE_ALLOWED_TOOLS = ("launcher", "practice_host")
+
+
+def reissue_certificate_for_tools(
+    config: HostConfig,
+    *,
+    api=None,
+    enumerator=None,
+    opener=None,
+    reason: str = "",
+) -> dict:
+    """Re-issue the current certificate from its own receipts after a tool-only change.
+
+    Refuses unless live Balatro is closed, no host daemon is running, and the
+    current certificate's *only* problems are changed hashes of the tools in
+    ``REISSUE_ALLOWED_TOOLS``. Anything else (layers, receipts, evidence, ports,
+    lockout, other tools) needs a full re-certification. Launches nothing.
+    """
+    api = api if api is not None else isolation_certificate
+    enumerator = enumerator or launch_practice.default_enumerator()
+    closed = launch_practice.check_live_balatro_closed(enumerator, config.live_install_root)
+    if not closed.get("ok"):
+        return {"ok": False, "code": "reissue_live_balatro_running", "problems": closed.get("problems") or []}
+    daemon = discovery_state(config, opener=opener, enumerator=enumerator)
+    if daemon.get("state") in ("live", "unverified", "foreign"):
+        return {"ok": False, "code": "reissue_host_daemon_running", "state": daemon.get("state")}
+    live_map = staging.live_roots(
+        install_root=config.live_install_root,
+        appdata_root=config.live_appdata_root,
+        steam_root=config.steam_root,
+    )
+    port = config.match_port
+    before = api.check_certificate(config.staging_root, live=live_map, port=port)
+    if before.get("ok"):
+        return {"ok": True, "code": "reissue_not_needed", "certificate_id": before.get("certificate_id")}
+    allowed = {f"bound_tool_changed:{name}" for name in REISSUE_ALLOWED_TOOLS}
+    problems = list(before.get("problems") or [])
+    blocking = sorted(item for item in problems if item not in allowed)
+    if not problems or blocking:
+        return {
+            "ok": False,
+            "code": "reissue_requires_full_recertification",
+            "problems": blocking or ["certificate_check_failed"],
+        }
+    _path, current = api._load_current(config.staging_root)
+    receipts = (current or {}).get("receipts")
+    if not isinstance(receipts, Mapping):
+        return {"ok": False, "code": "reissue_requires_full_recertification", "problems": ["certificate_receipts_missing"]}
+    built = api.build_certificate(
+        config.staging_root,
+        receipt_ids=dict(receipts),
+        live=live_map,
+        port=port,
+        extra={
+            "reissued_from": before.get("certificate_id"),
+            "reissue_changed_tools": sorted(problems),
+            "reissue_reason": str(reason)[:200],
+        },
+    )
+    if not built.get("ok"):
+        return {"ok": False, "code": "reissue_build_failed", "problems": built.get("problems") or []}
+    after = api.check_certificate(config.staging_root, live=live_map, port=port)
+    return {
+        "ok": bool(after.get("ok")),
+        "code": "reissue_complete" if after.get("ok") else "reissue_check_failed",
+        "previous_certificate_id": before.get("certificate_id"),
+        "certificate_id": built.get("certificate_id"),
+        "problems": after.get("problems") or [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -3819,6 +3893,12 @@ def build_parser() -> argparse.ArgumentParser:
     dev = sub.add_parser("dev-launcher", help="generate developer start scripts under repo work/")
     common(dev)
     dev.add_argument("--output", default=None)
+    reissue = sub.add_parser(
+        "reissue-certificate",
+        help="re-issue the current certificate from its receipts after a launcher/host-only change",
+    )
+    common(reissue)
+    reissue.add_argument("--reason", default="")
 
     return parser
 
@@ -3864,6 +3944,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             }
         )
         return 0
+    if args.command == "reissue-certificate":
+        output = reissue_certificate_for_tools(config, reason=args.reason)
+        _emit(output)
+        return 0 if output["ok"] else 3
     if args.command == "serve":
         if config.require_fixed_match_port and config.match_port is None:
             # M-3: never start a daemon whose every acknowledgement would fail after

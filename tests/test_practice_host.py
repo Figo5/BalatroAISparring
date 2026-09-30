@@ -977,6 +977,97 @@ def test_native_query_handle_reports_exit_while_held_open():
         del child
 
 
+class FakeReissueApi:
+    """Certificate API stand-in for the tool-only reissue command."""
+
+    def __init__(self, problems, receipts=None):
+        self.problems = list(problems)
+        self.receipts = {"P1A": "a" * 64} if receipts is None else receipts
+        self.built = []
+
+    def check_certificate(self, staging_root, live=None, port=None, server_bind=None):
+        if self.built:
+            return {"ok": True, "problems": [], "certificate_id": "new"}
+        return {"ok": not self.problems, "problems": list(self.problems), "certificate_id": "old"}
+
+    def _load_current(self, staging_root):
+        return Path(staging_root) / "cert.json", {"receipts": self.receipts}
+
+    def build_certificate(self, staging_root, **kwargs):
+        self.built.append(kwargs)
+        return {"ok": True, "certificate_id": "new", "problems": []}
+
+
+def test_reissue_certificate_reuses_receipts_for_launcher_and_host_changes():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        api = FakeReissueApi(["bound_tool_changed:launcher", "bound_tool_changed:practice_host"])
+        result = practice_host.reissue_certificate_for_tools(
+            config, api=api, enumerator=FakeEnumerator([]), opener=SequenceOpener([]), reason="exit fix"
+        )
+        assert result["ok"] is True and result["code"] == "reissue_complete", result
+        assert result["previous_certificate_id"] == "old" and result["certificate_id"] == "new"
+        (kwargs,) = api.built
+        assert kwargs["receipt_ids"] == api.receipts
+        assert kwargs["port"] == config.match_port
+        assert kwargs["extra"]["reissued_from"] == "old"
+
+
+def test_reissue_certificate_refuses_anything_beyond_allowed_tools():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        for problems in (
+            ["bound_tool_changed:launcher", "mods_layer_changed"],
+            ["bound_tool_changed:staging"],
+            ["certificate_locked_out"],
+            ["phase_p2_silent_receipt_unreadable", "bound_tool_changed:practice_host"],
+        ):
+            api = FakeReissueApi(problems)
+            result = practice_host.reissue_certificate_for_tools(
+                config, api=api, enumerator=FakeEnumerator([]), opener=SequenceOpener([])
+            )
+            assert result["ok"] is False and result["code"] == "reissue_requires_full_recertification", problems
+            assert not api.built
+
+
+def test_reissue_certificate_requires_closed_game_and_stopped_host():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        api = FakeReissueApi(["bound_tool_changed:launcher"])
+        running = FakeEnumerator(
+            [launch_practice.ProcessInfo(1632, 1000.0, _live_image(config), name="Balatro")]
+        )
+        result = practice_host.reissue_certificate_for_tools(
+            config, api=api, enumerator=running, opener=SequenceOpener([])
+        )
+        assert result["code"] == "reissue_live_balatro_running" and not api.built
+
+        marker = {
+            "schema": practice_host.DISCOVERY_SCHEMA,
+            "module_sha256": practice_host.module_sha256(),
+            "daemon_id": "other",
+            "pid": 4321,
+            "create_time": 1000.0,
+        }
+        path = config.resolved_discovery_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(marker), encoding="utf-8")
+        result = practice_host.reissue_certificate_for_tools(
+            config, api=api, enumerator=FakeEnumerator([]), opener=_live_opener(config)
+        )
+        assert result["code"] == "reissue_host_daemon_running" and not api.built
+
+
+def test_reissue_certificate_not_needed_when_current():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        api = FakeReissueApi([])
+        result = practice_host.reissue_certificate_for_tools(
+            config, api=api, enumerator=FakeEnumerator([]), opener=SequenceOpener([])
+        )
+        assert result["ok"] is True and result["code"] == "reissue_not_needed" and not api.built
+
+
 # ---------------------------------------------------------------------------
 # Certificate / quiescence / backup / attestation
 # ---------------------------------------------------------------------------

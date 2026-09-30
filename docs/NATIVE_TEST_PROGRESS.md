@@ -182,5 +182,5 @@ All tests use real engine shapes and failed first. Final verdict: READY to reins
 
 **Still to do:**
 - Claude review of the diff.
-- Re-certification: the host and launcher sources are bound by the certificate and by the discovery marker's module hash.
+- Re-certification: the certificate binds the host and launcher sources, and the discovery marker binds the module hash. This change touches no staging, Lua patch or mod bytes and no measured launch behaviour, which is the same basis as the P2 role repair. So `practice_host.py reissue-certificate` re-issues the current certificate from its own seven receipts. It refuses unless live Balatro is closed, no host daemon is running, and the only certificate problems are `bound_tool_changed:launcher` or `bound_tool_changed:practice_host`. Anything else requires a full re-certification.
 - Restart the practice host daemon, then have the user retry Play → AI Sparring.
