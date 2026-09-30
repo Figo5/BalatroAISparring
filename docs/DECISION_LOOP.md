@@ -331,7 +331,7 @@ state (`loop_waiting_for_opponent`, status `waiting`):
   capped at `wait_max_backoff` (default 1 s), so the opponent's arrival is seen
   within about a second.
 - It logs one `wait_begin` record on entry and one `wait_end` record (with
-  `waited_seconds`) on exit or stop. Nothing is logged per poll. `stats()` adds
+  `seconds`) on exit or stop, as `code=loop_waiting_for_opponent detail=<wait kind>`. Nothing is logged per poll. `stats()` adds
   `waits`, `waiting_polls` and `waiting_seconds`, and `describe()` shows the
   current `waiting` token and `wait_backoff`.
 

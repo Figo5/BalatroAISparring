@@ -494,16 +494,17 @@ function DecisionLoop.factory(options)
 		pcall(broker.cancel)
 	end
 
+	-- Field names are the companion logger's allowlisted ones (src/logger.lua),
+	-- so the wait kind and duration survive into the real Lovely log line.
 	local function log_wait(now, event, state, seconds)
 		if logger == nil then
 			return
 		end
 		pcall(logger.record, {
 			event = event,
-			wait_state = state,
-			result_code = CODE.WAITING,
-			waited_seconds = seconds,
-			tick = now,
+			code = CODE.WAITING,
+			detail = state,
+			seconds = seconds,
 		})
 	end
 

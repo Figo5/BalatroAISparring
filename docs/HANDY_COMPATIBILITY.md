@@ -54,7 +54,7 @@ Handy action is on the allowlist, so both are refused in both staged runtimes:
   `MPDriver.SEND_SUPPRESSED_REASONS`, together with Multiplayer's periodic
   replay-log stream (`streamLogLines`, `submitLogHashes`), which was already
   blocked. The guard now logs one `driver_send_suppressed action=<name>
-  reason=<reason>` line per action. It no longer logs a `driver_send_blocked`
+  detail=<reason>` line per action. It no longer logs a `driver_send_blocked`
   line on every attempt. That table affects logging only and is test-enforced to
   allow nothing. Any other refused send is still logged on every attempt.
 - **A safe allowlisted path exists if wanted later.** Allowing

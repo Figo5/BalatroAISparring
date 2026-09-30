@@ -797,5 +797,54 @@ return function(ctx)
 			end
 		end
 	end)
+
+	test("suppressed_log_line_carries_reason_through_the_real_logger", function()
+		local Logger = support.mod(ctx.repo_root, "AISparring/src/logger.lua")
+		local lines = {}
+		local inner = Logger.new(function(level, line)
+			lines[#lines + 1] = line
+		end)
+		local logger = {
+			record = function(fields)
+				return inner:log("info", fields.event or "companion", fields)
+			end,
+		}
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		local client = { send = function() return true end }
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, client = client, logger = logger })
+		ctx.is_true(driver.install_send_guard() ~= nil)
+		client.send({ action = "submitLogHashes" })
+		client.send({ action = "submitLogHashes" })
+		ctx.eq(#lines, 1)
+		ctx.is_true(string.find(lines[1], 'code="driver_send_suppressed"', 1, true) ~= nil, lines[1])
+		ctx.is_true(string.find(lines[1], 'action="submitLogHashes"', 1, true) ~= nil, lines[1])
+		ctx.is_true(string.find(lines[1], 'detail="mp_replay_log_off"', 1, true) ~= nil, lines[1])
+	end)
+
+	test("suppression_snapshot_ignores_later_table_edits_and_resets_per_install", function()
+		local MP, funcs = fake_engine({ code = "ABC12" })
+		local records = {}
+		local client = { send = function() return true end }
+		local logger = { record = function(fields) records[#records + 1] = fields end }
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, client = client, logger = logger })
+		MPDriver.SEND_SUPPRESSED_REASONS.mysteryAction = "sneaky"
+		local uninstall = driver.install_send_guard()
+		client.send({ action = "mysteryAction" })
+		client.send({ action = "mysteryAction" })
+		MPDriver.SEND_SUPPRESSED_REASONS.mysteryAction = nil
+		local blocked = 0
+		for _, record in ipairs(records) do
+			if record.code == "driver_send_blocked" then
+				blocked = blocked + 1
+			end
+		end
+		ctx.eq(blocked, 2, "an added entry cannot silence other refusals")
+		ctx.is_true(uninstall())
+		records = {}
+		logger.record = function(fields) records[#records + 1] = fields end
+		driver.install_send_guard()
+		client.send({ action = "handyMPExtensionDisable" })
+		ctx.eq(#records, 1, "a fresh install logs the first suppression again")
+	end)
 end
 

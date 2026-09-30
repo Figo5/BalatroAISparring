@@ -439,6 +439,14 @@ function MPDriver.factory(ports)
 		lobby_start_game = rawget(funcs, "lobby_start_game"),
 	}
 	local installed_guard = nil
+	-- Private snapshot of the suppression reasons: a later edit of the public
+	-- table cannot silence other refused sends' log lines.
+	local suppressed_reasons = {}
+	for key, value in next, MPDriver.SEND_SUPPRESSED_REASONS do
+		if type(key) == "string" and type(value) == "string" then
+			suppressed_reasons[key] = value
+		end
+	end
 	local instance = {}
 
 	local function emit(fields)
@@ -979,11 +987,13 @@ function MPDriver.factory(ports)
 			end
 			if not instance.guard_allows(action) then
 				local token = token_of(action, TOKEN_PATTERN, MPDriver.LIMITS.max_token)
-				local reason = token ~= nil and MPDriver.SEND_SUPPRESSED_REASONS[token] or nil
+				local reason = token ~= nil and rawget(suppressed_reasons, token) or nil
 				if reason ~= nil then
 					if suppressed_logged[token] ~= true then
 						suppressed_logged[token] = true
-						emit({ event = "mp_driver", code = CODE.SEND_SUPPRESSED, action = token, reason = reason })
+						-- `detail` is an allowlisted logger field, so the reason
+						-- reaches the real log line (src/logger.lua).
+						emit({ event = "mp_driver", code = CODE.SEND_SUPPRESSED, action = token, detail = reason })
 					end
 				else
 					emit({ event = "mp_driver", code = CODE.SEND_BLOCKED, action = token })

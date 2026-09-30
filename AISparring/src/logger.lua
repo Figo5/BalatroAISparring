@@ -3,7 +3,7 @@ local Logger = {}
 Logger.MAX_STRING = 96
 Logger.ALLOWED_FIELDS = {
 	"event", "code", "status", "dependency", "version", "required_version",
-	"detail", "module", "mod", "count", "phase", "action",
+	"detail", "module", "mod", "count", "phase", "action", "seconds",
 }
 Logger.LEVELS = { info = true, warn = true, error = true, debug = true }
 
