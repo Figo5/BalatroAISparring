@@ -53,7 +53,8 @@ hovers it: "(Currently +X Mult)", "(Currently +X Chips)" or
 "(Currently X× Mult)". It is the AI's own Joker, and the number is what the
 card itself displays. No deck order, future RNG or opponent state is
 involved. Values that the card text does **not** show as a single current
-number stay out.
+number stay out. A debuffed Joker's text reads "All abilities are disabled",
+so it exports no value; the reader rejects one (code review Medium).
 
 ## Change
 

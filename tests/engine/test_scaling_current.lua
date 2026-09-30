@@ -112,6 +112,25 @@ return function(ctx)
 		rejected(r7, "not a table")
 	end)
 
+	test("debuffed_jokers_show_no_value", function()
+		local debuffed = joker("j_hologram", { x_mult = 2.5 })
+		debuffed.debuff = true
+		local r = step({ debuffed })
+		eq(view_jokers(r)[1].current, nil, "adapter omits")
+		eq(export(r).self.jokers[1].current, nil, "observation has none")
+		-- A spoofed value on a debuffed engine card is rejected.
+		view_jokers(r)[1].current = { kind = "xmult", value = 250 }
+		view_jokers(r)[1].shown.current = true
+		rejected(r, "debuffed spoof")
+	end)
+
+	test("reader_requires_the_engine_center", function()
+		-- Same kind and step shape, different growth rule: never trusted.
+		local r = step({ joker("j_trousers", { mult = 6, extra = 1 }) })
+		view_jokers(r)[1].center = "j_ride_the_bus"
+		rejected(r, "center spoof")
+	end)
+
 	test("reader_needs_the_shown_attestation", function()
 		local r = step(standard())
 		view_jokers(r)[1].shown.current = nil

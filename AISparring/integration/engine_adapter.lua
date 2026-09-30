@@ -602,7 +602,8 @@ local function build_joker(card)
 	put(record, "edition", token_of(edition_type(card), 32))
 	put(record, "seal", seal_of(card))
 	put(record, "debuff", debuff_of(card))
-	local current = scaling_current(card)
+	-- A debuffed card shows "All abilities are disabled", not its value.
+	local current = debuff_of(card) == false and scaling_current(card) or nil
 	if current ~= nil then
 		record.current = current
 		record.shown.current = true

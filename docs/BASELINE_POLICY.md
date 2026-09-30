@@ -266,8 +266,9 @@ Cat). It also grows the way vanilla grows it before Jokers score:
 
 - Ride the Bus resets to 0 when a scoring face card is played, and otherwise
   gains its step;
-- Green Joker gains its step every hand;
-- Spare Trousers gains on hands containing Two Pair;
+- Green Joker gains its step every hand (its −1 per discard is not priced in
+  the discard search: a small, accepted bias towards discarding);
+- Spare Trousers gains on hands containing Two Pair (or a Full House);
 - Runner gains on hands containing a Straight;
 - Square gains when exactly four cards are played;
 - Wee gains per scoring 2.

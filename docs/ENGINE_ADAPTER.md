@@ -501,7 +501,8 @@ acceptance:
   value, step? }`, the value their card text shows. `xmult` is in rounded
   hundredths, because the codec carries integers only. `step` is the
   per-hand growth where one exists. It is fail-soft: omitted when a field is
-  missing, non-finite, fractional or out of range
+  missing, non-finite, fractional (`mult`, `chips`), out of range, or the Joker
+  is debuffed (vanilla then hides its value)
   (docs/SCALING_VALUES_DESIGN.md). The view is already part of the revision
   fingerprint, so a changed value moves the epoch.
 - **`match.blind_disabled`** is exported, only alongside `match.blind`, from

@@ -392,7 +392,7 @@ local function engine_path(obj, path)
 end
 
 -- Returns the verified copy, or nil, false when the view disagrees.
-local function copy_current(view, card)
+local function copy_current(view, card, view_record)
 	if not is_plain(view) then
 		return nil, false
 	end
@@ -401,8 +401,11 @@ local function copy_current(view, card)
 			return nil, false
 		end
 	end
-	local spec = SCALING_CURRENT[rget(rget(rget(card, "config"), "center"), "key")]
-	if spec == nil then
+	-- Only a non-debuffed card shows its value, and the view's center must be
+	-- the engine card's (the policy picks the growth rule from it).
+	local key = rget(rget(rget(card, "config"), "center"), "key")
+	local spec = SCALING_CURRENT[key]
+	if spec == nil or rget(card, "debuff") ~= false or rawget(view_record, "center") ~= key then
 		return nil, false
 	end
 	local ability = rget(card, "ability")
@@ -452,7 +455,7 @@ local function build_entity(record, card, kind)
 	if kind == "joker" and shown ~= nil and rawget(shown, "current") == true then
 		local view = rawget(record, "current")
 		if view ~= nil then
-			local current, ok = copy_current(view, card)
+			local current, ok = copy_current(view, card, record)
 			if not ok then
 				return nil
 			end
