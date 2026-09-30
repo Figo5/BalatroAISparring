@@ -224,7 +224,7 @@ def review(session_dir: Path) -> dict:
         key=lambda entry: -float(entry["seconds"]),
     )[:5]
     record = match_record(session_dir) or {"session": session_dir.name}
-    return {
+    return_value = {
         "match": record,
         "decisions": len(decisions),
         "aborts": [str(row.get("errors")) for row in aborts],
@@ -240,6 +240,56 @@ def review(session_dir: Path) -> dict:
         "rejected_codes": dict(rejected.most_common()),
         "handoff_slowest": [{"stage": e.get("stage"), "seconds": e.get("seconds")} for e in slowest],
         "malformed_lines": bad + bad_results,
+        "ui_check": ui_check(decisions),
+    }
+    return return_value
+
+
+UI_ROWS = 200
+
+
+def ui_check(decisions) -> dict:
+    """LV-7 evidence: the AI's logged UI-visible play facts (`ui`, written by
+    the practice service) to compare with screenshots, plus the large-hand and
+    budget checks the queue asks for."""
+    rows = []
+    budget_errors = 0
+    large = 0
+    max_hand = None
+    by_size = {}
+    for row in decisions:
+        if row.get("errors") == "policy_budget_exceeded" or row.get("reason") == "policy_budget_exceeded":
+            budget_errors += 1
+        ui = row.get("ui")
+        if not isinstance(ui, dict):
+            continue
+        size = ui.get("hand_size")
+        if isinstance(size, int) and not isinstance(size, bool):
+            max_hand = size if max_hand is None else max(max_hand, size)
+            if size >= 10:
+                large += 1
+            latency = _number(row.get("latency"))
+            if latency is not None:
+                by_size.setdefault("10+" if size >= 10 else "<=9", []).append(latency)
+        if len(rows) < UI_ROWS:
+            rows.append({
+                "tick": row.get("tick"),
+                "phase": row.get("phase"),
+                "hand_size": size,
+                "blind_requirement": ui.get("blind_requirement"),
+                "current_score": ui.get("current_score"),
+                "hand_levels": ui.get("hand_levels"),
+            })
+    return {
+        "budget_errors": budget_errors,
+        "decisions_with_10_plus_cards": large,
+        "max_hand_size": max_hand,
+        "latency_by_hand_size": {
+            key: {"p50": percentile(values, 0.5), "p95": percentile(values, 0.95), "max": max(values)}
+            for key, values in sorted(by_size.items())
+        },
+        "rows": rows,
+        "rows_truncated": sum(1 for row in decisions if isinstance(row.get("ui"), dict)) > UI_ROWS,
     }
 
 

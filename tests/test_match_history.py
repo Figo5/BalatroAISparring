@@ -121,6 +121,32 @@ def test_bad_host_timings_and_symlinked_sessions_are_tolerated():
         assert match_history.main(["--root", str(root), "review", "linked"]) == 2
 
 
+def test_review_reports_ui_facts_for_lv7():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        levels = {"pair": [3, 30, 4]}
+        decisions = [
+            {"tick": 1, "phase": "PLAY_HAND", "action": {"type": "PLAY_CARDS"}, "latency": 0.02, "reason": "practice_ok",
+             "ui": {"hand_size": 8, "blind_requirement": "300", "current_score": "0", "hand_levels": levels}},
+            {"tick": 2, "phase": "MULTIPLAYER_PVP", "action": {"type": "DISCARD_CARDS"}, "latency": 0.08, "reason": "practice_ok",
+             "ui": {"hand_size": 11, "current_score": "120"}},
+            {"tick": 3, "phase": "PLAY_HAND", "action": None, "latency": 0.2, "reason": "policy_budget_exceeded",
+             "errors": "policy_budget_exceeded", "ui": {"hand_size": 12}},
+            {"tick": 4, "phase": "SHOP", "action": {"type": "LEAVE_SHOP"}, "latency": 0.01, "reason": "practice_ok", "ui": None},
+        ]
+        write_session(root, "s-ui", difficulty="expert", result="ai_win", ante=4, decisions=decisions)
+        check = match_history.review(root / "s-ui")["ui_check"]
+        assert check["budget_errors"] == 1
+        assert check["decisions_with_10_plus_cards"] == 2
+        assert check["max_hand_size"] == 12
+        assert check["latency_by_hand_size"]["10+"]["max"] == 0.2
+        assert check["latency_by_hand_size"]["<=9"]["max"] == 0.02
+        assert [r["tick"] for r in check["rows"]] == [1, 2, 3]
+        assert check["rows"][0]["hand_levels"] == levels
+        assert check["rows"][1]["blind_requirement"] is None
+        assert check["rows_truncated"] is False
+
+
 def test_links_resolving_outside_the_root_are_not_listed():
     # A Windows junction is not a symlink to Python < 3.12; the shared rule
     # also rejects any directory that resolves outside the root.

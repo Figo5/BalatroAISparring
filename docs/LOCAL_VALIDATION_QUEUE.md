@@ -228,7 +228,10 @@ needs the full re-certification and a companion reinstall, not
 - **Evidence to capture:**
   - `results.jsonl` and `decisions.jsonl` for each match (ante reached, lives,
     decisions, rejected, errors, latency);
-  - the screenshots with their matching `decisions.jsonl` rows;
+  - the screenshots with their matching `decisions.jsonl` rows.
+    `python tools/match_history.py review <session>` lists them under
+    `ui_check.rows`, with `budget_errors`, `decisions_with_10_plus_cards`,
+    `max_hand_size` and `latency_by_hand_size`;
   - the rows for the 10+ card PvP and no-clear states, with their `latency` and
     `errors`;
   - a note of any obviously bad play.

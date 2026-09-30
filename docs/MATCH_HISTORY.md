@@ -35,3 +35,19 @@ folders and symlinked log files are ignored.
 
 Useful after the next local session (LV-5, LV-7): run `review` on each match to
 see where hand-off time went and how the stronger policy behaved.
+
+## LV-7 UI check (`review` → `ui_check`)
+
+`review` also summarises the per-decision `ui` facts that the practice service
+logs:
+
+| Field | Meaning |
+|---|---|
+| `rows` | the play-phase rows to compare with screenshots, at most 200: tick, phase, hand size, blind requirement, current score and hand levels |
+| `budget_errors` | decisions that ended with `policy_budget_exceeded` |
+| `decisions_with_10_plus_cards` | decisions made with 10 or more cards in hand |
+| `max_hand_size` | the largest hand seen |
+| `latency_by_hand_size` | latency p50 / p95 / max, split into ≤ 9 and 10+ cards |
+
+These are the LV-7 checks: UI values, large hands, zero budget errors.
+
