@@ -135,3 +135,32 @@ User-approved in chat. Balatro was confirmed closed immediately before each live
   - The live-to-staged hand-off, and any human-played match through PvP, lives and results.
   - These are the user's first playtest.
 - **Left running for the user:** practice host daemon (session `host-ffddc17b…`). Restart scripts are `work/aisparring-host/dev/start_practice_host.cmd` and `.ps1`.
+
+## Live menu crash, fix `9f7a8e1` and reinstall (September 29, ~20:25–21:20 ET)
+
+**What happened.** The user clicked **Play → AI Sparring** in the installed `c33bab6` build, and the live game crashed with `game.lua:3036: attempt to index field 'OVERLAY_MENU' (a boolean value)`.
+- **Cause:** the menu passed a bare UI definition to `G.FUNCS.overlay_menu`, which expects `{definition = …}`. The UIBox build threw after the engine had set `G.OVERLAY_MENU = true`, the menu's `pcall` hid the error, and the next draw crashed.
+- **Why tests missed it:** the fixtures modelled the wrong signature.
+- **Immediate action:** the broken build was moved out of live Mods to `backups/installed-c33bab6-AISparring`, after verified backup `20260930T003436Z`.
+
+**Fix.** Three Claude Opus 5.5 High review rounds (`CLAUDE_LIVE_MENU_CRASH_*.md`) also caught these handoff defects:
+- The launcher's start gate takes about 40 s (measured), against a 10 s menu ack timeout, so every live start would have failed.
+- The launcher's 10 s idle close, combined with process-global LÖVE channel names, meant starts hit a dead connection and a rebuilt worker could replay an old start (H1).
+
+What changed:
+- The real overlay signature, with sentinel cleanup.
+- A 120 s ack timeout with a modal waiting screen that is never closed before the quit.
+- A main-menu re-check on ack.
+- A fresh connection with unique channels for every start, released after the answer, plus abandon on failure.
+- Uninstall closes our own screen, and there is no live menu without the update hook.
+
+All tests use real engine shapes and failed first. Final verdict: READY to reinstall. Deferred items, documented:
+- L2: a launcher `cancel` op.
+- I1/I3/I9–I11.
+
+**Re-certification and reinstall.**
+- Certificate `b48b5a0b6cf69be03bab5aeac223a9b1ed066c3586e81298aa7c7f5ba72f97f4` (seven phases, `work/recert-9f7a8e1`).
+- Package `1f6e2a6b…` = `9f7a8e1` source.
+- Fresh backup, dry run `install_planned`, then `installed` with receipt `work/install-receipts/aisparring-install-20260930T011952Z-47f5e144.json`. The only live difference is the new `Mods/AISparring` folder, identical to the package.
+- The practice host daemon was restarted (`host-a137bd9d…`). Start gates: `practice_host_ok` in 41.1 s.
+- The user's first click-through of the new menu is the next live check.
