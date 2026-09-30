@@ -1781,6 +1781,93 @@ local function cert_use_consumables(builder, G)
 	end
 end
 
+-- Targeted Tarots used on highlighted hand cards in the hand phase
+-- (docs/HAND_TARGETS_DESIGN.md, v1 scope). Only these centers; the target
+-- counts come from the engine card, and the executor re-checks the engine's
+-- own `can_use_consumeable` after highlighting. Targets are face-up cards with
+-- a visible identity, and a target the effect would not change is skipped.
+local HAND_TAROTS = {
+	c_strength = "rank", c_death = "pair",
+	c_lovers = "m_wild", c_chariot = "m_steel", c_justice = "m_glass", c_devil = "m_gold",
+	c_star = "Diamonds", c_moon = "Clubs", c_sun = "Hearts", c_world = "Spades",
+}
+local HAND_TAROT_LIMIT = 8
+local HAND_TAROT_TOTAL = 24
+
+local function target_bounds(card)
+	local consumeable = rget(rget(card, "ability"), "consumeable")
+	if type(consumeable) ~= "table" then
+		return nil
+	end
+	local mod_num = rawget(consumeable, "mod_num")
+	local max_h = rawget(consumeable, "max_highlighted")
+	local max_value = is_nat(mod_num) and mod_num or (is_nat(max_h) and max_h or nil)
+	local min_h = rawget(consumeable, "min_highlighted")
+	return is_nat(min_h) and min_h or 1, max_value
+end
+
+local function cert_hand_tarots(builder, G, hand_cards)
+	-- A blind-forced card (Cerulean Bell) would join every highlight: v1 offers
+	-- no targeted use then.
+	local forced = forced_hand_ordinals(G)
+	if forced == nil or #forced > 0 or hand_cards == nil then
+		return
+	end
+	local consumeables, count = area_cards(G, "consumeables", LIMITS.consumables)
+	if consumeables == nil then
+		return
+	end
+	local visible = {}
+	for j = 1, #hand_cards do
+		local card = rawget(hand_cards, j)
+		local rank, suit = grouping_identity(card)
+		if rank ~= nil and suit ~= nil and debuff_of(card) == false then
+			visible[#visible + 1] = { ordinal = j, rank = rank, suit = suit, base = center_key(card) == "c_base" }
+		end
+	end
+	local total = 0
+	for i = 1, count do
+		local card = rawget(consumeables, i)
+		local key = type(card) == "table" and rpath(card, "config", "center", "key") or nil
+		local effect = type(key) == "string" and HAND_TAROTS[key] or nil
+		local min_value, max_value = target_bounds(card)
+		if effect ~= nil and is_face_up(card) and debuff_of(card) == false and max_value ~= nil then
+			local source_ref = ref("consumable", i)
+			local added = 0
+			local function add(refs)
+				if added < HAND_TAROT_LIMIT and total < HAND_TAROT_TOTAL then
+					if builder.add({ type = "USE_CONSUMABLE_ON_HAND", certified = true, source_ref = source_ref, card_refs = refs }) ~= false then
+						added = added + 1
+						total = total + 1
+					end
+				end
+			end
+			if effect == "pair" then
+				-- Death: the left card (lower ordinal) becomes a copy of the right.
+				if min_value <= 2 and max_value >= 2 then
+					for a = 1, #visible do
+						for b = a + 1, #visible do
+							local x, y = visible[a], visible[b]
+							if x.rank ~= y.rank or x.suit ~= y.suit then
+								add({ ref("hand", x.ordinal), ref("hand", y.ordinal) })
+							end
+						end
+					end
+				end
+			elseif min_value <= 1 and max_value >= 1 then
+				for a = 1, #visible do
+					local v = visible[a]
+					local useful = effect == "rank" or (string.sub(effect, 1, 2) == "m_" and v.base)
+						or (string.sub(effect, 1, 2) ~= "m_" and v.suit ~= effect)
+					if useful then
+						add({ ref("hand", v.ordinal) })
+					end
+				end
+			end
+		end
+	end
+end
+
 -- Bounded "meaningful" reorders. There is no discrete reorder callback in the
 -- engine (Multiplayer logs drag/drop by diffing CardArea order), so the
 -- executor commits the same area-order permutation the drag would produce. To
@@ -2137,6 +2224,9 @@ local function build_certificates(G, MP, phase, context, hand_cards, target)
 		cert_sell_consumables(builder, G)
 		if consumable_use_available(G) then
 			cert_use_consumables(builder, G)
+			if phase ~= "DISCARD" then
+				cert_hand_tarots(builder, G, hand_cards)
+			end
 		end
 	elseif phase == "CONSUMABLE_SELECTION" then
 		if target ~= nil then

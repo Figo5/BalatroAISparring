@@ -117,6 +117,8 @@ local CERT_TYPES = {
 	SELECT_BOOSTER_ITEM = { card_refs = "booster", capacity_ok = true },
 	SKIP_BOOSTER = {},
 	USE_CONSUMABLE = { source_ref = "consumable", target_refs = "target" },
+	-- A targeted Tarot used on highlighted hand cards (docs/HAND_TARGETS_DESIGN.md).
+	USE_CONSUMABLE_ON_HAND = { source_ref = "consumable", card_refs = "hand" },
 	SELECT_TARGETS = { target_refs = "target" },
 	REORDER_JOKERS = { order = "joker" },
 	REORDER_HAND = { order = "hand" },

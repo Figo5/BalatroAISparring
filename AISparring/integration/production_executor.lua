@@ -101,6 +101,7 @@ local LATCH_TYPES = {
 	OPEN_BOOSTER = true,
 	SELECT_BOOSTER_ITEM = true,
 	USE_CONSUMABLE = true,
+	USE_CONSUMABLE_ON_HAND = true,
 	LEAVE_SHOP = true,
 	CASH_OUT = true,
 }
@@ -616,6 +617,7 @@ end
 -- instead of being latched into a false "waiting for effect" state.
 local USE_CARD_LEAVE = {
 	USE_CONSUMABLE = "consumeables",
+	USE_CONSUMABLE_ON_HAND = "consumeables",
 	SELECT_BOOSTER_ITEM = "pack_cards",
 	OPEN_BOOSTER = "shop_booster",
 	BUY_VOUCHER = "shop_vouchers",
@@ -878,7 +880,8 @@ function ProductionExecutor.factory(ports)
 			p.kind = "card_leave"
 			p.area_key = "jokers"
 			p.card = target
-		elseif action_type == "SELL_CONSUMABLE" or action_type == "USE_CONSUMABLE" then
+		elseif action_type == "SELL_CONSUMABLE" or action_type == "USE_CONSUMABLE"
+			or action_type == "USE_CONSUMABLE_ON_HAND" then
 			p.kind = "card_leave"
 			p.area_key = "consumeables"
 			p.card = target
@@ -1342,6 +1345,44 @@ function ProductionExecutor.factory(ports)
 		return source
 	end
 
+	-- A targeted Tarot on hand cards (docs/HAND_TARGETS_DESIGN.md): hand phase
+	-- only, one or two distinct hand cards within the engine card's own
+	-- highlight bounds, and no blind-forced card (it would join the highlight).
+	-- Returns the source; the engine predicate is re-checked after highlighting.
+	local function validate_use_on_hand(action)
+		if not state_symbol(G, "SELECTING_HAND") or not gates_clear(G) then
+			return nil, CODE.ILLEGAL
+		end
+		local source, zone = resolve_ref(G, rget(action, "source_ref"))
+		if source == nil or zone ~= "consumable" then
+			return nil, CODE.UNKNOWN_REF
+		end
+		local refs = rget(action, "card_refs")
+		local count = selection_bound(refs)
+		if count == nil or count < 1 or count > 2 then
+			return nil, CODE.ILLEGAL
+		end
+		if distinct_cards(G, refs, "hand") == nil then
+			return nil, CODE.UNKNOWN_REF
+		end
+		local forced = forced_hand_cards(G)
+		if forced == nil or #forced > 0 then
+			return nil, CODE.ILLEGAL
+		end
+		local consumeable = rget(rget(source, "ability"), "consumeable")
+		if type(consumeable) ~= "table" then
+			return nil, CODE.ILLEGAL
+		end
+		local mod_num = rawget(consumeable, "mod_num")
+		local max_highlighted = rawget(consumeable, "max_highlighted")
+		local max_targets = is_nat(mod_num) and mod_num or (is_nat(max_highlighted) and max_highlighted or nil)
+		local min_highlighted = rawget(consumeable, "min_highlighted")
+		local min_targets = is_nat(min_highlighted) and min_highlighted or 1
+		if max_targets == nil or count < min_targets or count > max_targets then
+			return nil, CODE.ILLEGAL
+		end
+		return source
+	end
 	local function validate_sell(action, ref_field, zone)
 		local card, ref_zone = resolve_ref(G, rget(action, ref_field))
 		if card == nil or ref_zone ~= zone then
@@ -1446,6 +1487,8 @@ function ProductionExecutor.factory(ports)
 			return true
 		elseif t == "USE_CONSUMABLE" then
 			return validate_use_consumable(action)
+		elseif t == "USE_CONSUMABLE_ON_HAND" then
+			return validate_use_on_hand(action)
 		elseif t == "REORDER_JOKERS" then
 			return validate_reorder(action, "joker")
 		elseif t == "REORDER_HAND" then
@@ -1677,6 +1720,35 @@ function ProductionExecutor.factory(ports)
 				end
 			end
 			return invoke("use_card", element(target))
+		elseif t == "USE_CONSUMABLE_ON_HAND" then
+			-- Highlight exactly these cards, let the engine's own predicate
+			-- decide, then press Use. Any failure after highlighting clears the
+			-- highlight again (vanilla's use unhighlights on success).
+			local function clear()
+				local hand = rget(G, "hand")
+				local unhighlight = type(hand) == "table" and hand.unhighlight_all or nil
+				if type(unhighlight) == "function" then
+					pcall(unhighlight, hand)
+				end
+			end
+			local cards = distinct_cards(G, rget(action, "card_refs"), "hand")
+			if cards == nil then
+				return nil, CODE.UNKNOWN_REF
+			end
+			local applied, apply_code = apply_hand_selection(cards, true)
+			if applied == nil then
+				clear()
+				return nil, apply_code
+			end
+			if call_predicate(target, "can_use_consumeable") ~= true then
+				clear()
+				return nil, CODE.ILLEGAL
+			end
+			local used, use_code = invoke("use_card", element(target))
+			if used ~= true then
+				clear()
+			end
+			return used, use_code
 		elseif t == "SELECT_TARGETS" then
 			local applied, apply_code = apply_hand_selection(target, false)
 			if applied == nil then
@@ -1777,6 +1849,14 @@ function ProductionExecutor.factory(ports)
 				-- attach NO latch so the stall timer cannot fire on a no-op.
 				local leave_area = USE_CARD_LEAVE[t]
 				if leave_area ~= nil and type(target) == "table" and card_in_area(leave_area, target) then
+					if t == "USE_CONSUMABLE_ON_HAND" then
+						-- A no-op use leaves the targets highlighted: clear them.
+						local hand = rget(G, "hand")
+						local unhighlight = type(hand) == "table" and hand.unhighlight_all or nil
+						if type(unhighlight) == "function" then
+							pcall(unhighlight, hand)
+						end
+					end
 					return nil, CODE.CALLBACK_FAILED
 				end
 				pending = anchor

@@ -377,13 +377,14 @@ return function(ctx)
 	end)
 
 	test("targeted_consumables_are_not_bought_and_are_sold", function()
-		-- No target-selection port is wired live, so Strength or Death could
-		-- never be used: buy The Hermit instead, and sell a held Death.
+		-- Targeted consumables outside the hand-phase allowlist (The Hanged
+		-- Man, docs/HAND_TARGETS_DESIGN.md) can never be used live: buy The
+		-- Hermit instead, and sell a held one.
 		for _, difficulty in ipairs(Support.DIFFICULTIES) do
 			local frame = Support.shop_frame()
 			frame.self.money = 20
 			frame.shop.items = {
-				{ kind = "consumable", center = "c_strength", cost = 3, sell_cost = 1, face_down = false },
+				{ kind = "consumable", center = "c_hanged_man", cost = 3, sell_cost = 1, face_down = false },
 				{ kind = "consumable", center = "c_hermit", cost = 3, sell_cost = 1, face_down = false },
 			}
 			frame.shop.boosters = {}
@@ -395,15 +396,24 @@ return function(ctx)
 			ctx.eq(Support.run(env, difficulty, frame).action.item_ref, "shop:2", difficulty .. " hermit")
 			frame.shop.items[2] = nil
 			frame.certificates.items = { frame.certificates.items[1], frame.certificates.items[3] }
-			ctx.eq(Support.run(env, difficulty, frame).action.type, "LEAVE_SHOP", difficulty .. " no strength")
+			ctx.eq(Support.run(env, difficulty, frame).action.type, "LEAVE_SHOP", difficulty .. " no hanged man")
 			local sell = Support.shop_frame()
 			sell.shop.items, sell.shop.boosters = {}, {}
-			sell.self.consumables = { { kind = "consumable", center = "c_death", face_down = false } }
+			sell.self.consumables = { { kind = "consumable", center = "c_hanged_man", face_down = false } }
 			sell.certificates.items = {
 				{ type = "SELL_CONSUMABLE", certified = true, consumable_ref = "consumable:1" },
 				{ type = "LEAVE_SHOP", certified = true },
 			}
-			ctx.eq(Support.run(env, difficulty, sell).action.type, "SELL_CONSUMABLE", difficulty .. " sell death")
+			ctx.eq(Support.run(env, difficulty, sell).action.type, "SELL_CONSUMABLE", difficulty .. " sell hanged man")
+			-- An allowlisted Death is kept while a slot is free (Rookie, which
+			-- never uses it, sells it).
+			sell.self.consumables[1].center = "c_death"
+			sell.match.consumable_slots = 2
+			local want = difficulty == "rookie" and "SELL_CONSUMABLE" or "LEAVE_SHOP"
+			ctx.eq(Support.run(env, difficulty, sell).action.type, want, difficulty .. " death, free slot")
+			-- With the slots full it is sold, so it cannot block Planets.
+			sell.match.consumable_slots = 1
+			ctx.eq(Support.run(env, difficulty, sell).action.type, "SELL_CONSUMABLE", difficulty .. " death, full slots")
 		end
 	end)
 
@@ -413,12 +423,12 @@ return function(ctx)
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit" }, 20, 1)).action.type, "USE_CONSUMABLE", difficulty .. " use at $20")
 			-- Two held consumables fill the two shop slots: use it to free one.
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit", "c_fool" }, 8, 1)).action.source_ref, "consumable:1", difficulty .. " full slots")
-			-- A card that cannot be used live (targeted Strength) is not counted
-			-- as worth a slot, so the Hermit is not spent at $8.
-			-- (The adapter never offers USE for Strength without targets.)
-			local dead = use_frame({ "c_hermit", "c_strength" }, 8, 1)
+			-- A card that cannot be used live (targeted Magician, outside the v1
+			-- allowlist) is not counted as worth a slot, so the Hermit is not
+			-- spent at $8. (The adapter never offers USE for it without targets.)
+			local dead = use_frame({ "c_hermit", "c_magician" }, 8, 1)
 			table.remove(dead.certificates.items, 2)
-			ctx.eq(Support.run(env, difficulty, dead).action.type, "LEAVE_SHOP", difficulty .. " strength not counted")
+			ctx.eq(Support.run(env, difficulty, dead).action.type, "LEAVE_SHOP", difficulty .. " magician not counted")
 		end
 		-- Rookie keeps the simple rule: use at once.
 		ctx.eq(Support.run(env, "rookie", use_frame({ "c_hermit" }, 8, 1)).action.type, "USE_CONSUMABLE", "rookie")

@@ -59,6 +59,9 @@ local ACTIONS_PHASES = {
 	SELECT_BOOSTER_ITEM = { BOOSTER_SELECTION = true },
 	SKIP_BOOSTER = { BOOSTER_SELECTION = true },
 	USE_CONSUMABLE = SELF_PHASES,
+	-- Targeted Tarot on hand cards: the real highlight-then-Use path, only in
+	-- the hand phases where production emits it (docs/HAND_TARGETS_DESIGN.md).
+	USE_CONSUMABLE_ON_HAND = { PLAY_HAND = true, MULTIPLAYER_PVP = true },
 	SELECT_TARGETS = { CONSUMABLE_SELECTION = true },
 	REORDER_JOKERS = SELF_PHASES,
 	REORDER_HAND = {
@@ -86,6 +89,7 @@ local ACTION_KEYS = {
 	SELECT_BOOSTER_ITEM = { type = true, card_refs = true },
 	SKIP_BOOSTER = { type = true },
 	USE_CONSUMABLE = { type = true, source_ref = true, target_refs = true },
+	USE_CONSUMABLE_ON_HAND = { type = true, source_ref = true, card_refs = true },
 	SELECT_TARGETS = { type = true, target_refs = true },
 	REORDER_JOKERS = { type = true, order = true },
 	REORDER_HAND = { type = true, order = true },
@@ -101,6 +105,7 @@ local REQUIRED_FIELDS = {
 	OPEN_BOOSTER = { item_ref = true },
 	SELECT_BOOSTER_ITEM = { card_refs = true },
 	USE_CONSUMABLE = { source_ref = true },
+	USE_CONSUMABLE_ON_HAND = { source_ref = true, card_refs = true },
 	SELECT_TARGETS = { target_refs = true },
 	REORDER_JOKERS = { order = true },
 	REORDER_HAND = { order = true },
@@ -112,6 +117,7 @@ local ARRAY_NONEMPTY = {
 	PLAY_CARDS = { card_refs = true },
 	DISCARD_CARDS = { card_refs = true },
 	SELECT_BOOSTER_ITEM = { card_refs = true },
+	USE_CONSUMABLE_ON_HAND = { card_refs = true },
 	SELECT_TARGETS = { target_refs = true },
 	REORDER_JOKERS = { order = true },
 	REORDER_HAND = { order = true },
@@ -543,6 +549,34 @@ local function build_use_consumable(phase, context, obs, cert)
 	return { type = "USE_CONSUMABLE", source_ref = cert.source_ref, target_refs = copy_array(refs) }
 end
 
+-- At most two distinct, visible hand cards (the v1 allowlist's largest
+-- selection is Death's two); the executor re-checks the engine's own
+-- `can_use_consumeable` after highlighting them.
+local function build_use_on_hand(obs, cert)
+	local self = obs.self
+	if type(self) ~= "table" or type(self.consumables) ~= "table" or type(self.hand) ~= "table" then
+		return nil
+	end
+	local source = find_entity(self.consumables, cert.source_ref)
+	if source == nil or source.redacted == true then
+		return nil
+	end
+	local refs = cert.card_refs
+	if type(refs) ~= "table" or #refs == 0 or #refs > 2 then
+		return nil
+	end
+	local seen = {}
+	for i = 1, #refs do
+		local ref = refs[i]
+		local card = is_ref(ref) and zone_of(ref) == "hand" and find_entity(self.hand, ref) or nil
+		if card == nil or card.redacted == true or seen[ref] then
+			return nil
+		end
+		seen[ref] = true
+	end
+	return { type = "USE_CONSUMABLE_ON_HAND", source_ref = cert.source_ref, card_refs = copy_array(refs) }
+end
+
 local function build_select_targets(phase, context, obs, cert)
 	if phase ~= "CONSUMABLE_SELECTION" or context.target_selection ~= true then
 		return nil
@@ -633,6 +667,8 @@ local function build_action(phase, context, obs, cert)
 		return { type = t }
 	elseif t == "USE_CONSUMABLE" then
 		return build_use_consumable(phase, context, obs, cert)
+	elseif t == "USE_CONSUMABLE_ON_HAND" then
+		return build_use_on_hand(obs, cert)
 	elseif t == "SELECT_TARGETS" then
 		return build_select_targets(phase, context, obs, cert)
 	elseif t == "REORDER_JOKERS" or t == "REORDER_HAND" then

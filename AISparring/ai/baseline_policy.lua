@@ -90,6 +90,8 @@ local BASE = {
 	smart_packs = true,
 	-- Hold The Hermit until money reaches $20 (its payout cap).
 	hold_hermit = true,
+	-- Use allowlisted targeted Tarots on hand cards (docs/HAND_TARGETS_DESIGN.md).
+	hand_tarots = true,
 	-- React to visible boss blind effects (The Psychic).
 	boss_aware = true,
 	-- Pack pick: points per displayed level of the hand a planet upgrades.
@@ -126,6 +128,7 @@ local CONFIGS = {
 		use_requirement = false,
 		discard_ev = false,
 		hold_hermit = false,
+		hand_tarots = false,
 		boss_aware = false,
 		use_levels = false,
 		reserve = 6,
@@ -201,6 +204,9 @@ local MIN_CARDS = 0
 -- type but those played. nil when no such boss is active.
 local EYE_PLAYED = nil
 local MOUTH_ONLY = nil
+-- Targeted Tarot evaluation, per decision: best play now, and work spent.
+local TAROT_BEFORE = nil
+local TAROT_WORK = 0
 -- Effects derived from owned scaling Jokers' shown values, per decision.
 local CURRENT_EFF = {}
 
@@ -1785,6 +1791,20 @@ local TARGETED = {
 	c_aura = true, c_deja_vu = true, c_trance = true, c_medium = true, c_talisman = true, c_cryptid = true,
 }
 
+-- Targeted Tarots the adapter certifies on hand cards (USE_CONSUMABLE_ON_HAND)
+-- and their effect: +1 rank, Death (left becomes a copy of right), an
+-- enhancement, or a suit.
+local TAROT_FX = {
+	c_strength = "rank", c_death = "pair",
+	c_lovers = "m_wild", c_chariot = "m_steel", c_justice = "m_glass", c_devil = "m_gold",
+	c_star = "Diamonds", c_moon = "Clubs", c_sun = "Hearts", c_world = "Spades",
+}
+
+-- A targeted consumable this difficulty can never use: never bought, and sold.
+local function unusable(center)
+	return TARGETED[center] and not (CONF.hand_tarots and TAROT_FX[center])
+end
+
 local function harmful_use(observation, center)
 	local s = observation.self
 	local jokers = 0
@@ -1961,7 +1981,7 @@ local function buy_score(observation, action)
 	if spend == nil or spend < cost then
 		return nil
 	end
-	if item.kind == "consumable" and (harmful_use(observation, item.center) or TARGETED[item.center]) then
+	if item.kind == "consumable" and (harmful_use(observation, item.center) or unusable(item.center)) then
 		return nil
 	end
 	local score = kind_value(item.kind)
@@ -2213,7 +2233,7 @@ local function target_or_use_score(observation, action)
 			for i = 1, #s.consumables do
 				local c = s.consumables[i]
 				local cc = type(c) == "table" and c.center or nil
-				if not (type(cc) == "string" and (TARGETED[cc] or harmful_use(observation, cc))) then
+				if not (type(cc) == "string" and (unusable(cc) or harmful_use(observation, cc))) then
 					held = held + 1
 				end
 			end
@@ -2457,8 +2477,14 @@ local function sell_consumable_score(observation, action)
 	if held == nil or held.redacted == true or type(held.center) ~= "string" then
 		return nil
 	end
-	if not harmful_use(observation, held.center) and not TARGETED[held.center] then
-		return nil
+	if not harmful_use(observation, held.center) and not unusable(held.center) then
+		-- A usable targeted Tarot waits for a useful hand, so it is sold only
+		-- when the consumable slots are full (it must not block Planets).
+		local slots = type(observation.match) == "table" and observation.match.consumable_slots or nil
+		local list = observation.self.consumables
+		if not (TAROT_FX[held.center] and type(slots) == "number" and type(list) == "table" and #list >= slots) then
+			return nil
+		end
 	end
 	return CONF.leave_shop + CONF.sell_harmful
 end
@@ -2537,6 +2563,89 @@ local function sell_score(observation, action)
 	return nil
 end
 
+-- A targeted Tarot on hand cards: the best estimated play over the hand with
+-- the effect applied, against the best play now. Used on a clear gain (Gold:
+-- when it costs nothing, for its held payout); otherwise held. Metered with
+-- its own share of work.
+local TARGET_WORK = 6000
+
+local function hand_tarot_score(observation, action)
+	local s = observation.self
+	if not CONF.hand_tarots or not CONF.estimate_plays or type(s) ~= "table" or type(s.hand) ~= "table"
+		or TAROT_WORK >= TARGET_WORK then
+		return nil
+	end
+	local source = find_by_id(s.consumables, action.source_ref)
+	local fx = type(source) == "table" and TAROT_FX[source.center] or nil
+	local refs = action.card_refs
+	if fx == nil or type(refs) ~= "table" then
+		return nil
+	end
+	local w0 = WORK
+	local hand = {}
+	local at = {}
+	for i = 1, #s.hand do
+		local c = s.hand[i]
+		if type(c) ~= "table" or c.redacted == true then
+			return nil
+		end
+		hand[i] = c
+		at[c.id] = i
+	end
+	if TAROT_BEFORE == nil then
+		TAROT_BEFORE = best_play_value(hand, s.jokers)
+	end
+	local idx = {}
+	for i = 1, #refs do
+		idx[i] = at[refs[i]]
+		if idx[i] == nil then
+			return nil
+		end
+	end
+	local function copy(c)
+		local out = {}
+		for k, v in pairs(c) do
+			out[k] = v
+		end
+		return out
+	end
+	if fx == "pair" then
+		if #idx ~= 2 then
+			return nil
+		end
+		-- The left card (lower position) becomes a copy of the right one.
+		local left, right = math.min(idx[1], idx[2]), math.max(idx[1], idx[2])
+		local c = copy(hand[right])
+		c.id = hand[left].id
+		hand[left] = c
+	else
+		local c = copy(hand[idx[1]])
+		if fx == "rank" then
+			local rv = rank_value(c.rank)
+			if rv == nil then
+				return nil
+			end
+			c.rank = RANK_NAMES[rv == 14 and 2 or rv + 1]
+		elseif string.sub(fx, 1, 2) == "m_" then
+			c.center = fx
+		else
+			c.suit = fx
+		end
+		hand[idx[1]] = c
+	end
+	local after = best_play_value(hand, s.jokers)
+	TAROT_WORK = TAROT_WORK + WORK - w0
+	local before = TAROT_BEFORE
+	if before > 0 and after > before * 1.02 then
+		local gain = (after - before) / before
+		return 1500000 + 400000 * (gain > 1 and 1 or gain)
+	end
+	if fx == "m_gold" and before > 0 and after >= before then
+		return 1400000
+	end
+	return nil
+end
+
 local function score_of(observation, action)
 	if type(action) ~= "table" then
 		return nil
@@ -2547,6 +2656,9 @@ local function score_of(observation, action)
 	end
 	if kind == "PLAY_CARDS" then
 		return play_score(observation, action)
+	end
+	if kind == "USE_CONSUMABLE_ON_HAND" then
+		return hand_tarot_score(observation, action)
 	end
 	if kind == "DISCARD_CARDS" then
 		local score = discard_score(observation, action)
@@ -2641,6 +2753,8 @@ return function(observation, actions)
 	EYE_PLAYED = nil
 	MOUTH_ONLY = nil
 	CURRENT_EFF = {}
+	TAROT_BEFORE = nil
+	TAROT_WORK = 0
 	local match = observation.match
 	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
 	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and type(levels) == "table"

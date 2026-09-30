@@ -173,6 +173,15 @@ local function area(opts)
 			end
 		end
 	end
+	-- Real `CardArea:unhighlight_all` keeps blind-forced cards highlighted.
+	function instance:unhighlight_all()
+		for i = #self.highlighted, 1, -1 do
+			local card = self.highlighted[i]
+			if not (type(card.ability) == "table" and card.ability.forced_selection == true) then
+				table.remove(self.highlighted, i)
+			end
+		end
+	end
 	return instance
 end
 
