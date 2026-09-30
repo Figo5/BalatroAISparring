@@ -2153,13 +2153,7 @@ local function reroll_score(observation, action)
 	end
 	local left = spend - cost
 	local score = CONF.reroll_base
-	-- Money above the interest cap earns nothing, so it counts as surplus
-	-- even when twice the reserve is higher.
-	local threshold = CONF.reserve * 2
-	if 5 * INTEREST_CAP < threshold then
-		threshold = 5 * INTEREST_CAP
-	end
-	local surplus = left - threshold
+	local surplus = left - CONF.reserve * 2
 	if surplus > 0 then
 		local extra = surplus * 2
 		if extra > CONF.reroll_surplus_cap then

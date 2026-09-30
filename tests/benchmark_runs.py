@@ -12,12 +12,16 @@ sandboxed policy):
 - **Money:** $4 to start, then the blind reward ($3 / $4 / $5), $1 per unused
   hand and interest ($1 per $5, at most $5).
 - **Shop:** after every cleared blind, two items (a Joker at $4-8 or a planet at
-  $3), rerolls at $5 rising by $1, five Joker slots. A bought planet levels its
-  hand at once (a simplification of using it). Selling returns half the price.
-  Joker reorders are applied.
+  $3), rerolls at $5 rising by $1, five Joker slots. Offers are seeded by run
+  seed, ante, blind and reroll count, so every difficulty sees the same offers
+  at the same shop position. A bought planet levels its hand at once (a
+  simplification of using it). Selling returns half the price. Joker reorders
+  are applied. Money cannot go below $0 (no Credit Card).
+- **Validation:** an unaffordable buy or reroll, a full-slot Joker buy, a bad
+  reorder, a policy no-action or an unexpected action type in a blind counts as
+  a failure.
 
-Every difficulty sees the same deck orders and shop offers for the same run
-seed. Plays are scored with the reference scorer shared with the policy's
+Every difficulty sees the same deck orders for the same run seed. Plays are scored with the reference scorer shared with the policy's
 model, Lucky cards score their average and Glass never breaks, and there are
 no packs, vouchers, tags, scaling Jokers or opponents. So this measures how
 play, economy and Joker buying combine within that model. It is not a Balatro
@@ -54,7 +58,7 @@ PLANETS = {
 }
 
 DECIDE = r'''
-return function(repo)
+return function(repo, policy_path)
 	local support = dofile(repo .. "/tests/engine/support.lua")
 	local bundle = support.bundle(repo)
 	local function read_file(path)
@@ -68,16 +72,17 @@ return function(repo)
 		read_file(repo .. "/AISparring/ai/codec.lua"),
 		read_file(repo .. "/AISparring/ai/observation.lua"),
 		read_file(repo .. "/AISparring/ai/actions.lua")) == true)
-	local baseline = dofile(repo .. "/AISparring/ai/baseline_policy.lua")
+	local baseline = dofile(policy_path or (repo .. "/AISparring/ai/baseline_policy.lua"))
 	local sources = {}
 	return function(state, difficulty)
 		sources[difficulty] = sources[difficulty] or assert(baseline.source(difficulty))
 		local jokers = {}
 		for i = 1, #state.jokers do
-			jokers[i] = support.card({ center = state.jokers[i], center_set = "Joker", set = "Joker", area_type = "joker" })
+			local j = state.jokers[i]
+			jokers[i] = support.card({ center = j.center, center_set = "Joker", set = "Joker", area_type = "joker", sell_cost = j.sell })
 		end
 		local opts = {
-			jokers = jokers, joker_slots = state.joker_slots, dollars = state.dollars,
+			jokers = jokers, joker_slots = state.joker_slots, dollars = state.dollars, bankrupt_at = 0,
 			ante = state.ante, round = state.round,
 		}
 		if state.phase == "shop" then
@@ -87,7 +92,7 @@ return function(repo)
 			for i = 1, #state.shop do
 				local it = state.shop[i]
 				if it.kind == "joker" then
-					items[i] = support.card({ set = "Joker", center = it.center, cost = it.cost, center_set = "Joker", sell_cost = math.floor(it.cost / 2) })
+					items[i] = support.card({ set = "Joker", center = it.center, cost = it.cost, center_set = "Joker", sell_cost = math.max(1, math.floor(it.cost / 2)) })
 				else
 					items[i] = support.card({ set = "Planet", consumeable = true, center = it.center, center_set = "Planet", cost = it.cost })
 				end
@@ -191,12 +196,14 @@ def play_blind(fn, run, blind, difficulty, stats):
         }
         result = decide(fn, state, difficulty, stats)
         if not result.get("ok") or result.get("type") not in ("PLAY_CARDS", "DISCARD_CARDS"):
+            if result.get("ok") or result.get("code") == "policy_no_action":
+                stats["failures"] += 1
             break
         idx = sorted({ref_index(r) for r in result["refs"]})
         chosen = [hand[i] for i in idx]
         rest = [hand[i] for i in range(len(hand)) if i not in idx]
         if result["type"] == "PLAY_CARDS":
-            chips += int(bp.reference_score(chosen, rest, run["jokers"], levels))
+            chips += int(bp.reference_score(chosen, rest, [j["center"] for j in run["jokers"]], levels))
             hands_left -= 1
         else:
             discards_left -= 1
@@ -212,7 +219,15 @@ def shop_offer(rng):
     return {"kind": "planet", "center": rng.choice(sorted(PLANETS)), "cost": 3}
 
 
-def visit_shop(fn, run, ante, difficulty, stats, rng):
+def shop_rng(seed, ante, blind, rerolls):
+    # Offers depend only on the run seed and the shop position, so every
+    # difficulty sees the same offers for the same shop and reroll count.
+    return random.Random(((seed * 31 + ante) * 7 + blind) * 101 + rerolls)
+
+
+def visit_shop(fn, run, ante, blind, difficulty, stats, seed):
+    rerolls = 0
+    rng = shop_rng(seed, ante, blind, rerolls)
     shop = [shop_offer(rng), shop_offer(rng)]
     reroll_cost = 5
     for _ in range(SHOP_STEPS):
@@ -227,36 +242,47 @@ def visit_shop(fn, run, ante, difficulty, stats, rng):
             return
         if kind == "BUY_ITEM":
             item = shop.pop(ref_index(result["item_ref"]))
+            if item["cost"] > run["money"] or (item["kind"] == "joker" and len(run["jokers"]) >= JOKER_SLOTS):
+                stats["failures"] += 1
+                return
             run["money"] -= item["cost"]
             if item["kind"] == "joker":
-                run["jokers"].append(item["center"])
+                run["jokers"].append({"center": item["center"], "sell": max(1, item["cost"] // 2)})
                 stats["jokers_bought"] += 1
             else:
                 level_up(run["levels"], PLANETS[item["center"]])
                 stats["planets_bought"] += 1
         elif kind == "REROLL":
+            if reroll_cost > run["money"]:
+                stats["failures"] += 1
+                return
             run["money"] -= reroll_cost
             reroll_cost += 1
+            rerolls += 1
+            rng = shop_rng(seed, ante, blind, rerolls)
             shop = [shop_offer(rng), shop_offer(rng)]
             stats["rerolls"] += 1
         elif kind == "SELL_JOKER":
-            run["jokers"].pop(ref_index(result["joker_ref"]))
-            run["money"] += 2
+            sold = run["jokers"].pop(ref_index(result["joker_ref"]))
+            run["money"] += sold["sell"]
         elif kind == "REORDER_JOKERS":
-            run["jokers"] = [run["jokers"][ref_index(r)] for r in result["order"]]
+            order = [ref_index(r) for r in result["order"]]
+            if sorted(order) != list(range(len(run["jokers"]))):
+                stats["failures"] += 1
+                return
+            run["jokers"] = [run["jokers"][i] for i in order]
         else:
             return
 
 
 def simulate_run(fn, seed, difficulty):
     rng = random.Random(seed)
-    shop_rng = random.Random(seed * 7919 + 1)
     run = {"money": 4, "jokers": [], "levels": {}, "round": 1}
     stats = {"decisions": 0, "failures": 0, "instructions": 0, "jokers_bought": 0,
              "planets_bought": 0, "rerolls": 0, "blinds_cleared": 0, "ante_reached": 1}
     for ante in range(1, MAX_ANTE + 1):
         stats["ante_reached"] = ante
-        for kind in ("small", "big", "boss"):
+        for blind_index, kind in enumerate(("small", "big", "boss")):
             boss = rng.choice([k for k in bb.BOSS_KEYS if bb.BOSSES[k]["min_ante"] <= ante]) if kind == "boss" else None
             mult = bb.BOSSES[boss].get("req", bb.BLIND_MULT["boss"]) if boss else bb.BLIND_MULT[kind]
             deck = [{"rank": r, "suit": s} for r in bp.RANKS for s in bp.SUITS]
@@ -269,10 +295,30 @@ def simulate_run(fn, seed, difficulty):
             stats["blinds_cleared"] += 1
             run["round"] += 1
             run["money"] += REWARD[kind] + hands_left + min(max(run["money"], 0) // 5, 5)
-            visit_shop(fn, run, ante, difficulty, stats, shop_rng)
+            visit_shop(fn, run, ante, blind_index, difficulty, stats, seed)
     stats["ante_reached"] = MAX_ANTE + 1
     stats["money_end"] = run["money"]
     return stats
+
+
+def paired(args, fn, base_fn):
+    """Blinds cleared per run, current minus base, on identical seeds."""
+    report = {"runs": args.runs, "seed": args.seed, "base": str(args.paired), "difficulties": {}}
+    failures = 0
+    for difficulty in args.difficulty or DIFFICULTIES:
+        base = [simulate_run(base_fn, args.seed * 1000 + i, difficulty) for i in range(args.runs)]
+        new = [simulate_run(fn, args.seed * 1000 + i, difficulty) for i in range(args.runs)]
+        failures += sum(r["failures"] for r in base + new)
+        diff = [n["blinds_cleared"] - b["blinds_cleared"] for b, n in zip(base, new)]
+        mean = statistics.mean(diff)
+        se = statistics.stdev(diff) / (len(diff) ** 0.5) if len(diff) > 1 else 0.0
+        report["difficulties"][difficulty] = {
+            "base_mean": round(statistics.mean(b["blinds_cleared"] for b in base), 3),
+            "new_mean": round(statistics.mean(n["blinds_cleared"] for n in new), 3),
+            "diff": round(mean, 3), "se": round(se, 3), "t": round(mean / se, 2) if se else None,
+        }
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 1 if failures else 0
 
 
 def main(argv=None):
@@ -283,9 +329,13 @@ def main(argv=None):
     parser.add_argument("--runtime", default="lupa.luajit21")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--difficulty", action="append", choices=DIFFICULTIES, help="limit to these difficulties (repeatable)")
+    parser.add_argument("--paired", type=Path, metavar="BASE_POLICY",
+                        help="compare a baseline_policy.lua file (e.g. from git show) against the current one on the same seeds")
     args = parser.parse_args(argv)
     LUA = importlib.import_module(args.runtime).LuaRuntime(unpack_returned_tuples=True)
     fn = LUA.execute(DECIDE)(str(REPO))
+    if args.paired:
+        return paired(args, fn, LUA.execute(DECIDE)(str(REPO), str(args.paired.resolve())))
     started = time.perf_counter()
     report = {"runs": args.runs, "seed": args.seed, "runtime": args.runtime, "max_ante": MAX_ANTE, "difficulties": {}}
     for difficulty in args.difficulty or DIFFICULTIES:
