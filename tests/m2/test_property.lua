@@ -192,7 +192,7 @@ return function()
 		local self = plain.self
 		local t = cert.type
 
-		if t == "SELECT_BLIND" or t == "SKIP_BLIND" then
+		if t == "SELECT_BLIND" or t == "SKIP_BLIND" or t == "START_TIMER" then
 			if phase ~= "BLIND_SELECTION" then
 				return nil
 			end
@@ -588,7 +588,7 @@ return function()
 		f.match.consumable_slots = range(0, 3)
 		local items = {}
 		if phase == "BLIND_SELECTION" then
-			items = { cert("SELECT_BLIND"), cert("SKIP_BLIND") }
+			items = { cert("SELECT_BLIND"), cert("SKIP_BLIND"), cert("START_TIMER") }
 		elseif HAND_PHASES[phase] then
 			f.self.hand_visible = true
 			local n = range(0, 5)

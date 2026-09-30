@@ -44,6 +44,9 @@ local HANDS_PHASES = {
 local ACTIONS_PHASES = {
 	SELECT_BLIND = { BLIND_SELECTION = true },
 	SKIP_BLIND = { BLIND_SELECTION = true },
+	-- The real Multiplayer timer button (ui/game/timer.lua `mp_timer_button`):
+	-- offered only while the AI has readied the PvP blind and the button is lit.
+	START_TIMER = { BLIND_SELECTION = true },
 	PLAY_CARDS = HANDS_PHASES,
 	DISCARD_CARDS = HANDS_PHASES,
 	BUY_ITEM = { SHOP = true },
@@ -70,6 +73,7 @@ local ACTIONS_PHASES = {
 local ACTION_KEYS = {
 	SELECT_BLIND = { type = true },
 	SKIP_BLIND = { type = true },
+	START_TIMER = { type = true },
 	PLAY_CARDS = { type = true, card_refs = true },
 	DISCARD_CARDS = { type = true, card_refs = true },
 	BUY_ITEM = { type = true, item_ref = true },
@@ -604,7 +608,7 @@ local function build_action(phase, context, obs, cert)
 	if allowed == nil or allowed[phase] ~= true then
 		return nil
 	end
-	if t == "SELECT_BLIND" or t == "SKIP_BLIND" then
+	if t == "SELECT_BLIND" or t == "SKIP_BLIND" or t == "START_TIMER" then
 		return { type = t }
 	elseif t == "PLAY_CARDS" or t == "DISCARD_CARDS" then
 		return build_cards(t, context, obs, cert)

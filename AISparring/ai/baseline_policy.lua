@@ -51,6 +51,9 @@ local BASE = {
 	reorder_bonus = 10,
 	blind_select = 200,
 	blind_skip = 40,
+	-- Press the real Multiplayer timer on a slow opponent while readied at the
+	-- PvP blind (0 = never). Rookie leaves it alone, like a casual player.
+	start_timer = 1000,
 	item_joker = 300,
 	item_consumable = 200,
 	item_card = 120,
@@ -84,6 +87,7 @@ end
 
 local CONFIGS = {
 	rookie = make_config("rookie", {
+		start_timer = 0,
 		reserve = 6,
 		play_junk = 250,
 		discard_junk = 5000,
@@ -1006,6 +1010,12 @@ local function score_of(observation, action)
 	end
 	if kind == "SELECT_BLIND" or kind == "SKIP_BLIND" then
 		return blind_score(observation, action)
+	end
+	if kind == "START_TIMER" then
+		if CONF.start_timer > 0 then
+			return CONF.start_timer
+		end
+		return nil
 	end
 	if kind == "BUY_ITEM" then
 		return buy_score(observation, action)

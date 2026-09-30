@@ -672,6 +672,9 @@ local function decision_signature(G, MP)
 	local mp_game = rget(MP, "GAME")
 	put_int("lives", rget(mp_game, "lives"))
 	put_bool("timer_started", rget(mp_game, "timer_started"))
+	-- Being timered changes what the AI can do (the button is no longer lit),
+	-- so it must move the epoch.
+	put_bool("nemesis_timer_started", rget(mp_game, "nemesis_timer_started"))
 	put_bool("ready_blind", rget(mp_game, "ready_blind"))
 	local enemy = rget(mp_game, "enemy")
 	put_bool("info_received", rget(enemy, "info_received"))
@@ -1465,6 +1468,41 @@ local function pvp_blind_on_deck(G)
 	return pvp_choice ~= nil and pvp_choice ~= false
 end
 
+-- The real Multiplayer timer button is usable: the lobby runs the timer, this
+-- runtime has not already started it (a second press would *pause* it,
+-- ui/game/timer.lua:18-31), and the real gate `MP.UI.can_timer_opponent()`
+-- (timer.lua:3-17) says yes. That gate is exactly what lights the button for a
+-- human (`set_timer_box`), so the certificate reveals nothing the UI does not.
+-- Called protected; any failure means "not available".
+local function timer_button_available(MP)
+	if rpath(MP, "LOBBY", "config", "timer") ~= true then
+		return false
+	end
+	-- The button is only mounted in a lobby whose live/timer HUD is shown
+	-- (mp lovely/hud.toml:38: `MP.LOBBY.code and not disable_live_and_timer_hud`).
+	local code = rpath(MP, "LOBBY", "code")
+	if type(code) ~= "string" or #code == 0 then
+		return false
+	end
+	if rpath(MP, "LOBBY", "config", "disable_live_and_timer_hud") == true then
+		return false
+	end
+	local mp_game = rget(MP, "GAME")
+	if rget(mp_game, "timer_started") == true then
+		return false
+	end
+	local timer_value = rget(mp_game, "timer")
+	if type(timer_value) ~= "number" or not (timer_value > 0) then
+		return false
+	end
+	local gate = rget(rget(MP, "UI"), "can_timer_opponent")
+	if type(gate) ~= "function" then
+		return false
+	end
+	local ok, allowed = pcall(gate)
+	return ok and allowed == true
+end
+
 local function cert_blind(builder, G, MP)
 	local blind_select = rget(G, "blind_select")
 	if type(blind_select) == "table" then
@@ -1475,6 +1513,10 @@ local function cert_blind(builder, G, MP)
 		local ready = rget(rget(MP, "GAME"), "ready_blind") == true
 		if not (pvp_blind_on_deck(G) and ready) then
 			builder.add({ type = "SELECT_BLIND", certified = true })
+		elseif timer_button_available(MP) then
+			-- While readied at the PvP blind, the only real choice is whether to
+			-- press the Multiplayer timer on the opponent.
+			builder.add({ type = "START_TIMER", certified = true })
 		end
 	end
 	local game = rget(G, "GAME")

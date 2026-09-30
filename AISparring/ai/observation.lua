@@ -102,6 +102,7 @@ local NONEMPTY_REF_FIELDS = {
 local CERT_TYPES = {
 	SELECT_BLIND = {},
 	SKIP_BLIND = {},
+	START_TIMER = {},
 	PLAY_CARDS = { card_refs = "hand" },
 	DISCARD_CARDS = { card_refs = "hand" },
 	BUY_ITEM = { item_ref = "shop", capacity_ok = true },

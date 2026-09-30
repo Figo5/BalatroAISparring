@@ -165,6 +165,7 @@ what stops the adapter offering an action the executor would refuse (H4c).
 |---|---|
 | `SELECT_BLIND` | `G.blind_select` present, and not (PvP blind on deck **and** `MP.GAME.ready_blind == true`) (H4a) |
 | `SKIP_BLIND` | `blind_on_deck` is `Small`/`Big` and `round_resets.blind_states[blind_on_deck] == "Select"` (no boss skip, H4b) |
+| `START_TIMER` | PvP blind on deck **and** `MP.GAME.ready_blind == true`, `MP.LOBBY.config.timer == true`, the button is mounted (`MP.LOBBY.code` set and `disable_live_and_timer_hud ~= true`, mp `lovely/hud.toml:38`), `MP.GAME.timer_started ~= true`, `MP.GAME.timer > 0`, and the real `MP.UI.can_timer_opponent()` returns `true` (protected call). That gate is what lights the timer button for a human, so the certificate shows nothing the UI does not. |
 | `PLAY_CARDS` | `#hand ≥ 1`, `hands_left > 0`, `blind.block_play` falsy, `STOP_USE == 0`, controller unlocked, `G.play` empty |
 | `DISCARD_CARDS` | same gates + `discards_left > 0` |
 | `SELL_JOKER` | face-up and `Card:can_sell_card() == true` (area type `joker`, not eternal, tutorial/seed/ante clause — L4) |
@@ -230,6 +231,7 @@ bounded session token, the adapter, the reader, the revision and live `G`/`MP`.
 |---|---|---|
 | `SELECT_BLIND` | `G.FUNCS.select_blind`, or `G.FUNCS.mp_toggle_ready` when a PvP blind is on deck | non-PvP: `G.P_BLINDS[round_resets.blind_choices[blind_on_deck]]` as `e.config.ref_table`; PvP: the PvP ready element (below), absent ⇒ `exec_element_missing`, and refused once `MP.GAME.ready_blind == true` |
 | `SKIP_BLIND` | `G.FUNCS.skip_blind` | the `skip_blind` element (below); absent ⇒ `exec_element_missing`; only Small/Big (H4b) |
+| `START_TIMER` | `G.FUNCS.mp_timer_button` | no element (the callback ignores it). Validation re-checks `BLIND_SELECT`, clear gates, PvP on deck, `ready_blind` and the certificate gate. After the call, `MP.GAME.timer_started` must be `true`, or the result is `exec_callback_failed`. Never offered once started, because a second press would pause the timer. |
 | `SKIP_BOOSTER` | `G.FUNCS.skip_booster` | optional `element_for("skip_booster")` (the callback ignores it) |
 | `PLAY_CARDS` | `G.FUNCS.play_cards_from_highlighted` | highlight `hand:N` first (no callback arg) |
 | `DISCARD_CARDS` | `G.FUNCS.discard_cards_from_highlighted` | highlight `hand:N` first |

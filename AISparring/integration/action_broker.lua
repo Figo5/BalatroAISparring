@@ -49,6 +49,13 @@ local CODE = {
 	NO_PENDING = "broker_no_pending",
 }
 
+-- Candidate types the AI may still choose while the runtime is legitimately
+-- waiting for its opponent (reported as `meta.wait_action_count`), so the
+-- decision loop asks the policy about them instead of silently waiting.
+local WAIT_ACTION_TYPES = {
+	START_TIMER = true,
+}
+
 local LIMITS = {
 	max_depth = 16,
 	max_nodes = 8192,
@@ -349,13 +356,17 @@ local function build_broker(observation, actions, ports, mode, capability_record
 			return nil, action_code
 		end
 		local count = 0
-		for _ in next, copied_actions do
+		local wait_count = 0
+		for _, candidate in next, copied_actions do
 			count = count + 1
+			if type(candidate) == "table" and WAIT_ACTION_TYPES[rawget(candidate, "type")] == true then
+				wait_count = wait_count + 1
+			end
 		end
 		local token = setmetatable({}, TOKEN_META)
 		pending_token = token
 		pending_record = { epoch = epoch, canonical = canonical }
-		local meta = { epoch = epoch, candidate_count = count }
+		local meta = { epoch = epoch, candidate_count = count, wait_action_count = wait_count }
 		return token, { observation = copied_data, actions = copied_actions }, meta
 	end
 

@@ -353,4 +353,20 @@ return function(ctx)
 			end
 		end
 	end)
+
+	test("policy_start_timer_by_difficulty", function()
+		local frame = Support.timer_frame()
+		local list = Support.generate(env, frame)
+		ctx.eq(#list, 1)
+		ctx.eq(list[1].type, "START_TIMER")
+		local rookie = Support.run(env, "rookie", frame)
+		ctx.is_true(rookie.ok ~= true, "rookie leaves the timer alone")
+		ctx.eq(rookie.code, "policy_no_action")
+		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+			local action = run_ok(difficulty, frame)
+			ctx.eq(action.type, "START_TIMER", difficulty)
+			legal(difficulty, frame, action)
+		end
+	end)
 end
+

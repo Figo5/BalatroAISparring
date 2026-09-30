@@ -320,7 +320,7 @@ certificates = {
 
 | Type | Required refs / arrays | Optional |
 |---|---|---|
-| `SELECT_BLIND`, `SKIP_BLIND` | – | – |
+| `SELECT_BLIND`, `SKIP_BLIND`, `START_TIMER` | – | – |
 | `PLAY_CARDS` | `card_refs` (hand, non-empty) | – |
 | `DISCARD_CARDS` | `card_refs` (hand, non-empty) | – |
 | `BUY_ITEM` | `item_ref` (shop) | `capacity_ok` |

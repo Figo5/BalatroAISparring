@@ -487,6 +487,38 @@ local function in_booster_state(G)
 	return false
 end
 
+-- Same gate as the adapter's START_TIMER certificate: the lobby runs the timer,
+-- this runtime has not started it (a second press pauses it), and the real
+-- `MP.UI.can_timer_opponent()` (mp ui/game/timer.lua:3-17) allows it. Protected.
+local function timer_button_available(MP)
+	if rpath(MP, "LOBBY", "config", "timer") ~= true then
+		return false
+	end
+	-- The button is only mounted in a lobby whose live/timer HUD is shown
+	-- (mp lovely/hud.toml:38: `MP.LOBBY.code and not disable_live_and_timer_hud`).
+	local code = rpath(MP, "LOBBY", "code")
+	if type(code) ~= "string" or #code == 0 then
+		return false
+	end
+	if rpath(MP, "LOBBY", "config", "disable_live_and_timer_hud") == true then
+		return false
+	end
+	local mp_game = rget(MP, "GAME")
+	if rget(mp_game, "timer_started") == true then
+		return false
+	end
+	local timer_value = rget(mp_game, "timer")
+	if type(timer_value) ~= "number" or not (timer_value > 0) then
+		return false
+	end
+	local gate = rget(rget(MP, "UI"), "can_timer_opponent")
+	if type(gate) ~= "function" then
+		return false
+	end
+	local ok, allowed = pcall(gate)
+	return ok and allowed == true
+end
+
 local function gates_clear(G)
 	local stop_use = rpath(G, "GAME", "STOP_USE")
 	if is_int(stop_use) and stop_use > 0 then
@@ -1382,6 +1414,19 @@ function ProductionExecutor.factory(ports)
 			return validate_skip_booster()
 		elseif t == "SELECT_BLIND" then
 			return validate_blind(action)
+		elseif t == "START_TIMER" then
+			-- Only while readied at the PvP blind, exactly when the real button
+			-- is lit. Re-checked against the live engine right before commit.
+			if not state_symbol(G, "BLIND_SELECT") or not gates_clear(G) then
+				return nil, CODE.ILLEGAL
+			end
+			if not pvp_blind_on_deck(G) or rpath(MP, "GAME", "ready_blind") ~= true then
+				return nil, CODE.ILLEGAL
+			end
+			if not timer_button_available(MP) then
+				return nil, CODE.ILLEGAL
+			end
+			return true
 		elseif t == "SKIP_BLIND" then
 			if not state_symbol(G, "BLIND_SELECT") or not gates_clear(G) then
 				return nil, CODE.ILLEGAL
@@ -1576,6 +1621,20 @@ function ProductionExecutor.factory(ports)
 				return nil, CODE.ELEMENT_MISSING
 			end
 			return invoke("skip_blind", e)
+		elseif t == "START_TIMER" then
+			-- The real `G.FUNCS.mp_timer_button` ignores its element argument
+			-- and re-checks `can_timer_opponent` itself before calling
+			-- `MP.ACTIONS.start_ante_timer`, which sets `timer_started`
+			-- synchronously (networking/action_handlers.lua:1359-1373,
+			-- 1065-1071). Nothing else proves the press happened.
+			local pressed, press_code = invoke("mp_timer_button", nil)
+			if pressed ~= true then
+				return nil, press_code
+			end
+			if rpath(MP, "GAME", "timer_started") ~= true then
+				return nil, CODE.CALLBACK_FAILED
+			end
+			return true
 		elseif t == "SKIP_BOOSTER" then
 			local e = nil
 			if element_for ~= nil then

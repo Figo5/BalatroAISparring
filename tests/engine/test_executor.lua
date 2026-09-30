@@ -966,4 +966,154 @@ return function(ctx)
 		eq(ok, nil)
 		eq(code, "exec_illegal")
 	end)
+
+	-- Source-shaped Multiplayer timer (mp ui/game/timer.lua:3-31 and
+	-- networking/action_handlers.lua:1359-1373): the gate reads the lobby
+	-- config and MP.GAME; the button re-checks it and starts the timer.
+	local function timer_engine(opts)
+		opts = opts or {}
+		local engine = support.engine({
+			state = STATES.BLIND_SELECT,
+			blind_key = "bl_mp_nemesis",
+			boss_blind = "bl_mp_nemesis",
+			blind_on_deck = "Boss",
+			ready_blind = opts.ready_blind ~= false,
+			blind_select = {},
+			config_timer = opts.config_timer ~= false,
+			timer = opts.timer,
+			timer_started = opts.timer_started,
+		})
+		local MP = engine.MP
+		local gate_open = opts.gate ~= false
+		MP.UI = {
+			can_timer_opponent = function()
+				if opts.gate_throws then
+					error("gate failure")
+				end
+				if not MP.LOBBY.config.timer then
+					return false
+				end
+				if MP.GAME.timer <= 0 then
+					return false
+				end
+				return gate_open and MP.GAME.ready_blind == true
+			end,
+		}
+		engine.funcs.mp_timer_button = function(e)
+			engine.calls[#engine.calls + 1] = { name = "mp_timer_button", e = e }
+			if opts.button_noop then
+				return
+			end
+			if MP.UI.can_timer_opponent() then
+				if not MP.GAME.timer_started then
+					MP.GAME.timer_started = true
+				else
+					MP.GAME.timer_started = false
+				end
+			end
+		end
+		return engine
+	end
+
+	test("start_timer_presses_the_real_button_and_proves_the_effect", function()
+		local engine = timer_engine()
+		local pipeline = support.pipeline(bundle, engine, {})
+		local action = { type = "START_TIMER", id = "timer-1" }
+		is_true(pipeline.executor.validate(action) == true)
+		is_true(pipeline.executor.dispatch(action) == true)
+		eq(engine.calls[#engine.calls].name, "mp_timer_button")
+		eq(engine.MP.GAME.timer_started, true)
+		-- A second press would pause the timer: never valid once started.
+		local ok, code = pipeline.executor.validate({ type = "START_TIMER", id = "timer-2" })
+		eq(ok, nil)
+		eq(code, "exec_illegal")
+	end)
+
+	test("start_timer_refused_when_the_button_is_not_lit", function()
+		for _, opts in ipairs({
+			{ ready_blind = false },
+			{ config_timer = false },
+			{ gate = false },
+			{ gate_throws = true },
+			{ timer = 0 },
+			{ timer_started = true },
+		}) do
+			local engine = timer_engine(opts)
+			local pipeline = support.pipeline(bundle, engine, {})
+			local ok, code = pipeline.executor.validate({ type = "START_TIMER", id = "timer-x" })
+			eq(ok, nil)
+			eq(code, "exec_illegal")
+			for _, call in ipairs(engine.calls) do
+				is_true(call.name ~= "mp_timer_button", "button pressed while not lit")
+			end
+		end
+	end)
+
+	test("start_timer_without_visible_effect_is_a_failure", function()
+		local engine = timer_engine({ button_noop = true })
+		local pipeline = support.pipeline(bundle, engine, {})
+		local action = { type = "START_TIMER", id = "timer-noop" }
+		is_true(pipeline.executor.validate(action) == true)
+		local ok, code = pipeline.executor.dispatch(action)
+		eq(ok, nil)
+		eq(code, "exec_callback_failed")
+	end)
+
+	test("start_timer_lifecycle_through_a_pvp_round", function()
+		-- One PvP round against the pinned Multiplayer state machine:
+		-- ready -> press -> (opponent arrives) -> round transition -> next PvP.
+		local engine = timer_engine()
+		local pipeline = support.pipeline(bundle, engine, {})
+		local MP = engine.MP
+		local function offered()
+			local step = pipeline.adapter.step()
+			local handle = bundle.reader.capture(step.runtime, step.ui_view)
+			for _, action in ipairs(bundle.actions.generate(handle)) do
+				if action.type == "START_TIMER" then
+					return action
+				end
+			end
+			return nil
+		end
+		local action = offered()
+		is_true(action ~= nil, "readied: timer offered")
+		is_true(pipeline.executor.validate(action) == true)
+		is_true(pipeline.executor.dispatch(action) == true)
+		is_true(offered() == nil, "started: never offered again (a press would pause)")
+		-- The opponent readies: the real gate closes (enemy location loc_ready).
+		MP.GAME.timer_started = false
+		MP.GAME.enemy.location_type = "loc_ready"
+		local gate = MP.UI.can_timer_opponent
+		MP.UI.can_timer_opponent = function()
+			if MP.GAME.enemy.location_type == "loc_ready" then
+				return false
+			end
+			return gate()
+		end
+		is_true(offered() == nil, "opponent arrived: gate closed")
+		-- Round transition (action_start_blind / end_pvp reset ready_blind and
+		-- timer_started, action_handlers.lua:328-352, 495-506).
+		MP.GAME.ready_blind = false
+		MP.GAME.enemy.location_type = nil
+		is_true(offered() == nil, "not readied: no timer")
+		-- Next PvP blind, readied again: the timer is offered afresh.
+		MP.GAME.ready_blind = true
+		is_true(offered() ~= nil, "next PvP: offered again")
+	end)
+
+	test("start_timer_absent_while_multiplayer_ui_is_not_loaded", function()
+		-- e.g. mid-reconnect or before Multiplayer's UI module has loaded.
+		local engine = timer_engine()
+		engine.MP.UI = nil
+		local pipeline = support.pipeline(bundle, engine, {})
+		local step = pipeline.adapter.step()
+		local handle = bundle.reader.capture(step.runtime, step.ui_view)
+		for _, action in ipairs(bundle.actions.generate(handle)) do
+			is_true(action.type ~= "START_TIMER", "offered without the real gate")
+		end
+		local ok, code = pipeline.executor.validate({ type = "START_TIMER", id = "t" })
+		eq(ok, nil)
+		eq(code, "exec_illegal")
+	end)
 end
+

@@ -136,6 +136,14 @@ function Support.blind_frame()
 	}
 end
 
+-- Readied at the PvP blind with the Multiplayer timer button lit: the only
+-- certified choice is START_TIMER (plus optional Joker reorders).
+function Support.timer_frame()
+	local frame = Support.blind_frame()
+	frame.certificates.items = { { type = "START_TIMER", certified = true } }
+	return frame
+end
+
 function Support.blind_zero_hands_frame()
 	local frame = Support.blind_frame()
 	frame.self.hands = 0

@@ -547,4 +547,96 @@ return function(ctx)
 		end
 		eq(catalogue("Ace", "Hearts"), catalogue("3", "Clubs"))
 	end)
+
+	-- Source-shaped Multiplayer timer (mp ui/game/timer.lua:3-31 and
+	-- networking/action_handlers.lua:1359-1373): the gate reads the lobby
+	-- config and MP.GAME; the button re-checks it and starts the timer.
+	local function timer_engine(opts)
+		opts = opts or {}
+		local engine = support.engine({
+			state = STATES.BLIND_SELECT,
+			blind_key = "bl_mp_nemesis",
+			boss_blind = "bl_mp_nemesis",
+			blind_on_deck = "Boss",
+			ready_blind = opts.ready_blind ~= false,
+			blind_select = {},
+			config_timer = opts.config_timer ~= false,
+			timer = opts.timer,
+			timer_started = opts.timer_started,
+		})
+		local MP = engine.MP
+		local gate_open = opts.gate ~= false
+		MP.UI = {
+			can_timer_opponent = function()
+				if opts.gate_throws then
+					error("gate failure")
+				end
+				if not MP.LOBBY.config.timer then
+					return false
+				end
+				if MP.GAME.timer <= 0 then
+					return false
+				end
+				return gate_open and MP.GAME.ready_blind == true
+			end,
+		}
+		engine.funcs.mp_timer_button = function(e)
+			engine.calls[#engine.calls + 1] = { name = "mp_timer_button", e = e }
+			if opts.button_noop then
+				return
+			end
+			if MP.UI.can_timer_opponent() then
+				if not MP.GAME.timer_started then
+					MP.GAME.timer_started = true
+				else
+					MP.GAME.timer_started = false
+				end
+			end
+		end
+		return engine
+	end
+
+	test("start_timer_offered_only_while_readied_and_button_lit", function()
+		local _, handle = capture(timer_engine())
+		local seen = action_types(handle)
+		is_true(seen.START_TIMER == true, "timer button lit but not offered")
+		is_true(seen.SELECT_BLIND ~= true)
+		local cases = {
+			{ label = "not readied", opts = { ready_blind = false } },
+			{ label = "lobby timer off", opts = { config_timer = false } },
+			{ label = "already started", opts = { timer_started = true } },
+			{ label = "timer consumed", opts = { timer = 0 } },
+			{ label = "gate closed", opts = { gate = false } },
+			{ label = "gate throws", opts = { gate_throws = true } },
+		}
+		for _, case in ipairs(cases) do
+			local _, other = capture(timer_engine(case.opts))
+			is_true(action_types(other).START_TIMER ~= true, case.label)
+		end
+	end)
+
+	test("start_timer_absent_outside_the_pvp_blind", function()
+		local engine = support.engine({
+			state = STATES.BLIND_SELECT,
+			blind_on_deck = "Small",
+			ready_blind = true,
+			blind_select = {},
+			config_timer = true,
+		})
+		engine.MP.UI = { can_timer_opponent = function() return true end }
+		local _, handle = capture(engine)
+		is_true(action_types(handle).START_TIMER ~= true)
+	end)
+
+	test("being_timered_moves_the_epoch", function()
+		local engine = timer_engine()
+		local pipeline = support.pipeline(bundle, engine, {})
+		local first = pipeline.adapter.step()
+		local again = pipeline.adapter.step()
+		eq(first.epoch, again.epoch, "unchanged state keeps the epoch")
+		engine.MP.GAME.nemesis_timer_started = true
+		local second = pipeline.adapter.step()
+		is_true(first.epoch ~= second.epoch, "nemesis timer must change the decision epoch")
+	end)
 end
+

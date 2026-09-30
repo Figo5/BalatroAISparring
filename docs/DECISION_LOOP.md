@@ -338,6 +338,14 @@ state (`loop_waiting_for_opponent`, status `waiting`):
 Unknown stalls are still aborted within the bound when no trusted wait is
 reported.
 
+**Wait-compatible actions.** The broker reports `meta.wait_action_count`, the
+number of candidates whose type may still be chosen during a wait. Today that is
+only `START_TIMER`, the Multiplayer timer button. If it is non-zero, the loop asks
+the policy about that capture once per epoch (`stats().wait_decisions`) instead of
+holding. Any answer, including `policy_no_action`, then leaves the loop waiting
+until the epoch changes. For example, pressing the timer sets `timer_started`,
+which moves the epoch and removes the certificate.
+
 This is a deliberate behaviour change. While readied or waiting, the AI no longer
 considers optional actions (selling, using consumables, reordering Jokers).
 Before, the policy was asked and answered `policy_no_action` in every observed

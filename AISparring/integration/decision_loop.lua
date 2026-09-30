@@ -439,6 +439,9 @@ function DecisionLoop.factory(options)
 	-- WAITING_FOR_OPPONENT state: the trusted wait token, when it began and the
 	-- current poll backoff. nil while not waiting.
 	local waiting = nil
+	-- Epoch for which the policy was already asked about a wait-compatible
+	-- action (e.g. START_TIMER) during a wait; asked at most once per epoch.
+	local wait_asked_epoch = nil
 	local waiting_since = nil
 	local last_now = nil
 	local wait_backoff = nil
@@ -457,6 +460,7 @@ function DecisionLoop.factory(options)
 		transient_waiting = 0,
 		waits = 0,
 		waiting_polls = 0,
+		wait_decisions = 0,
 		waiting_seconds = 0,
 		faults = 0,
 		controls = 0,
@@ -852,10 +856,22 @@ function DecisionLoop.factory(options)
 		-- backoff. The terminal check above still runs on every poll.
 		local wait = external_wait()
 		if wait ~= nil then
-			pcall(broker.cancel)
-			return hold_wait(now, wait)
+			-- A wait-compatible choice (the Multiplayer timer button) is asked
+			-- about once per epoch; any answer, including no-action, then leaves
+			-- the loop waiting until the epoch changes.
+			local wait_actions = 0
+			if type(meta) == "table" and is_nat_int(rawget(meta, "wait_action_count")) then
+				wait_actions = rawget(meta, "wait_action_count")
+			end
+			if wait_actions == 0 or epoch == nil or epoch == wait_asked_epoch then
+				pcall(broker.cancel)
+				return hold_wait(now, wait)
+			end
+			wait_asked_epoch = epoch
+			stats.wait_decisions = stats.wait_decisions + 1
+		else
+			end_wait(now)
 		end
-		end_wait(now)
 
 		if candidate_count == 0 then
 			pcall(broker.cancel)

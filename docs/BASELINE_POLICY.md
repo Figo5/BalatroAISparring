@@ -186,6 +186,7 @@ everything is skipped the policy returns no action.
 |---|---|
 | `SELECT_BLIND` | Preferred; skipping is disfavoured. Selection never depends on any exported `hands` count. |
 | `SKIP_BLIND` | Low. |
+| `START_TIMER` | While readied at the PvP blind: `start_timer` (1000) for Competitive and Major League, so it is pressed as soon as it is offered. Rookie has `start_timer = 0`, so the score is `nil`: it leaves the timer alone, like a casual player. |
 | `PLAY_CARDS` | Scored by the made-hand classification; made hands dominate weak longer plays. |
 | `DISCARD_CARDS` | Can beat a weak play; preserves made components, sealed/enhanced cards. |
 | `BUY_ITEM` | Budget-aware: kind utility plus a recognized-edition bonus plus interest/reserve adjustment; a cheaper equivalent is preferred, an edition upgrade is preferred over an un-editioned copy. |

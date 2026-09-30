@@ -143,3 +143,33 @@ needs the full re-certification and a companion reinstall, not
 - **Risk if it fails:** instrumentation is exception-safe and uses its own clock,
   so a failure should only lose timing data. A hand-off failure with a new code
   would be a defect.
+
+## LV-6 AI uses the Major League timer on a slow opponent
+
+- **Commit:** see `git log --grep "Major League PvP timer"`.
+- **Change:** new legal action `START_TIMER`, which presses the real
+  `G.FUNCS.mp_timer_button`. It is certified only while the AI has readied the
+  PvP blind and the real `MP.UI.can_timer_opponent()` lights the button, and
+  never after the AI's own timer has started. Competitive and Major League press
+  it at once; Rookie never does. Timer ticking, expiry and the life penalty are
+  Multiplayer's own code in both clients (Major League: `timer_base_seconds=180`,
+  `timer_forgiveness=0`, `timer_display_threshold=180`, no timer layers).
+- **Local test (difficulty Competitive or Major League):**
+  1. Reach an Ante 2 PvP blind. Let the AI ready first while you stay in the
+     shop.
+  2. Watch your HUD timer: it should start counting down within about 1 s of the
+     AI readying.
+  3. Let it run out once. You should lose a life (forgiveness 0).
+  4. Next PvP, ready promptly. The AI should not start a timer once you are
+     ready (the button is unlit).
+  5. Repeat with Rookie: the AI should never start your timer.
+  6. Have the human timer the AI. The AI should keep playing normally; its own
+     timer expiring costs it a life.
+- **Expected:** exactly one `startAnteTimer` from the AI per PvP wait. Nothing is
+  suppressed or refused (`failTimer` and the timer actions are on the allowlist).
+- **Evidence to capture:** the AI and human runtime logs, a screenshot of the
+  counting timer, `decisions.jsonl` (look for `START_TIMER`) and `summary.jsonl`.
+- **Risk if it fails:** if the button does not start, the AI simply does not use
+  the timer (as before). If the AI paused an already-started timer, that would be
+  a defect (it is prevented by `timer_started` in both the adapter and the
+  executor).

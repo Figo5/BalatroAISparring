@@ -928,5 +928,110 @@ return function(ctx)
 		eq(status, "waiting")
 		eq(code, "loop_waiting_for_opponent")
 	end)
+
+	-- Minimal broker for the timer exemption: one BLIND_SELECTION capture whose
+	-- catalogue holds a wait-compatible START_TIMER candidate.
+	local function timer_broker(state)
+		local broker = { issued = 0, canceled = 0, submitted = {} }
+		function broker.issue()
+			broker.issued = broker.issued + 1
+			local token = {}
+			local request = { observation = { phase = "BLIND_SELECTION" }, actions = {} }
+			return token, request, {
+				epoch = state.epoch,
+				candidate_count = state.wait_actions + 1,
+				wait_action_count = state.wait_actions,
+			}
+		end
+		function broker.submit(token, action)
+			broker.submitted[#broker.submitted + 1] = action
+			state.epoch = state.epoch + 1
+			state.wait_actions = 0
+			return true, "broker_ok"
+		end
+		function broker.cancel()
+			broker.canceled = broker.canceled + 1
+		end
+		function broker.is_revoked()
+			return false
+		end
+		function broker.revoke() end
+		return broker
+	end
+
+	local function timer_loop(state)
+		local broker = timer_broker(state)
+		local clock = support.clock()
+		local transport = support.transport()
+		local logger = support.logger()
+		local loop = support.load(repo).loop.factory({
+			broker = broker,
+			transport = transport,
+			clock = clock,
+			logger = logger,
+			min_interval = 0,
+			wait_state = function()
+				return "mp_ready_blind"
+			end,
+		})
+		return loop, broker, transport, clock
+	end
+
+	test("wait_asks_the_policy_once_per_epoch_about_the_timer", function()
+		local state = { epoch = 7, wait_actions = 1 }
+		local loop, broker, transport, clock = timer_loop(state)
+		eq(loop.update(), "issued", "the timer choice is asked about during the wait")
+		eq(transport.sent, 1)
+		transport.push({ sequence = 1, ok = false, code = "policy_no_action" })
+		loop.update()
+		clock.advance(5)
+		local status, code = loop.update()
+		eq(status, "waiting", "same epoch: never asked twice")
+		eq(code, "loop_waiting_for_opponent")
+		eq(transport.sent, 1)
+		eq(loop.stats().wait_decisions, 1)
+		eq(loop.stats().errors, 0)
+	end)
+
+	test("wait_timer_press_is_submitted_then_the_wait_resumes", function()
+		local state = { epoch = 3, wait_actions = 1 }
+		local loop, broker, transport, clock = timer_loop(state)
+		eq(loop.update(), "issued")
+		transport.push({ sequence = 1, ok = true, action = { type = "START_TIMER", id = "t1" }, reason = "timer" })
+		eq(loop.update(), "submitted")
+		eq(#broker.submitted, 1)
+		eq(broker.submitted[1].type, "START_TIMER")
+		clock.advance(1)
+		eq(loop.update(), "waiting", "timer pressed: nothing left to decide")
+		eq(transport.sent, 1)
+	end)
+
+	test("wait_without_wait_actions_never_asks", function()
+		local state = { epoch = 1, wait_actions = 0 }
+		local loop, _, transport, clock = timer_loop(state)
+		for _ = 1, 10 do
+			loop.update()
+			clock.advance(1)
+		end
+		eq(transport.sent, 0)
+		eq(loop.stats().wait_decisions, 0)
+	end)
+
+	test("wait_decision_send_failure_is_not_retried_on_the_same_epoch", function()
+		local state = { epoch = 9, wait_actions = 1 }
+		local loop, _, transport, clock = timer_loop(state)
+		transport.request_fault = true
+		local status = loop.update()
+		is_true(status == "idle" or status == "stopped", tostring(status))
+		eq(loop.stats().errors, 1)
+		transport.request_fault = false
+		clock.advance(5)
+		eq(loop.update(), "waiting", "same epoch: hold instead of re-sending")
+		eq(transport.sent, 0)
+		-- A new epoch (e.g. the opponent moved) earns one new ask.
+		state.epoch = 10
+		clock.advance(5)
+		eq(loop.update(), "issued")
+	end)
 end
 
