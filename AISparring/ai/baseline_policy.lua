@@ -1837,6 +1837,18 @@ local PLANETS = {
 	c_ceres = true, c_eris = true, c_black_hole = true,
 }
 
+-- Consumables that need highlighted hand targets. The live runtime wires no
+-- target-selection port (companion_host.lua), so CONSUMABLE_SELECTION never
+-- occurs there and these can never be used: never buy one, and sell a held one
+-- to free the slot. Pack picks are already gated by the engine's own
+-- can_use predicate. (Vanilla spells the Hierophant key c_heirophant.)
+local TARGETED = {
+	c_magician = true, c_empress = true, c_heirophant = true, c_hierophant = true, c_lovers = true,
+	c_chariot = true, c_justice = true, c_strength = true, c_hanged_man = true, c_death = true,
+	c_devil = true, c_tower = true, c_star = true, c_moon = true, c_sun = true, c_world = true,
+	c_aura = true, c_deja_vu = true, c_trance = true, c_medium = true, c_talisman = true, c_cryptid = true,
+}
+
 local function harmful_use(observation, center)
 	local s = observation.self
 	local jokers = 0
@@ -2011,7 +2023,7 @@ local function buy_score(observation, action)
 	if spend == nil or spend < cost then
 		return nil
 	end
-	if item.kind == "consumable" and harmful_use(observation, item.center) then
+	if item.kind == "consumable" and (harmful_use(observation, item.center) or TARGETED[item.center]) then
 		return nil
 	end
 	local score = kind_value(item.kind)
@@ -2478,7 +2490,7 @@ local function sell_consumable_score(observation, action)
 	if held == nil or held.redacted == true or type(held.center) ~= "string" then
 		return nil
 	end
-	if not harmful_use(observation, held.center) then
+	if not harmful_use(observation, held.center) and not TARGETED[held.center] then
 		return nil
 	end
 	return CONF.leave_shop + CONF.sell_harmful

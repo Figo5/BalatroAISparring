@@ -282,7 +282,10 @@ needs the full re-certification and a companion reinstall, not
   - Ankh or Hex with two or more Jokers;
   - Ectoplasm or Ouija, always.
 
-  It sells such a card when one is already held. Planets are used before other
+  It sells such a card when one is already held. It also never buys a
+  consumable that needs hand targets (Strength, Death, the suit Tarots, Aura,
+  …), and sells a held one. No target-selection port is wired live, so these
+  could never be used. Planets are used before other
   consumables. The change is policy-only (`baseline_policy.lua`, certified), so
   it needs re-certification and a reinstall.
 - **Local test:** play practice matches until the AI opens a Spectral pack or

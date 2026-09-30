@@ -376,6 +376,37 @@ return function(ctx)
 		end
 	end)
 
+	test("targeted_consumables_are_not_bought_and_are_sold", function()
+		-- No target-selection port is wired live, so Strength or Death could
+		-- never be used: buy The Hermit instead, and sell a held Death.
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			local frame = Support.shop_frame()
+			frame.self.money = 20
+			frame.shop.items = {
+				{ kind = "consumable", center = "c_strength", cost = 3, sell_cost = 1, face_down = false },
+				{ kind = "consumable", center = "c_hermit", cost = 3, sell_cost = 1, face_down = false },
+			}
+			frame.shop.boosters = {}
+			frame.certificates.items = {
+				{ type = "BUY_ITEM", certified = true, item_ref = "shop:1", capacity_ok = true },
+				{ type = "BUY_ITEM", certified = true, item_ref = "shop:2", capacity_ok = true },
+				{ type = "LEAVE_SHOP", certified = true },
+			}
+			ctx.eq(Support.run(env, difficulty, frame).action.item_ref, "shop:2", difficulty .. " hermit")
+			frame.shop.items[2] = nil
+			frame.certificates.items = { frame.certificates.items[1], frame.certificates.items[3] }
+			ctx.eq(Support.run(env, difficulty, frame).action.type, "LEAVE_SHOP", difficulty .. " no strength")
+			local sell = Support.shop_frame()
+			sell.shop.items, sell.shop.boosters = {}, {}
+			sell.self.consumables = { { kind = "consumable", center = "c_death", face_down = false } }
+			sell.certificates.items = {
+				{ type = "SELL_CONSUMABLE", certified = true, consumable_ref = "consumable:1" },
+				{ type = "LEAVE_SHOP", certified = true },
+			}
+			ctx.eq(Support.run(env, difficulty, sell).action.type, "SELL_CONSUMABLE", difficulty .. " sell death")
+		end
+	end)
+
 	test("planets_are_used_before_other_consumables", function()
 		local result = Support.run(env, "competitive", use_frame({ "c_fool", "c_jupiter" }, 5, 0))
 		ctx.eq(result.action.type, "USE_CONSUMABLE")

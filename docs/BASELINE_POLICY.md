@@ -285,6 +285,14 @@ The same rule applies wherever the card could hurt or waste a slot:
   (`leave_shop + sell_harmful`, 30), which frees the slot for planets and
   tarots. Cards that pass the rule are kept.
 
+**Consumables that need hand targets** get the same treatment, because
+they can never be used live. Examples: Strength, Death, the suit and
+enhancement Tarots, Aura, Cryptid (`TARGETED`). The live runtime wires no
+target-selection port, so `CONSUMABLE_SELECTION` never occurs there. Such a
+card is therefore never bought, and a held one is sold to free its slot. Pack
+picks are already gated by the engine's own `can_use` predicate. If the port
+is ever wired, `TARGETED` must be revisited.
+
 Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
 first. Every other consumable keeps the flat `use_consumable` score.
 
