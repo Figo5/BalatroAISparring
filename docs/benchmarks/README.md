@@ -143,8 +143,9 @@ brackets:
 The strong tiers are close to each other here. Major League's differences are
 mostly in shop and reserve settings, which this simulator does not exercise.
 The Plant appears only 4 times, all at ante 4 against 10,000 chips, so its row
-is not informative. The Water (no discards) is the hardest boss with a real
-sample. No difficulty adapts its play to bosses beyond what the observation
+is not informative. For the strong tiers, The Water (no discards) is the
+hardest boss with a real sample; for Rookie it is The Needle. Rows with 12–21
+blinds are noisy: one blind moves them by 5–8 points. No difficulty adapts its play to bosses beyond what the observation
 already shows (hands and discards left, debuffed cards).
 
 ### Not yet covered (prepared, continuing)
