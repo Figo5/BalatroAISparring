@@ -411,8 +411,14 @@ return function(ctx)
 		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit" }, 8, 1)).action.type, "LEAVE_SHOP", difficulty .. " hold at $8")
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit" }, 20, 1)).action.type, "USE_CONSUMABLE", difficulty .. " use at $20")
-			-- Two held consumables fill the two slots: use it to free one.
+			-- Two held consumables fill the two shop slots: use it to free one.
 			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit", "c_fool" }, 8, 1)).action.source_ref, "consumable:1", difficulty .. " full slots")
+			-- A dead card (targeted Strength) fills the other slot: sell it
+			-- rather than spend the Hermit at $8.
+			-- (The adapter never offers USE for Strength without targets.)
+			local dead = use_frame({ "c_hermit", "c_strength" }, 8, 1)
+			table.remove(dead.certificates.items, 2)
+			ctx.eq(Support.run(env, difficulty, dead).action.type, "LEAVE_SHOP", difficulty .. " strength not counted")
 		end
 		-- Rookie keeps the simple rule: use at once.
 		ctx.eq(Support.run(env, "rookie", use_frame({ "c_hermit" }, 8, 1)).action.type, "USE_CONSUMABLE", "rookie")

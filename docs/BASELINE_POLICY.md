@@ -296,9 +296,11 @@ is ever wired, `TARGETED` must be revisited: `test_source.lua` fails when
 are discounted (−10) for the same reason.
 
 Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
-first. At Competitive and above, **The Hermit** (double money, at most
-+$20) is held until money reaches $20. The exception is when consumable slots
-are full: then it is used at once to free a slot. Every other consumable keeps the flat `use_consumable` score.
+first. At Competitive and above (`hold_hermit`), **The Hermit** (double
+money, at most +$20) is held until money reaches $20. The exception is in the
+shop when the consumable slots are full of cards worth keeping: then it is used
+at once to free a slot. A harmful or targeted card does not count, because it
+is sold instead. Every other consumable keeps the flat `use_consumable` score.
 
 ### 4.4 Vouchers and packs (Competitive and above)
 

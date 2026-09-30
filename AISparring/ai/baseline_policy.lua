@@ -88,6 +88,8 @@ local BASE = {
 	voucher_values = true,
 	-- Pack kind preference (PACK_VALUE) and value-aware picks inside a pack.
 	smart_packs = true,
+	-- Hold The Hermit until money reaches $20 (its payout cap).
+	hold_hermit = true,
 	-- Pack pick: points per displayed level of the hand a planet upgrades.
 	planet_level_pick = 6,
 	reroll_base = 55,
@@ -121,6 +123,7 @@ local CONFIGS = {
 		est_jokers = false,
 		use_requirement = false,
 		discard_ev = false,
+		hold_hermit = false,
 		use_levels = false,
 		reserve = 6,
 		play_junk = 250,
@@ -2265,14 +2268,25 @@ local function target_or_use_score(observation, action)
 	if type(center) == "string" and harmful_use(observation, center) then
 		return nil
 	end
-	if center == "c_hermit" and CONF.voucher_values then
+	if center == "c_hermit" and CONF.hold_hermit then
 		-- The Hermit doubles money up to +$20: hold it until money reaches
-		-- $20, unless consumable slots are full (then free the slot).
+		-- $20, unless the shop's consumable slots are full of cards worth
+		-- keeping (a harmful or targeted card is sold instead).
 		local s = observation.self
 		local money = type(s) == "table" and type(s.money) == "number" and s.money or 0
 		local slots = type(observation.match) == "table" and observation.match.consumable_slots or nil
-		local held = type(s) == "table" and type(s.consumables) == "table" and #s.consumables or 0
-		if money < 20 and not (type(slots) == "number" and held >= slots) then
+		local held = 0
+		if type(s) == "table" and type(s.consumables) == "table" then
+			for i = 1, #s.consumables do
+				local c = s.consumables[i]
+				local cc = type(c) == "table" and c.center or nil
+				if not (type(cc) == "string" and (TARGETED[cc] or harmful_use(observation, cc))) then
+					held = held + 1
+				end
+			end
+		end
+		local full = observation.phase == "SHOP" and type(slots) == "number" and held >= slots
+		if money < 20 and not full then
 			return nil
 		end
 	end
