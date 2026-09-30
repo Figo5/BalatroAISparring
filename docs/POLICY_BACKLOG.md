@@ -49,8 +49,9 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
   Pricing the expected suit bonus exactly is left open. Forced-discard quality
   moved within noise (0.854→0.852, 0.868→0.868, 0.854→0.852).
 - ~~**New-Joker valuation assumes end-of-row placement.**~~ Fixed: an additive
-  Joker-level effect is priced before the first owned x-mult or Polychrome
-  Joker, where the reorder step puts it (`tests/policy/test_joker_slot.lua`).
+  Joker-level effect is priced before the trailing run of owned x-mult or
+  Polychrome Jokers, only when the post-purchase row qualifies for the
+  estimate-based reorder (`tests/policy/test_joker_slot.lua`).
 - **Seed Money / Money Tree interest cap is not modelled.** `interest_cap` is
   fixed at 5. The policy cannot see owned vouchers yet: the adapter and reader
   never fill `self.vouchers`, although the schema allows it. Fixing this needs
