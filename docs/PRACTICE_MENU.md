@@ -27,7 +27,7 @@ Fixed for this build:
 
 - Ruleset: **Major League** (resolved from actual Multiplayer configuration by the trusted host; never selectable in UI).
 - Modes: `normal` (Normal Match), `gauntlet` (Gauntlet).
-- Difficulties: `rookie`, `competitive`, `major_league`.
+- Difficulties: `rookie`, `competitive`, `major_league`, `expert`.
 - Pacing: `instant`, `normal`.
 - Gauntlet labels: `Test1`..`Test5`; stable seeds `AISP0001`..`AISP0005` are **host-owned**.
 

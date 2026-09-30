@@ -122,7 +122,7 @@ diagnostic — the host never forces a quit.
 `{session_id, difficulty, pacing, mode, gauntlet, live_pid, live_create_time}`.
 
 The host validates `session_id`, `difficulty ∈ {rookie, competitive,
-major_league}`, `pacing ∈ {instant, normal}`, `mode ∈ {normal, gauntlet}`,
+major_league, expert}`, `pacing ∈ {instant, normal}`, `mode ∈ {normal, gauntlet}`,
 `gauntlet ∈ {Test1..Test5}` (required iff `mode == "gauntlet"`, forbidden
 otherwise) and a bounded integer `live_pid` / positive `live_create_time`. It then
 opens a **query-only** native handle to `live_pid` and requires the create time to

@@ -50,7 +50,7 @@ def main():
         exported, count, source_for, validate = lua.execute(SETUP)
         observation = json.loads(exported)
         assert count >= 20, "fixture did not exercise a broad candidate catalogue"
-        for difficulty in ("rookie", "competitive", "major_league"):
+        for difficulty in ("rookie", "competitive", "major_league", "expert"):
             source = source_for(difficulty)
             if isinstance(source, tuple):
                 source = source[0]

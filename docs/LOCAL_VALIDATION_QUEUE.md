@@ -197,3 +197,23 @@ needs the full re-certification and a companion reinstall, not
 - **Risk if it fails:** the AI gets weaker. The first things to check are
   over-discarding (unmodelled scaling Jokers and boss effects) and Joker
   purchases. Rolling back `baseline_policy.lua` is self-contained.
+
+## LV-8 Expert difficulty in the menu and match
+
+- **Commit:** see `git log --grep "Expert difficulty"`.
+- **Change:** a fourth difficulty, `expert`. It is added to the menu options,
+  the companion marker enums, the control protocol, launcher descriptors, the
+  practice service and the policy. The host marker publishes the service's list,
+  and the companion requires an exact set match, so host and companion must come
+  from the same build (full re-certification and reinstall).
+- **Local test:** open Play → AI Sparring and check the menu shows four difficulty
+  choices that fit on screen. Select Expert and start a match, then play one PvP
+  round.
+- **Expected:** the menu layout is not clipped. The host accepts `expert`, and
+  `results.jsonl` / `summary.jsonl` record `difficulty=expert`. The AI plays
+  normally with no budget errors (`policy_budget_exceeded` must not appear).
+- **Evidence to capture:** a screenshot of the menu, the log lines with the
+  start request, and `summary.jsonl`.
+- **Risk if it fails:** `companion_marker_enums_mismatch` means host and
+  companion builds differ, so reinstall both. If the menu layout clips, shorten
+  the labels. Failure is fail-closed: the menu reports it cannot start.

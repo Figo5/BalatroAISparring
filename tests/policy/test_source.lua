@@ -7,10 +7,11 @@ return function(ctx)
 	local difficulties = baseline.difficulties()
 
 	test("policy_difficulties_declared", function()
-		ctx.eq(#difficulties, 3, "count")
+		ctx.eq(#difficulties, 4, "count")
 		ctx.eq(difficulties[1], "rookie", "first")
 		ctx.eq(difficulties[2], "competitive", "second")
 		ctx.eq(difficulties[3], "major_league", "third")
+		ctx.eq(difficulties[4], "expert", "fourth")
 	end)
 
 	test("policy_source_available_and_bounded", function()

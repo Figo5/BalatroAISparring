@@ -362,7 +362,7 @@ return function(ctx)
 		local rookie = Support.run(env, "rookie", frame)
 		ctx.is_true(rookie.ok ~= true, "rookie leaves the timer alone")
 		ctx.eq(rookie.code, "policy_no_action")
-		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
 			local action = run_ok(difficulty, frame)
 			ctx.eq(action.type, "START_TIMER", difficulty)
 			legal(difficulty, frame, action)
@@ -378,7 +378,7 @@ return function(ctx)
 	test("policy_plays_a_clearing_hand_instead_of_discarding", function()
 		-- 64 >= 60 remaining: the pair clears, so no discard is spent.
 		local frame = Support.requirement_frame("60", 2, 3)
-		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
 			local action = kind_of(difficulty, frame)
 			ctx.eq(action.type, "PLAY_CARDS", difficulty)
 			ctx.eq(#action.card_refs, 2, difficulty .. " plays the pair")
@@ -388,7 +388,7 @@ return function(ctx)
 	test("policy_discards_when_plays_cannot_reach_the_requirement", function()
 		-- 64 x 2 hands << 1000: improve the hand while discards remain.
 		local frame = Support.requirement_frame("1000", 2, 3)
-		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
 			ctx.eq(kind_of(difficulty, frame).type, "DISCARD_CARDS", difficulty)
 		end
 		-- Rookie does not read the requirement: it plays its made pair.

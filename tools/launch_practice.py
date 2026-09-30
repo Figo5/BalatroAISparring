@@ -103,7 +103,7 @@ _SESSION_PROTECTED_PREFIXES = ("STEAM", "SDL", "LOVELY", "PYTHON")
 # secret gauntlet seed is never here and is served by the authenticated service
 # ``setup`` op instead.
 DESCRIPTOR_MODES = ("normal", "gauntlet")
-DESCRIPTOR_DIFFICULTIES = ("rookie", "competitive", "major_league")
+DESCRIPTOR_DIFFICULTIES = ("rookie", "competitive", "major_league", "expert")
 DESCRIPTOR_PACING = ("instant", "normal")
 DESCRIPTOR_GAUNTLET = ("Test1", "Test2", "Test3", "Test4", "Test5")
 

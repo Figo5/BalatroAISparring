@@ -184,7 +184,7 @@ launcher descriptor names (`tools/launch_practice.py::SESSION_ENV_KEYS`,
 | `AISP_EXPECTED_ROLE_SAVE_ROOT` | path, 1–512 |
 | `AISP_EXPECTED_ROLE_MODS_ROOT` | path, 1–512 |
 | `AISP_MODE` | `normal` \| `gauntlet` |
-| `AISP_DIFFICULTY` | `rookie` \| `competitive` \| `major_league` |
+| `AISP_DIFFICULTY` | `rookie` \| `competitive` \| `major_league` \| `expert` |
 | `AISP_PACING` | `instant` \| `normal` |
 | `AISP_GAUNTLET` | `""` for normal, else `Test1`…`Test5` |
 

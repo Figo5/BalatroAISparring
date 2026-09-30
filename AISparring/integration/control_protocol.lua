@@ -20,7 +20,7 @@ local ControlProtocol = {}
 ControlProtocol.VERSION = "practice_service/1"
 
 ControlProtocol.ROLES = { "human", "ai" }
-ControlProtocol.DIFFICULTIES = { "rookie", "competitive", "major_league" }
+ControlProtocol.DIFFICULTIES = { "rookie", "competitive", "major_league", "expert" }
 ControlProtocol.PACING = { "instant", "normal" }
 ControlProtocol.MODES = { "normal", "gauntlet" }
 

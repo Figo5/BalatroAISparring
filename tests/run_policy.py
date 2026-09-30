@@ -29,7 +29,7 @@ DOC = REPO / "docs" / "BASELINE_POLICY.md"
 WORKER = REPO / "tools" / "policy_worker.py"
 
 RUNTIMES = [("lua51", "lupa.lua51"), ("luajit21", "lupa.luajit21")]
-DIFFICULTIES = ("rookie", "competitive", "major_league")
+DIFFICULTIES = ("rookie", "competitive", "major_league", "expert")
 WORKER_TIMEOUT = 10.0
 
 PROHIBITED_PATTERNS = [
@@ -139,10 +139,10 @@ def generate_sources(runtime_factory) -> dict:
     lua.execute(
         "function ais_policy_sources(repo) "
         "local mod = dofile(repo .. '/AISparring/ai/baseline_policy.lua') "
-        "return mod.source('rookie'), mod.source('competitive'), mod.source('major_league') end"
+        "return mod.source('rookie'), mod.source('competitive'), mod.source('major_league'), mod.source('expert') end"
     )
     values = lua.globals()["ais_policy_sources"](REPO.as_posix())
-    return {"rookie": values[0], "competitive": values[1], "major_league": values[2]}
+    return {"rookie": values[0], "competitive": values[1], "major_league": values[2], "expert": values[3]}
 
 
 def valid_export() -> dict:

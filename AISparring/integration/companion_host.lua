@@ -69,7 +69,7 @@ CompanionHost.ENV = {
 }
 
 CompanionHost.ENUMS = {
-	difficulty = { "rookie", "competitive", "major_league" },
+	difficulty = { "rookie", "competitive", "major_league", "expert" },
 	pacing = { "instant", "normal" },
 	mode = { "normal", "gauntlet" },
 	gauntlet = { "Test1", "Test2", "Test3", "Test4", "Test5" },

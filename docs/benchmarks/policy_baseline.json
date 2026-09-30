@@ -9,12 +9,28 @@
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 15.097,
-      "latency_ms_p95": 26.117,
+      "latency_ms_mean": 15.538,
+      "latency_ms_p95": 29.025,
       "no_action": 0,
       "other": 0,
       "play_optimal": 1.0,
       "play_rate": 0.7067,
+      "regret": 0.0
+    },
+    "expert": {
+      "clear_taken": 1.0,
+      "decisions": 300,
+      "discard_quality": null,
+      "discard_rate": 0.32,
+      "failures": 0,
+      "forced_discard_quality": null,
+      "illegal": 0,
+      "latency_ms_mean": 16.059,
+      "latency_ms_p95": 29.18,
+      "no_action": 0,
+      "other": 0,
+      "play_optimal": 1.0,
+      "play_rate": 0.68,
       "regret": 0.0
     },
     "major_league": {
@@ -25,8 +41,8 @@
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 15.185,
-      "latency_ms_p95": 28.455,
+      "latency_ms_mean": 14.937,
+      "latency_ms_p95": 27.277,
       "no_action": 0,
       "other": 0,
       "play_optimal": 1.0,
@@ -41,8 +57,8 @@
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 12.212,
-      "latency_ms_p95": 21.055,
+      "latency_ms_mean": 11.946,
+      "latency_ms_p95": 18.418,
       "no_action": 0,
       "other": 0,
       "play_optimal": 0.7805,
@@ -57,5 +73,5 @@
     23,
     37
   ],
-  "wall_seconds": 23.88
+  "wall_seconds": 32.37
 }

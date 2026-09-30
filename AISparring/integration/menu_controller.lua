@@ -94,7 +94,7 @@ MenuController.BUTTON_LABEL = "AI Sparring 0.1.0-dev"
 MenuController.ACK_TIMEOUT = ACK_TIMEOUT
 MenuController.GAUNTLET_COUNT = GAUNTLET_COUNT
 MenuController.MODES = { "normal", "gauntlet" }
-MenuController.DIFFICULTIES = { "rookie", "competitive", "major_league" }
+MenuController.DIFFICULTIES = { "rookie", "competitive", "major_league", "expert" }
 MenuController.PACINGS = { "instant", "normal" }
 MenuController.RULESET = { id = "major_league", label = "Major League" }
 MenuController.DEFAULT_SELECTION = { mode = "normal", difficulty = "competitive", pacing = "normal" }
@@ -107,6 +107,7 @@ MenuController.OPTIONS = {
 		{ id = "rookie", label = "Rookie" },
 		{ id = "competitive", label = "Competitive" },
 		{ id = "major_league", label = "Major League" },
+		{ id = "expert", label = "Expert" },
 	},
 	pacings = {
 		{ id = "instant", label = "Instant" },

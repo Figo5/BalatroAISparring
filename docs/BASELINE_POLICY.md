@@ -39,7 +39,7 @@ money as a budget with a reserve and interest opportunity cost.
 ```lua
 local BaselinePolicy = dofile("AISparring/ai/baseline_policy.lua")
 
-BaselinePolicy.difficulties()        -- { "rookie", "competitive", "major_league" }
+BaselinePolicy.difficulties()        -- { "rookie", "competitive", "major_league", "expert" }
 BaselinePolicy.describe()            -- fresh deep copy of the three configurations
 BaselinePolicy.source(difficulty)    -- source string, or nil + bounded code
 ```
@@ -273,6 +273,15 @@ information or authority differences).
 | `discard_ev` (draw-aware discard ranking) | off | on | on |
 | `use_levels` (displayed poker-hand levels in the estimate) | off | on | on |
 | `joker_gain_value` (panel-based shop Joker value; order by panel) | used only with `est_jokers` (off) | 400 | 400 |
+
+**Expert** (`expert`, fourth tier) is Major League with a deeper draw search and a more
+willing discard and shop profile. It adds two draw targets: full house from two
+pair, and straights missing two ranks. Its settings are `deep_draws = true`,
+`discard_gain_pct = 130` (not 150), `discard_need_pct = 110` and
+`joker_gain_value = 500`. It uses exactly the same observation as every other
+tier. On the cloud benchmark it is currently only marginally different from
+Major League (forced-discard quality 0.846 vs 0.845). Real separation is
+unproven until live Gauntlet runs.
 | `start_timer` (press the MP timer on a slow opponent) | 0 (never) | 1000 | 1000 |
 
 Observable consequences (pinned by tests):
@@ -496,7 +505,7 @@ The Major League engine, not these tests, adjudicates real play.
 - **Orchestrator:** call `BaselinePolicy.source(difficulty)` once per policy
   instance and pass that string to the restricted runner/worker; do not pass the
   module or any configuration across the boundary.
-- **Difficulty selection:** `rookie`, `competitive`, `major_league`; the string is
+- **Difficulty selection:** `rookie`, `competitive`, `major_league`, `expert`; the string is
   the only difficulty knob, so the same source can be cached and reused.
 - **Selection handling:** accept only the returned action and re-validate it; do
   not trust it. Treat `policy_no_action` as a legitimate "no legal choice".

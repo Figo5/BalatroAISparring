@@ -44,7 +44,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DIFFICULTIES = ("rookie", "competitive", "major_league")
+DIFFICULTIES = ("rookie", "competitive", "major_league", "expert")
 
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King", "Ace"]
 SUITS = ["Hearts", "Diamonds", "Clubs", "Spades"]

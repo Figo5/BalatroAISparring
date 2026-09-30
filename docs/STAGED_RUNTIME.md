@@ -141,7 +141,7 @@ never returned by `describe()`/`status()`.
 | `ui_notify` | optional injected host error overlay (`function(level, message)`) |
 | `hook_targets` | optional `{ { table, name, reason }, … }` revision hooks |
 | `terminal_probe` | optional `function() -> "win"\|"loss"\|nil` |
-| `mode`, `difficulty`, `pacing` | trusted enums (`gauntlet`/`normal`, `rookie`/`competitive`/`major_league`, `instant`/`normal`) |
+| `mode`, `difficulty`, `pacing` | trusted enums (`gauntlet`/`normal`, `rookie`/`competitive`/`major_league`/`expert`, `instant`/`normal`) |
 | `decision_base` | first decision sequence (default `1000000`) |
 | `auto_coordinate` | default `true`; the root may instead drive the explicit methods |
 

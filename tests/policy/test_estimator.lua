@@ -109,7 +109,7 @@ return function(ctx)
 			{ type = "BUY_ITEM", certified = true, item_ref = "shop:2", capacity_ok = true },
 			{ type = "LEAVE_SHOP", certified = true },
 		}
-		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
 			local result = Support.run(env, difficulty, frame)
 			ctx.is_true(result.ok == true, difficulty)
 			ctx.eq(result.action.type, "BUY_ITEM", difficulty)
@@ -129,13 +129,13 @@ return function(ctx)
 			{ type = "REORDER_JOKERS", certified = true, order = { "joker:2", "joker:1" } },
 			{ type = "LEAVE_SHOP", certified = true },
 		}
-		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
 			local result = Support.run(env, difficulty, frame)
 			ctx.eq(result.action.type, "REORDER_JOKERS", difficulty .. " moves +15 mult before x3")
 		end
 		-- Already in the best order: no reorder is offered as an improvement.
 		frame.self.jokers = { Support.joker("j_gros_michel"), Support.joker("j_cavendish") }
-		for _, difficulty in ipairs({ "competitive", "major_league" }) do
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
 			ctx.eq(Support.run(env, difficulty, frame).action.type, "LEAVE_SHOP", difficulty)
 		end
 	end)
@@ -284,6 +284,56 @@ return function(ctx)
 		-- With the estimate off both Jokers score the flat kind value: the
 		-- canonical id tie-break picks the first.
 		ctx.eq(Support.run(env, "major_league", frame).action.item_ref, "shop:1")
+	end)
+
+	local function draw_frame(hand, discards)
+		local frame = Support.requirement_frame("100000", 3, 3)
+		frame.self.hand = hand
+		local items = { { type = "PLAY_CARDS", certified = true, card_refs = { "hand:1" } } }
+		for _, list in ipairs(discards) do
+			local refs = {}
+			for i = 1, #list do
+				refs[i] = "hand:" .. list[i]
+			end
+			items[#items + 1] = { type = "DISCARD_CARDS", certified = true, card_refs = refs }
+		end
+		frame.certificates.items = items
+		return frame
+	end
+
+	test("expert_keeps_two_pair_for_a_full_house_draw", function()
+		local frame = draw_frame({
+			card("King", "Spades"), card("King", "Hearts"), card("7", "Clubs"), card("7", "Diamonds"),
+			card("2", "Spades"), card("4", "Hearts"), card("9", "Clubs"), card("Jack", "Diamonds"),
+		}, { { 5, 6, 7, 8 }, { 3, 4, 5, 6 }, { 1, 2, 3, 4 } })
+		local result = Support.run(env, "expert", frame)
+		ctx.is_true(result.ok == true)
+		ctx.eq(result.action.type, "DISCARD_CARDS")
+		ctx.truthy(Support.same_refs(result.action.card_refs, { "hand:5", "hand:6", "hand:7", "hand:8" }), "keeps both pairs")
+	end)
+
+	test("expert_values_a_connected_run_with_two_gaps", function()
+		-- No pairs and no three-card suit. 6-7-8 and A-Q-J are both runs
+		-- missing two ranks; either is a deep-draw keep, dropping only two
+		-- cards is not. Every tier stays legal.
+		local hand = {
+			card("6", "Spades"), card("7", "Hearts"), card("8", "Clubs"), card("Ace", "Diamonds"),
+			card("3", "Clubs"), card("Queen", "Hearts"), card("Jack", "Spades"), card("2", "Diamonds"),
+		}
+		local frame = draw_frame(hand, { { 4, 5, 6, 7, 8 }, { 1, 2, 3, 5, 8 }, { 5, 8 } })
+		local expert = Support.run(env, "expert", frame)
+		ctx.is_true(expert.ok == true)
+		ctx.eq(expert.action.type, "DISCARD_CARDS")
+		ctx.truthy(Support.same_refs(expert.action.card_refs, { "hand:4", "hand:5", "hand:6", "hand:7", "hand:8" })
+			or Support.same_refs(expert.action.card_refs, { "hand:1", "hand:2", "hand:3", "hand:5", "hand:8" }), "keeps a two-gap run")
+		for _, difficulty in ipairs(Support.DIFFICULTIES) do
+			ctx.is_true(Support.run(env, difficulty, frame).ok == true, difficulty)
+		end
+		-- Without the broadway keep on offer, 6-7-8 is the only run to keep
+		-- (3-J-2 is not connected).
+		local only = Support.run(env, "expert", draw_frame(hand, { { 4, 5, 6, 7, 8 }, { 1, 2, 3, 4, 6 }, { 5, 8 } }))
+		ctx.is_true(only.ok == true)
+		ctx.truthy(Support.same_refs(only.action.card_refs, { "hand:4", "hand:5", "hand:6", "hand:7", "hand:8" }), "keeps 6-7-8")
 	end)
 end
 

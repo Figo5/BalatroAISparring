@@ -68,6 +68,8 @@ local BASE = {
 	-- also discard when that beats the best play now by discard_gain_pct%.
 	discard_ev = true,
 	discard_gain_pct = 150,
+	-- Extra draw targets: full house from two pair, straights missing two ranks.
+	deep_draws = false,
 	-- Use the displayed poker-hand levels (planets) instead of level-1 bases.
 	use_levels = true,
 	-- Shop Jokers: points per +100% estimated panel score (0 = flat value).
@@ -137,9 +139,28 @@ local CONFIGS = {
 		blind_skip = 30,
 		booster_good = 150,
 	}),
+	expert = make_config("expert", {
+		discard_need_pct = 110,
+		-- Expert: the same information with a deeper, more willing draw search.
+		deep_draws = true,
+		discard_gain_pct = 130,
+		joker_gain_value = 500,
+		reserve = 16,
+		play_junk = 550,
+		discard_junk = 7000,
+		discard_pair_pen = 24000,
+		discard_flush_pen = 18000,
+		discard_seal_pen = 14000,
+		negative = 180,
+		reroll_base = 45,
+		reroll_surplus_cap = 100,
+		leave_shop = 100,
+		blind_skip = 30,
+		booster_good = 150,
+	}),
 }
 
-local ORDER = { "rookie", "competitive", "major_league" }
+local ORDER = { "rookie", "competitive", "major_league", "expert" }
 
 local TEMPLATE = [==[
 local CONF = %s
@@ -1238,6 +1259,91 @@ local function discard_ev(observation, discard_refs, jokers, need)
 						end
 					end
 					consider(p_at_least(1, d, outs, pool), play)
+				end
+			end
+		end
+	end
+	if CONF.deep_draws and d >= 1 then
+		-- Two pair -> full house: one more of either pair rank.
+		local pair_ranks = {}
+		for rv = 14, 2, -1 do
+			if (kept_rank[rv] or 0) == 2 then
+				pair_ranks[#pair_ranks + 1] = rv
+			end
+		end
+		if #pair_ranks >= 2 then
+			local a, b = pair_ranks[1], pair_ranks[2]
+			local outs = (4 - (seen_rank[a] or 0)) + (4 - (seen_rank[b] or 0))
+			if outs > 0 then
+				local play = kept_where(function(c)
+					local rv = rank_value(c.rank)
+					return rv == a or rv == b
+				end, 4)
+				play[#play + 1] = synthetic(a, "C")
+				consider(p_at_least(1, d, outs, pool), play)
+			end
+		end
+		-- Straights missing two ranks: both must arrive.
+		if d >= 2 then
+			for low = 1, 10 do
+				local missing = {}
+				local count = 0
+				for v = low, low + 4 do
+					local rv = v
+					if v == 1 then
+						rv = 14
+					end
+					if (kept_rank[rv] or 0) > 0 then
+						count = count + 1
+					else
+						missing[#missing + 1] = rv
+					end
+				end
+				if count == 3 and #missing == 2 then
+					local outs_a = 4 - (seen_rank[missing[1]] or 0)
+					local outs_b = 4 - (seen_rank[missing[2]] or 0)
+					if outs_a > 0 and outs_b > 0 and pool >= d then
+						-- Exact: P(>=1 of each) by inclusion-exclusion.
+						local total = choose(pool, d)
+						local p = 0
+						if total > 0 then
+							p = 1 - choose(pool - outs_a, d) / total - choose(pool - outs_b, d) / total
+								+ choose(pool - outs_a - outs_b, d) / total
+						end
+						if p < 0 then
+							p = 0
+						end
+						-- Drawn cards take a suit none of the kept cards share, so the
+						-- target is never priced as a straight flush.
+						local fill_suit = "D"
+						for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
+							local clash = false
+							for i = 1, #kept do
+								if suit_key(kept[i].suit) == candidate_suit then
+									clash = true
+								end
+							end
+							if not clash then
+								fill_suit = candidate_suit
+								break
+							end
+						end
+						local play = {}
+						for v = low, low + 4 do
+							local rv = v
+							if v == 1 then
+								rv = 14
+							end
+							if rv == missing[1] or rv == missing[2] then
+								play[#play + 1] = synthetic(rv, fill_suit)
+							else
+								play[#play + 1] = kept_where(function(c)
+									return rank_value(c.rank) == rv
+								end, 1)[1]
+							end
+						end
+						consider(p, play)
+					end
 				end
 			end
 		end

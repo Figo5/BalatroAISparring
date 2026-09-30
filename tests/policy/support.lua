@@ -1,6 +1,6 @@
 local Support = {}
 
-Support.DIFFICULTIES = { "rookie", "competitive", "major_league" }
+Support.DIFFICULTIES = { "rookie", "competitive", "major_league", "expert" }
 
 local function read_file(path)
 	local handle = io.open(path, "rb")

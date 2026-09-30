@@ -68,7 +68,7 @@ MAX_OBSERVATION_DEPTH = 16
 MAX_SEQUENCE = 2147483647
 
 ROLES = ("human", "ai")
-DIFFICULTIES = ("rookie", "competitive", "major_league")
+DIFFICULTIES = ("rookie", "competitive", "major_league", "expert")
 PACING = ("instant", "normal")
 MODES = ("normal", "gauntlet")
 GAUNTLET_SEEDS = {

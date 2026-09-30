@@ -29,7 +29,7 @@ network client):
 - `session_id` — exact-match session identity.
 - two random per-role credentials — `human` and `ai`, distinct, generated with
   `secrets.token_hex(32)` unless the launcher injects them.
-- `difficulty` — `rookie` | `competitive` | `major_league`.
+- `difficulty` — `rookie` | `competitive` | `major_league` | `expert`.
 - `pacing` — `instant` | `normal` (the runtime owns the dispatch schedule; the
   service never touches a game clock).
 - `mode` — `normal` | `gauntlet`, plus the `gauntlet` label when in gauntlet

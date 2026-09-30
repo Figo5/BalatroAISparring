@@ -61,7 +61,7 @@ ERROR_MESSAGE = (
 EXPECTED_VECTORS = {
     "default-payload-keys": "difficulty,mode,pacing",
     "modes": "normal,gauntlet",
-    "difficulties": "rookie,competitive,major_league",
+    "difficulties": "rookie,competitive,major_league,expert",
     "pacings": "instant,normal",
 }
 
