@@ -472,7 +472,7 @@ end
 
 local function consumable_selection_frame(min_targets, max_targets, certs)
 	local self = base_self()
-	self.consumables = { { center = "c_hermit", face_down = false } }
+	self.consumables = { { center = "c_strength", face_down = false } }
 	local context = base_context()
 	context.target_selection = true
 	context.min_targets = min_targets
@@ -484,7 +484,7 @@ local function consumable_selection_frame(min_targets, max_targets, certs)
 		self = self,
 		context = context,
 		consumable_target = {
-			source = { center = "c_hermit", face_down = false },
+			source = { center = "c_strength", face_down = false },
 			source_ref = "consumable:1",
 			min_targets = min_targets,
 			max_targets = max_targets,
@@ -606,7 +606,7 @@ function Support.adapter_pvp_zero_hands_frame()
 	self.hand_visible = true
 	self.hand = pair_hand()
 	self.jokers = { joker_entity("j_unrecognized_one"), joker_entity("j_unrecognized_two") }
-	self.consumables = { { center = "c_hermit", face_down = false } }
+	self.consumables = { { center = "c_strength", face_down = false } }
 	local context = base_context()
 	context.max_play = 5
 	context.max_discard = 5
@@ -641,7 +641,7 @@ function Support.adapter_consumable_multi_target_frame()
 	local hand = consumable_selection_cards()
 	self.hand_visible = true
 	self.hand = hand
-	self.consumables = { { center = "c_hermit", face_down = false } }
+	self.consumables = { { center = "c_strength", face_down = false } }
 	self.jokers = { joker_entity("j_unrecognized_one"), joker_entity("j_unrecognized_two") }
 	local context = base_context()
 	context.target_selection = true
@@ -654,7 +654,7 @@ function Support.adapter_consumable_multi_target_frame()
 		self = self,
 		context = context,
 		consumable_target = {
-			source = { center = "c_hermit", face_down = false },
+			source = { center = "c_strength", face_down = false },
 			source_ref = "consumable:1",
 			min_targets = 2,
 			max_targets = 2,
@@ -675,7 +675,7 @@ end
 -- generator drops every targeted candidate, leaving only SELL_*.
 function Support.consumable_missing_bounds_frame()
 	local self = base_self()
-	self.consumables = { { center = "c_hermit", face_down = false } }
+	self.consumables = { { center = "c_strength", face_down = false } }
 	self.jokers = { joker_entity("j_unrecognized_one") }
 	local context = base_context()
 	context.target_selection = true
@@ -686,7 +686,7 @@ function Support.consumable_missing_bounds_frame()
 		self = self,
 		context = context,
 		consumable_target = {
-			source = { center = "c_hermit", face_down = false },
+			source = { center = "c_strength", face_down = false },
 			source_ref = "consumable:1",
 			targets = { card("Ace", "Spades", "c_ace") },
 		},

@@ -2265,6 +2265,17 @@ local function target_or_use_score(observation, action)
 	if type(center) == "string" and harmful_use(observation, center) then
 		return nil
 	end
+	if center == "c_hermit" and CONF.voucher_values then
+		-- The Hermit doubles money up to +$20: hold it until money reaches
+		-- $20, unless consumable slots are full (then free the slot).
+		local s = observation.self
+		local money = type(s) == "table" and type(s.money) == "number" and s.money or 0
+		local slots = type(observation.match) == "table" and observation.match.consumable_slots or nil
+		local held = type(s) == "table" and type(s.consumables) == "table" and #s.consumables or 0
+		if money < 20 and not (type(slots) == "number" and held >= slots) then
+			return nil
+		end
+	end
 	local planet_bonus = 0
 	if PLANETS[center] then
 		planet_bonus = 1000

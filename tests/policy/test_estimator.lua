@@ -407,6 +407,17 @@ return function(ctx)
 		end
 	end)
 
+	test("hermit_is_held_until_money_reaches_20", function()
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit" }, 8, 1)).action.type, "LEAVE_SHOP", difficulty .. " hold at $8")
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit" }, 20, 1)).action.type, "USE_CONSUMABLE", difficulty .. " use at $20")
+			-- Two held consumables fill the two slots: use it to free one.
+			ctx.eq(Support.run(env, difficulty, use_frame({ "c_hermit", "c_fool" }, 8, 1)).action.source_ref, "consumable:1", difficulty .. " full slots")
+		end
+		-- Rookie keeps the simple rule: use at once.
+		ctx.eq(Support.run(env, "rookie", use_frame({ "c_hermit" }, 8, 1)).action.type, "USE_CONSUMABLE", "rookie")
+	end)
+
 	test("planets_are_used_before_other_consumables", function()
 		local result = Support.run(env, "competitive", use_frame({ "c_fool", "c_jupiter" }, 5, 0))
 		ctx.eq(result.action.type, "USE_CONSUMABLE")
