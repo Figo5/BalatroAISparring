@@ -1,6 +1,24 @@
 # Design: tell the policy when the boss blind is disabled
 
-Status: **proposed, awaiting architecture review.** No code yet.
+Status: **implemented.** The architecture review approved it with changes,
+all applied:
+
+- **High:**
+  - the reader copies the flag only as a strict boolean, only alongside
+    `match.blind`, and only when it equals the engine's own
+    `G.GAME.blind.disabled`; anything else is `reader_bad_view`;
+  - the adapter writes it only when `match.blind` was written and the engine
+    value is a boolean.
+- **Medium:**
+  - `blind_disabled` is in the adapter's decision signature;
+  - docs are updated;
+  - the policy's Psychic check requires `blind_disabled ~= true`.
+- **Low:** tests in `tests/engine/test_blind_disabled.lua` and
+  `test_estimator.lua`.
+
+Re-certification is required: the observation schema, adapter, reader and
+policy all changed. `schema_version` stays 1, because the field is optional
+and additive, like `hand_levels`.
 
 ## Why
 

@@ -497,6 +497,9 @@ acceptance:
   either `MP.GAME.won == true` or the engine state is `GAME_OVER`. No observation
   field is added (M2 schema kept intact); the coordinator reads the signal directly.
 - **Deck total and tags** remain unsupported, as in M2.
+- **`match.blind_disabled`** is exported, only alongside `match.blind`, from
+  `G.GAME.blind.disabled` (a boolean). It is also part of the decision
+  signature (docs/BLIND_DISABLED_DESIGN.md).
 - **The Psychic** (`bl_psychic`, not `disabled`) scores only five-card hands.
   So `PLAY_CARDS` candidates then also include rank groups and two pair,
   padded to five cards with the highest other visible-rank cards (at most 10,

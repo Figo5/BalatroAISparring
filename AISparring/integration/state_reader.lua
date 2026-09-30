@@ -616,6 +616,16 @@ local function build_match(G, MP, view)
 		if blind ~= nil then
 			out.blind = blind
 		end
+		-- blind_disabled: a strict boolean, only with a blind, and equal to the
+		-- engine's own G.GAME.blind.disabled (never trusted from the view).
+		local disabled = rawget(view_match, "blind_disabled")
+		if disabled ~= nil then
+			local engine_disabled = rget(rget(rget(G, "GAME"), "blind"), "disabled")
+			if project_bool(disabled) == nil or out.blind == nil or disabled ~= (engine_disabled == true) then
+				return nil, CODE.BAD_VIEW
+			end
+			out.blind_disabled = disabled
+		end
 		local timer = as_display(rawget(view_match, "timer"), 16)
 		if timer ~= nil and rawget(view_match, "timer_visible") == true then
 			local lobby = rget(MP, "LOBBY")

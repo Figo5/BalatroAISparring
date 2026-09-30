@@ -109,6 +109,7 @@ ui_view = {
   match = {                        -- required for observation.match.ruleset
     ruleset = "<token>",           -- required token (e.g. ruleset id)
     blind = "<display>",
+    blind_disabled = true|false,   -- optional; strict bool, only with blind, must equal G.GAME.blind.disabled
     timer = "<display>", timer_visible = true,   -- timer copied only under §4.2 gate
     lives = int, hands_per_round = int, discards_per_round = int,
     hand_size = int, joker_slots = int, consumable_slots = int,
@@ -227,6 +228,7 @@ fields are never traversed.
 | `G.GAME.round_resets.ante`, `G.GAME.round` | displayed ante/round; §1 |
 | `G.GAME.current_round.hands_played` | PvP score-masking gate; §3 |
 | `G.GAME.blind.pvp`, `G.GAME.blind.config.blind.key` | engine PvP-boss derivation (M2); `nemesis.lua:32-35` |
+| `G.GAME.blind.disabled` | cross-check for `match.blind_disabled` (never trusted from the view); `docs/BLIND_DISABLED_DESIGN.md` |
 | `G.hand.cards`, `G.jokers.cards`, `G.consumeables.cards`, `G.shop_jokers.cards`, `G.shop_booster.cards`, `G.shop_vouchers.cards`, `G.pack_cards.cards` | existence/facing/masking backing only |
 | `card.facing`, `card.sprite_facing` | face-up gate; `M2_SOURCE_MAP.md` §6 (`card.lua:52-54`) |
 | `card.ability.effect` | Stone Card rank/suit masking (`m_stone` enhancement) |

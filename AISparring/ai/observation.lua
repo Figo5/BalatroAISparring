@@ -412,6 +412,7 @@ local function read_match(t)
 	local spec = {
 		{ "ruleset", "token", 64 },
 		{ "blind", "display", 32 },
+		{ "blind_disabled", "bool" },
 		{ "timer", "display", 16 },
 		{ "ante", "int" },
 		{ "round", "int" },

@@ -438,6 +438,11 @@ return function(ctx)
 			frame.match.blind = "bl_psychic"
 			local boss = Support.run(env, difficulty, frame)
 			ctx.eq(#boss.action.card_refs, 5, difficulty .. " psychic five")
+			-- A disabled Psychic (Chicot / Luchador) is a normal blind again.
+			frame.match.blind = "bl_psychic"
+			frame.match.blind_disabled = true
+			ctx.eq(#Support.run(env, difficulty, frame).action.card_refs, 2, difficulty .. " disabled psychic")
+			frame.match.blind_disabled = nil
 			frame.match.blind = "bl_small"
 		end
 	end)

@@ -1567,6 +1567,7 @@ local function analyse_plays(observation, actions, count)
 	end
 	-- Boss awareness (public blind key): The Psychic must play 5 cards.
 	local psychic = CONF.boss_aware and type(observation.match) == "table" and observation.match.blind == "bl_psychic"
+		and observation.match.blind_disabled ~= true
 	if psychic then
 		MIN_CARDS = 5
 	end

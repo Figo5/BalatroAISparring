@@ -166,10 +166,12 @@ exposes only `schema_version` + `phase` + `match`.
 
 ### 4.2 `match` (required)
 
-`ruleset` (token, required), `blind` (display string), `timer` (display string,
-may contain `>>`), `ante`, `round`, `lives`, `hands_per_round`,
-`discards_per_round`, `hand_size`, `joker_slots`, `consumable_slots` (integers
-`>= 0`). Fixed normalized rules fields supplied by the trusted producer.
+`ruleset` (token, required), `blind` (display string), `blind_disabled` (bool,
+only with `blind`: the boss was disabled by Chicot or Luchador, as shown on
+screen; docs/BLIND_DISABLED_DESIGN.md), `timer` (display string, may contain
+`>>`), `ante`, `round`, `lives`, `hands_per_round`, `discards_per_round`,
+`hand_size`, `joker_slots`, `consumable_slots` (integers `>= 0`). Fixed
+normalized rules fields supplied by the trusted producer.
 
 ### 4.3 `self`
 

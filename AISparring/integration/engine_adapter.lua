@@ -663,6 +663,7 @@ local function decision_signature(G, MP)
 	put_int("pack_choices", rget(game, "pack_choices"))
 	put_str("blind_on_deck", rget(game, "blind_on_deck"))
 	put_bool("block_play", rpath(game, "blind", "block_play"))
+	put_bool("blind_disabled", rpath(game, "blind", "disabled"))
 	local current_round = rget(game, "current_round")
 	put_int("hands_left", rget(current_round, "hands_left"))
 	put_int("discards_left", rget(current_round, "discards_left"))
@@ -697,7 +698,14 @@ local function build_match(G, MP)
 	end
 	local match = { ruleset = projected }
 	local blind_key = rget(rget(rget(rget(rget(G, "GAME"), "blind"), "config"), "blind"), "key")
-	put(match, "blind", display_of(blind_key, LIMITS.display))
+	local blind_display = display_of(blind_key, LIMITS.display)
+	put(match, "blind", blind_display)
+	-- Chicot / Luchador disable the boss (shown on screen); only alongside a
+	-- blind (docs/BLIND_DISABLED_DESIGN.md).
+	local disabled = rpath(G, "GAME", "blind", "disabled")
+	if blind_display ~= nil and type(disabled) == "boolean" then
+		match.blind_disabled = disabled
+	end
 	local lives = rget(rget(MP, "GAME"), "lives")
 	put(match, "lives", int_field(lives))
 	local resets = rpath(G, "GAME", "round_resets")
