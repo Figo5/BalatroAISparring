@@ -1717,6 +1717,8 @@ end
 -- shop vouchers. Ante-lowering vouchers that permanently cost a hand or a
 -- discard score below leave_shop, so they are not bought. Unknown vouchers add
 -- nothing.
+-- Vouchers valued at or below this are minor (see voucher_score).
+local MINOR_VOUCHER = 10
 local VOUCHER_VALUE = {
 	v_antimatter = 260, v_grabber = 200, v_nacho_tong = 200, v_paint_brush = 160, v_palette = 160,
 	v_wasteful = 130, v_recyclomancy = 130, v_overstock_norm = 120, v_overstock_plus = 120,
@@ -1937,7 +1939,13 @@ local function voucher_score(observation, action)
 		return nil
 	end
 	if CONF.voucher_values and type(item.center) == "string" then
-		return versus_joker(observation, spend, CONF.voucher + (VOUCHER_VALUE[item.center] or 0), cost)
+		local value = VOUCHER_VALUE[item.center] or 0
+		-- A minor voucher (Blank, neutral or unknown) is not worth dipping
+		-- below the money reserve for.
+		if value <= MINOR_VOUCHER and spend - cost < CONF.reserve then
+			return nil
+		end
+		return versus_joker(observation, spend, CONF.voucher + value, cost)
 	end
 	return CONF.voucher + economy_bonus(spend - cost)
 end

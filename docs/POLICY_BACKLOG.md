@@ -23,9 +23,8 @@ Constraints on all of it:
 From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
 `docs/CLAUDE_BATCH2_RESOLUTION.md`). None is match-ending.
 
-- **Blank voucher can consume the last $10.** `v_blank` has +10 value; at low
-  money the economy term alone may not stop it. Consider refusing vouchers of
-  value ≤ 10 when they would drop below the reserve.
+- ~~**Blank voucher can consume the last $10.**~~ Fixed: minor vouchers never
+  dip below the reserve (§4.4).
 - **Rookie keeps simpler voucher and pack behaviour.** This is intentional.
   It is documented in LV-10 and §4.4. Revisit only if Rookie should buy
   Hieroglyph less often.
@@ -40,7 +39,11 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
   the offered Joker, so ×mult Jokers bought before +mult ones are valued as if
   already well ordered (the reorder step fixes the order later).
 - **Seed Money / Money Tree interest cap is not modelled.** `interest_cap` is
-  fixed at 5, so those vouchers' value to later interest is underestimated.
+  fixed at 5. The policy cannot see owned vouchers yet: the adapter and reader
+  never fill `self.vouchers`, although the schema allows it. Fixing this needs
+  a trusted-integration change that exports `G.GAME.used_vouchers`, which Run
+  Info shows publicly, through adapter → reader → observation, with a fairness
+  review.
 - **Match-history list may show Windows junctions.** `tools/match_history.py`
   review rejects junction paths, but the list view may still display them. Make
   both paths use the same filter.

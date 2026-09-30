@@ -32,6 +32,18 @@ return function(ctx)
 			local skip = Support.run(env, difficulty, offer_vouchers(shop(40), { "v_hieroglyph" }))
 			ctx.eq(skip.action.type, "LEAVE_SHOP", difficulty .. " hieroglyph")
 		end
+		for _, difficulty in ipairs(STRONG) do
+			-- Blank (and neutral/unknown) vouchers never spend the reserve:
+			-- $10 for a $10 Blank is left, $40 buys it.
+			for _, center in ipairs({ "v_blank", "v_omen_globe", "v_unknown_test" }) do
+				local frame = offer_vouchers(shop(10), { center })
+				frame.shop.vouchers[1].cost = 10
+				ctx.eq(Support.run(env, difficulty, frame).action.type, "LEAVE_SHOP", difficulty .. " " .. center .. " at $10")
+			end
+			ctx.eq(Support.run(env, difficulty, offer_vouchers(shop(40), { "v_blank" })).action.type, "BUY_VOUCHER", difficulty .. " blank at $40")
+			-- A real voucher can still dip into the reserve.
+			ctx.eq(Support.run(env, difficulty, offer_vouchers(shop(12), { "v_grabber" })).action.type, "BUY_VOUCHER", difficulty .. " grabber at $12")
+		end
 		-- Rookie keeps the flat voucher score.
 		ctx.eq(Support.run(env, "rookie", offer_vouchers(shop(40), { "v_hieroglyph" })).action.type, "BUY_VOUCHER")
 	end)

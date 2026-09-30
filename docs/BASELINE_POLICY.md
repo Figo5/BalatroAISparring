@@ -270,7 +270,10 @@ Hieroglyph and Petroglyph (-1 ante, but a hand or discard lost every round)
 get -300, so leaving the shop beats them. Omen Globe, Magic Trick, Illusion,
 Director's Cut and Retcon are deliberately +0, as are unknown vouchers.
 Multiplayer gamemodes that ban vouchers (for example Attrition) already remove
-them from the legal actions. Rookie keeps the flat score.
+them from the legal actions. Rookie keeps the flat score. A minor voucher
+(value ≤ `MINOR_VOUCHER`, 10: Blank, the neutral ones and unknown ones) is
+never bought if it would leave money below the reserve. Before this, a $10
+Blank could take the last $10.
 
 **No crowding out Jokers (`versus_joker`).** The reference is the best
 *certified* Joker purchase in this shop decision, by its full buy score:
