@@ -22,10 +22,29 @@ return function(ctx)
 
 	test("scaling_jokers_beat_an_unmodelled_joker_at_equal_price", function()
 		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
-			for _, center in ipairs({ "j_green_joker", "j_ride_the_bus", "j_obelisk", "j_hologram" }) do
+			for _, center in ipairs({ "j_green_joker", "j_ride_the_bus", "j_constellation", "j_hologram" }) do
 				local result = Support.run(env, difficulty, shop({ "j_credit_card", center }))
 				ctx.eq(result.action.item_ref, "shop:2", difficulty .. " " .. center)
 			end
+		end
+	end)
+
+	test("jokers_this_policy_cannot_grow_get_no_proxy", function()
+		-- Throwback, Red Card, Campfire, Obelisk, Lucky Cat and Vampire keep the
+		-- flat value: at equal price the first-listed Credit Card wins the tie.
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			for _, center in ipairs({ "j_throwback", "j_red_card", "j_campfire", "j_obelisk", "j_lucky_cat", "j_vampire" }) do
+				local result = Support.run(env, difficulty, shop({ "j_credit_card", center }))
+				ctx.eq(result.action.item_ref, "shop:1", difficulty .. " " .. center)
+			end
+		end
+	end)
+
+	test("ride_the_bus_has_no_proxy_next_to_face_card_jokers", function()
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			local frame = shop({ "j_credit_card", "j_ride_the_bus" })
+			frame.self.jokers = { Support.joker("j_scary_face") }
+			ctx.eq(Support.run(env, difficulty, frame).action.item_ref, "shop:1", difficulty)
 		end
 	end)
 

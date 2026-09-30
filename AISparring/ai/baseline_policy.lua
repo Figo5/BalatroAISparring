@@ -585,14 +585,19 @@ local MULTIPLICATIVE = { xmult = true, hand_xmult = true }
 -- Scaling Jokers grow over a run, so their current value is not visible when
 -- offered. For shop and pack valuation only (never play estimates), an offered
 -- one is priced as a conservative mid-life effect from its public card text.
+-- Only Jokers that grow from what this policy actually does (plays, discards,
+-- rerolls, planets) are listed. Throwback, Red Card, Campfire, Obelisk and
+-- Lucky Cat grow from actions it never takes; Vampire strips enhancements the
+-- estimate values. The built-up bonus of Spare Trousers and Runner applies to
+-- every hand.
 local SCALING = {
-	j_green_joker = { "mult", 5 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
-	j_flash = { "mult", 4 }, j_red_card = { "mult", 3 }, j_spare_trousers = { "hand_mult", 6, "two_pair" },
-	j_runner = { "hand_chips", 45, "straight" }, j_wee = { "chips", 24 }, j_castle = { "chips", 30 },
-	j_square = { "chips", 8 }, j_obelisk = { "xmult", 1.4 }, j_hologram = { "xmult", 1.3 },
-	j_constellation = { "xmult", 1.3 }, j_lucky_cat = { "xmult", 1.2 }, j_throwback = { "xmult", 1.2 },
-	j_campfire = { "xmult", 1.25 }, j_vampire = { "xmult", 1.2 },
+	j_green_joker = { "mult", 4 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
+	j_flash = { "mult", 4 }, j_spare_trousers = { "mult", 4 }, j_runner = { "chips", 30 },
+	j_wee = { "chips", 24 }, j_castle = { "chips", 30 }, j_square = { "chips", 8 },
+	j_hologram = { "xmult", 1.15 }, j_constellation = { "xmult", 1.3 },
 }
+-- Joker kinds that score face cards: they reset Ride the Bus.
+local FACE_KINDS = { face_chips = true, face_mult = true, photo = true, kq_xmult = true }
 
 local RULE_JOKERS = {
 	j_four_fingers = true, j_shortcut = true, j_smeared = true, j_splash = true, j_pareidolia = true,
@@ -1784,7 +1789,16 @@ local function joker_gain(observation, center, edition)
 	for i = 1, #owned do
 		with[i] = owned[i]
 	end
-	table.insert(with, slot, { center = center, edition = edition, offered = true })
+	local offered = true
+	if center == "j_ride_the_bus" then
+		for i = 1, #owned do
+			local o = JOKER_EFFECTS[owned[i].center]
+			if o ~= nil and FACE_KINDS[o[1]] then
+				offered = false
+			end
+		end
+	end
+	table.insert(with, slot, { center = center, edition = edition, offered = offered })
 	local before = panel_total(owned)
 	local after = panel_total(with)
 	if before <= 0 or after <= before then
@@ -1988,7 +2002,8 @@ local function buy_score(observation, action)
 	score = score + edition_value(item.edition)
 	score = score + economy_bonus(spend - cost)
 	if item.kind == "joker" and CONF.est_jokers and CONF.joker_gain_value > 0 then
-		-- Up to +3x the panel estimate; unknown/scaling Jokers keep the flat value.
+		-- Up to +3x the panel estimate; unknown Jokers keep the flat value and
+		-- scaling ones use their SCALING proxy.
 		local gain = joker_gain(observation, item.center, item.edition) * CONF.joker_gain_value
 		if spend - cost < CONF.reserve then
 			-- Dipping under the reserve (or into Credit Card debt) needs a

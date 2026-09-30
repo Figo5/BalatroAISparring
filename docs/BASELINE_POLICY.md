@@ -229,12 +229,20 @@ Joker beats The Duo on this pair-heavy panel. With Gros Michel (+15 mult) owned,
 The Duo's ×2 wins. Unknown Jokers keep the flat kind value, and
 rule-changing Jokers switch this off. Scaling Jokers grow over a run, and their
 current value is not in the observation, so an **offered** one (shop or pack)
-is priced as a conservative mid-life proxy of its public card text (`SCALING`):
-for example Green Joker and Ride the Bus +5 mult, Obelisk ×1.4, Hologram ×1.3,
-Runner +45 chips on straights. The proxies never enter play estimates, and
-owned scaling Jokers still count as no effect there. Madness and Ceremonial
-Dagger destroy Jokers, so they get no proxy. The proxies are not
-ante-dependent yet: early-ante scaling is worth more. An additive Joker (+mult, +chips, hand bonuses, Half,
+is priced as a conservative mid-life proxy of its public card text (`SCALING`).
+Only Jokers that grow from what this policy actually does (plays, discards,
+rerolls, planets) are listed. Examples: Green Joker +4 mult, Ride the Bus +5
+mult, Constellation ×1.3, Hologram ×1.15, Runner +30 chips. Ride the Bus gets
+no proxy when an owned Joker scores face cards, which reset it. Some Jokers
+grow only from actions the policy never takes (skipping blinds or packs,
+selling, avoiding its most-played hand, Lucky cards): Throwback, Red Card,
+Campfire, Obelisk and Lucky Cat. They get no proxy. Neither do Vampire, which
+strips enhancements the estimate values, and Madness and Ceremonial Dagger,
+which destroy Jokers. The proxies never enter play estimates, and owned
+scaling Jokers still count as no effect there. An owned scaling Joker has no
+known effect, so it also turns off estimate-based Joker reordering for that
+row. The proxies are not ante-dependent yet, although early-ante scaling is
+worth more. An additive Joker (+mult, +chips, hand bonuses, Half,
 Abstract) is priced before the **trailing run** of owned ×mult or Polychrome
 Jokers. The adapter's reorder offers only a reversal and adjacent swaps, each
 taken only above a 0.5% panel gain. Passing a ×mult Joker is such a gain,
