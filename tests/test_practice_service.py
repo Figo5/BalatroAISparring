@@ -575,6 +575,53 @@ def test_worker_failure_propagates_to_both_roles():
         assert status["failures"] >= 1
 
 
+def test_policy_no_action_is_counted_apart_from_failures():
+    # NATIVE_TEST_PROGRESS match 10: 33 PvP-wait `policy_no_action` answers were
+    # summarized as errors. They are a legitimate policy outcome.
+    if not _lupa_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        runner = FakeRunner({"ok": False, "code": "policy_no_action"})
+        service = make_service(tmp, worker_runner=runner)
+        session = Session(service)
+        session.handshake(seed="AISP0001")
+        for _ in range(3):
+            sequence = session.send("ai", "decide_begin", _valid_export())["sequence"]
+            response = wait_for_decision(session, sequence)
+            assert response["code"] == "policy_no_action"
+        status = session.send("human", "status", {})
+        assert status["failures"] == 0, status
+        assert status["error"] is None, status
+        described = service.terminal_summary()
+        assert described["errors"] == 0 and described["no_action"] == 3, described
+        decisions_path = Path(tmp) / "logs" / "decisions.jsonl"
+        rows = read_jsonl(decisions_path, lambda row: row.get("reason") == "policy_no_action")
+        assert len(rows) == 3 and all(row["errors"] is None for row in rows), rows
+        end = session.send("human", "end", {"result": "human_win", "errors": 0})
+        assert end["ok"], end
+        session.send("ai", "end", {"result": "human_win"})
+        summary_path = Path(tmp) / "logs" / "summary.jsonl"
+        summaries = read_jsonl(summary_path, lambda row: row.get("result") == "human_win")
+        assert summaries[-1]["errors"] == 0 and summaries[-1]["no_action"] == 3, summaries[-1]
+
+
+def test_real_policy_failures_still_count_with_no_action():
+    if not _lupa_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        runner = FakeRunner({"ok": False, "code": "policy_no_action"})
+        service = make_service(tmp, worker_runner=runner)
+        session = Session(service)
+        session.handshake()
+        sequence = session.send("ai", "decide_begin", _valid_export())["sequence"]
+        wait_for_decision(session, sequence)
+        runner.response = {"ok": False, "code": "policy_bad_source"}
+        sequence = session.send("ai", "decide_begin", _valid_export())["sequence"]
+        wait_for_decision(session, sequence)
+        status = session.send("human", "status", {})
+        assert status["failures"] == 1 and status["error"] == "policy_bad_source", status
+
+
 def test_cancel_decision_terminates_exact_child():
     if not _lupa_available():
         return

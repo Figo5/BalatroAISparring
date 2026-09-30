@@ -199,6 +199,9 @@ CODE_ABORTED = "practice_aborted"
 CODE_ROLE_LOST = "practice_role_lost"
 CODE_NOT_ATTESTED = "practice_not_attested"
 CODE_PRESTART_TIMEOUT = "practice_prestart_timeout"
+# The policy's own "no legal choice" answer (tools/lua/policy_env.lua). A
+# legitimate outcome, counted as ``no_action``, never as a failure.
+CODE_POLICY_NO_ACTION = "policy_no_action"
 CODE_RESULT_CONFLICT = "practice_result_conflict"
 CODE_INTERNAL = "practice_internal_error"
 
@@ -410,6 +413,7 @@ class LocalLogger:
         "decisions",
         "rejected",
         "errors",
+        "no_action",
         "terminal",
         "terminal_phase",
         "human_end_received",
@@ -918,6 +922,7 @@ class _SessionState:
     issued_sequences: deque = field(default_factory=lambda: deque(maxlen=64))
     decisions: int = 0
     failures: int = 0
+    no_action: int = 0
     rejected: int = 0
     # Terminal lifecycle. ``terminal`` is set only by a valid human coordinator
     # END; the AI END is a receipt recorded beside it.
@@ -1089,6 +1094,7 @@ class PracticeService:
                 "decisions": state.decisions,
                 "rejected": state.rejected,
                 "errors": state.failures,
+                "no_action": state.no_action,
                 "summary": dict(state.terminal_summary) if state.terminal_summary else None,
             }
 
@@ -1851,6 +1857,7 @@ class PracticeService:
             "decisions": merged("decisions", state.decisions),
             "rejected": merged("rejected", state.rejected),
             "errors": merged("errors", state.failures),
+            "no_action": state.no_action,
             "terminal": True,
             "terminal_phase": state.terminal_phase,
             "human_end_received": state.human_end is not None,
@@ -2071,7 +2078,10 @@ class PracticeService:
             job.action = action if isinstance(action, dict) else None
             job.latency = latency
             self._state.decisions += 1
-            if not ok:
+            no_action = not ok and code == CODE_POLICY_NO_ACTION
+            if no_action:
+                self._state.no_action += 1
+            elif not ok:
                 self._state.failures += 1
                 self._state.last_error = code
             job.done.set()
@@ -2082,7 +2092,7 @@ class PracticeService:
             action=_action_summary(job.action),
             reason=code,
             latency=round(latency, 6) if isinstance(latency, (int, float)) else None,
-            errors=None if ok else code,
+            errors=None if ok or no_action else code,
         )
 
 

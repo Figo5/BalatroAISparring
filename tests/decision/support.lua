@@ -408,6 +408,7 @@ function Support.loop(rig, opts)
 		transient_codes = opts.transient_codes,
 		get_revision = opts.get_revision,
 		wait_state = opts.wait_state,
+		wait_max_backoff = opts.wait_max_backoff,
 		max_consecutive_errors = opts.max_consecutive_errors,
 		terminal_phase = opts.terminal_phase,
 		sequence_start = opts.sequence_start,

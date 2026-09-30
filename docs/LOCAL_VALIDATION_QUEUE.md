@@ -52,3 +52,26 @@ needs the full re-certification and a companion reinstall, not
 - **Risk if it fails:** cosmetic only (Jokers missing, as before). A leak would
   show up as a Joker send before the end in either log. That would be a fairness
   defect: revert the entry.
+
+## LV-2 PvP opponent wait is a non-error state
+
+- **Commit:** see `git log --grep "PvP waiting as non-error"`.
+- **Change:** `decision_loop.lua` enters `WAITING_FOR_OPPONENT` whenever the
+  trusted `mp_wait_state` probe reports `mp_ready_blind`, `mp_pvp_no_hands` or
+  `mp_pvp_countdown`. In that state it does not ask the policy, counts no errors
+  and polls with a backoff capped at 1 s. `practice_service.py` counts
+  `policy_no_action` as `no_action`, not as a failure.
+- **Local test:** play a normal match. At each Nemesis (PvP) blind, take a
+  deliberately long time (60 s or more) in the shop before readying. Also play a
+  PvP round where the AI runs out of hands before you finish.
+- **Expected:** the AI waits and then plays its PvP round normally once you
+  ready. The AI log shows exactly one `wait_begin`/`wait_end` pair per wait, with
+  `waited_seconds` close to your delay. `decisions.jsonl` has no
+  `policy_no_action` rows during the wait, and `summary.jsonl` shows `errors` 0
+  (or only genuine errors) and a `no_action` field.
+- **Evidence to capture:** the AI runtime log lines with `wait_begin`/`wait_end`,
+  plus `summary.jsonl` and `decisions.jsonl`.
+- **Risk if it fails:** if the AI does not resume after you ready, the probe is
+  stuck. Check for a `ready_blind` that stays true after the blind starts. That
+  would stall the match (no leak). The earlier behaviour was noisy but correct.
+

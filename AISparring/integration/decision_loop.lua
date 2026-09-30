@@ -11,6 +11,14 @@
 --   get_revision : optional post-decision state revision reader (see 2.5)
 --   wait_state   : optional trusted "the runtime is legitimately waiting" probe
 --
+-- Opponent wait contract. When the trusted `wait_state` probe reports a wait
+-- (the AI readied the PvP blind, has no PvP hands left, or the PvP countdown is
+-- running), the loop is in the explicit WAITING_FOR_OPPONENT state: it never
+-- asks the policy, never counts an error or a transient, and polls the trusted
+-- capture with a bounded doubling backoff (so a terminal match end or the
+-- opponent's arrival is still seen promptly). Entering and leaving the state is
+-- logged once each, never per poll.
+--
 -- The loop owns no engine reference, no timer, no randomness and no policy
 -- interpreter. It only transports the sanitized observation export plus an
 -- opaque decision sequence; the private broker token never leaves the loop and
@@ -55,6 +63,7 @@ local CODE = {
 	OUT_OF_ORDER = "loop_out_of_order",
 	RESPONSE_REJECTED = "loop_response_rejected",
 	NO_ACTION = "loop_policy_no_action",
+	WAITING = "loop_waiting_for_opponent",
 	STALE = "loop_stale",
 	DISPATCH_FAILED = "loop_dispatch_failed",
 	MAX_ERRORS = "loop_max_errors",
@@ -106,6 +115,10 @@ local DEFAULT_TRANSIENT_BACKOFF = 0.25
 -- wasted work (the service spawns a worker per request). The cooldown doubles
 -- while the epoch is unchanged, capped here, and resets on observable progress.
 local DEFAULT_NO_ACTION_MAX_BACKOFF = 2.0
+-- WAITING_FOR_OPPONENT poll cadence: starts at the transient backoff, doubles
+-- while the wait persists and is capped here, so the opponent's arrival is
+-- noticed within about a second.
+local DEFAULT_WAIT_MAX_BACKOFF = 1.0
 -- Wall-clock deadline for a latched trusted control that never clears.
 local DEFAULT_CONTROL_LATCH_SECONDS = 30
 
@@ -368,6 +381,13 @@ function DecisionLoop.factory(options)
 	if not is_number(no_action_max_backoff) or no_action_max_backoff <= 0 then
 		return nil, CODE.BAD_OPTIONS
 	end
+	local wait_max_backoff = rawget(options, "wait_max_backoff")
+	if wait_max_backoff == nil then
+		wait_max_backoff = DEFAULT_WAIT_MAX_BACKOFF
+	end
+	if not is_number(wait_max_backoff) or wait_max_backoff <= 0 then
+		return nil, CODE.BAD_OPTIONS
+	end
 
 	local control_latch_seconds = rawget(options, "control_latch_seconds")
 	if control_latch_seconds == nil then
@@ -416,6 +436,12 @@ function DecisionLoop.factory(options)
 	local last_empty_epoch = nil
 	local last_no_action_epoch = nil
 	local no_action_backoff = nil
+	-- WAITING_FOR_OPPONENT state: the trusted wait token, when it began and the
+	-- current poll backoff. nil while not waiting.
+	local waiting = nil
+	local waiting_since = nil
+	local last_now = nil
+	local wait_backoff = nil
 	local stats = {
 		issued = 0,
 		requests = 0,
@@ -429,6 +455,9 @@ function DecisionLoop.factory(options)
 		no_action = 0,
 		transient = 0,
 		transient_waiting = 0,
+		waits = 0,
+		waiting_polls = 0,
+		waiting_seconds = 0,
 		faults = 0,
 		controls = 0,
 		terminal = false,
@@ -465,12 +494,69 @@ function DecisionLoop.factory(options)
 		pcall(broker.cancel)
 	end
 
+	local function log_wait(now, event, state, seconds)
+		if logger == nil then
+			return
+		end
+		pcall(logger.record, {
+			event = event,
+			wait_state = state,
+			result_code = CODE.WAITING,
+			waited_seconds = seconds,
+			tick = now,
+		})
+	end
+
+	-- Leave WAITING_FOR_OPPONENT (the wait cleared, or the match ended/stopped):
+	-- account the waited time and log the exit once.
+	local function end_wait(now)
+		if waiting == nil then
+			return
+		end
+		local seconds = 0
+		if waiting_since ~= nil and is_number(now) and now >= waiting_since then
+			seconds = now - waiting_since
+		end
+		stats.waiting_seconds = stats.waiting_seconds + seconds
+		log_wait(now, "wait_end", waiting, seconds)
+		waiting = nil
+		waiting_since = nil
+		wait_backoff = nil
+	end
+
+	-- Enter or continue WAITING_FOR_OPPONENT. Never an error or a transient;
+	-- the capture is re-polled with a capped doubling backoff.
+	local function hold_wait(now, state)
+		if waiting ~= state then
+			end_wait(now)
+			waiting = state
+			waiting_since = now
+			stats.waits = stats.waits + 1
+			log_wait(now, "wait_begin", state, nil)
+			wait_backoff = transient_backoff
+		else
+			wait_backoff = (wait_backoff or transient_backoff) * 2
+		end
+		if wait_backoff > wait_max_backoff then
+			wait_backoff = wait_max_backoff
+		end
+		if wait_backoff < LIMITS.min_transient_backoff then
+			wait_backoff = LIMITS.min_transient_backoff
+		end
+		stats.waiting_polls = stats.waiting_polls + 1
+		-- A wait is not progress: the consecutive-error streak is left alone.
+		reset_transient()
+		set_cooldown(now, wait_backoff)
+		return "waiting", CODE.WAITING
+	end
+
 	local function finish(reason, code)
 		if stopped then
 			return "stopped", stop_reason
 		end
 		stopped = true
 		stop_reason = reason
+		end_wait(last_now)
 		abandon_pending()
 		pcall(broker.cancel)
 		pcall(function()
@@ -489,6 +575,7 @@ function DecisionLoop.factory(options)
 		stopped = true
 		terminal = true
 		stop_reason = "terminal"
+		end_wait(last_now)
 		stats.terminal = true
 		abandon_pending()
 		pcall(broker.cancel)
@@ -514,16 +601,16 @@ function DecisionLoop.factory(options)
 	-- abort: back off and retry, and treat only an unbroken wall-clock window as
 	-- fatal. The raw streak guard remains as a secondary bound.
 	local function register_transient(now, code)
+		local wait = external_wait()
+		if wait ~= nil then
+			-- The runtime owns this wait (e.g. the PvP opponent): it is the
+			-- explicit WAITING_FOR_OPPONENT state, not a transient, so the loop's
+			-- own transient bound never aborts it and it is never counted as one.
+			stats.transient_waiting = stats.transient_waiting + 1
+			return hold_wait(now, wait)
+		end
 		stats.transient = stats.transient + 1
 		set_cooldown(now, transient_backoff)
-		if external_wait() ~= nil then
-			-- The runtime owns this wait (e.g. the authoritative MP timer); keep
-			-- backing off without spinning, but do not let the loop's own bound
-			-- abort it.
-			transient_started_at = now
-			stats.transient_waiting = stats.transient_waiting + 1
-			return nil, nil
-		end
 		transient_streak = transient_streak + 1
 		if transient_started_at == nil then
 			transient_started_at = now
@@ -758,6 +845,17 @@ function DecisionLoop.factory(options)
 			return finish_terminal()
 		end
 
+		-- WAITING_FOR_OPPONENT: a trusted runtime wait (never a policy or
+		-- observation claim) means there is nothing to decide until the opponent
+		-- arrives. Do not ask the policy; poll the capture again after a bounded
+		-- backoff. The terminal check above still runs on every poll.
+		local wait = external_wait()
+		if wait ~= nil then
+			pcall(broker.cancel)
+			return hold_wait(now, wait)
+		end
+		end_wait(now)
+
 		if candidate_count == 0 then
 			pcall(broker.cancel)
 			reset_transient()
@@ -889,6 +987,7 @@ function DecisionLoop.factory(options)
 			return finish("error", CODE.BAD_CLOCK)
 		end
 		local now = current
+		last_now = now
 
 		if controls ~= nil then
 			local ok_next, name = pcall(controls.next)
@@ -1019,6 +1118,10 @@ function DecisionLoop.factory(options)
 			max_transient_seconds = max_transient_seconds,
 			transient_streak = transient_streak,
 			no_action_backoff = no_action_backoff,
+			waiting = waiting,
+			waiting_since = waiting_since,
+			wait_backoff = wait_backoff,
+			wait_max_backoff = wait_max_backoff,
 			no_action_max_backoff = no_action_max_backoff,
 			control_latch = control_latch,
 			control_latch_seconds = control_latch_seconds,

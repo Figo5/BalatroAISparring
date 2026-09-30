@@ -173,6 +173,7 @@ Injected trusted ports (every side effect):
 | `fatal_codes` | extra broker codes treated as terminal faults (merged over the default `exec_stall_timeout`, `exec_revoked`) |
 | `max_transient_streak` | secondary guard: consecutive transient waits before abort/revoke (default 1200) |
 | `max_transient_seconds` | primary guard: wall-clock seconds of unbroken transient waits before abort/revoke (default 120) |
+| `wait_max_backoff` | cap for the WAITING_FOR_OPPONENT poll backoff (default `1s`) |
 | `no_action_max_backoff` | cap for the `policy_no_action` same-epoch exponential backoff (default `2s`) |
 | `control_latch_seconds` | wall-clock deadline for a latched trusted control that never clears (default 30; 0 disables) |
 | `max_consecutive_errors` | abort/revoke threshold for non-transient errors |
@@ -306,11 +307,50 @@ by `exec_pending` for at most the executor's stall window (10s default) — and 
 `exec_pending` therefore stays transient; only the fault ends the match.
 
 A trusted `wait_state` probe that returns a bounded token marks a **verified
-wait** (for example waiting on an opponent under the authoritative MP
-timer/heartbeat). While it is non-nil the loop still backs off (no busy spin) but
-holds its transient window open and never deadline-aborts the wait
-(`stats().transient_waiting` counts these steps). Unknown stalls remain boundedly
-aborted when no trusted wait is reported.
+wait**. The bootstrap's probe (`RuntimeBootstrap.mp_wait_state`) reports
+`mp_ready_blind` (the AI readied the PvP blind), `mp_pvp_no_hands` (the PvP blind
+is open, the engine is still in the hand loop `SELECTING_HAND`/`HAND_PLAYED`/
+`DRAW_TO_HAND`, and the AI has no hands left) or `mp_pvp_countdown`. The
+hand-loop restriction matters: Multiplayer keeps the blind PvP through round
+evaluation and clears `end_pvp` once the round moves on, so without it the wait
+could hold through cash-out and the shop. It reads only the
+AI runtime's own MP state, never the policy.
+
+While the probe is non-nil the loop is in the explicit **WAITING_FOR_OPPONENT**
+state (`loop_waiting_for_opponent`, status `waiting`):
+
+- It never asks the policy. After a successful capture it cancels the token
+  instead of sending a request. The terminal `MATCH_COMPLETE` check still runs
+  first on every poll.
+- It is not an error, a transient or a `policy_no_action`. It never adds to the
+  error budget (nor resets the consecutive-error streak, because a wait is not
+  progress), and the transient deadline never aborts it. A capture that fails
+  during the wait (for example `HAND_PLAYED` after the last PvP hand) joins the
+  same wait (`stats().transient_waiting` counts those).
+- It polls with a doubling backoff that starts at `transient_backoff` and is
+  capped at `wait_max_backoff` (default 1 s), so the opponent's arrival is seen
+  within about a second.
+- It logs one `wait_begin` record on entry and one `wait_end` record (with
+  `waited_seconds`) on exit or stop. Nothing is logged per poll. `stats()` adds
+  `waits`, `waiting_polls` and `waiting_seconds`, and `describe()` shows the
+  current `waiting` token and `wait_backoff`.
+
+Unknown stalls are still aborted within the bound when no trusted wait is
+reported.
+
+This is a deliberate behaviour change. While readied or waiting, the AI no longer
+considers optional actions (selling, using consumables, reordering Jokers).
+Before, the policy was asked and answered `policy_no_action` in every observed
+case (native match 10). Multiplayer itself disables opening packs while readied.
+A Multiplayer timer action for the waiting player does not exist yet (see the
+PvP timer work).
+
+The practice service also counts a `policy_no_action` answer separately
+(`no_action` in the terminal summary) and no longer counts it as a failure or
+`errors` (native match 10 reported 33 such "errors" at the PvP blind). The
+policy environment also answers `policy_no_action` when a policy returns nothing
+even though candidates existed (`tools/lua/policy_env.lua`). Such a policy defect
+now appears under `no_action`, not `errors`.
 
 ### 2.6 Transport cancel semantics
 

@@ -703,4 +703,229 @@ return function(ctx)
 		eq(lr.loop.update(), "idle")
 		eq(lr.loop.describe().no_action_backoff, 0.25, "starts from the base delay again")
 	end)
+
+	-- WAITING_FOR_OPPONENT (NATIVE_TEST_PROGRESS match 10: 33 `policy_no_action`
+	-- polls at the PvP blind were counted as errors by the service).
+	local function wait_rig(opts)
+		local r = support.rig(repo, {})
+		local state = { value = "mp_ready_blind" }
+		local merged = {
+			transient_backoff = 0.25,
+			max_transient_seconds = 1,
+			max_consecutive_errors = 1,
+			wait_state = function()
+				return state.value
+			end,
+		}
+		for key, value in pairs(opts or {}) do
+			merged[key] = value
+		end
+		local lr = support.loop(r, merged)
+		return r, lr, state
+	end
+
+	local function wait_records(logger, event)
+		local out = {}
+		for _, record in ipairs(logger.records) do
+			if record.event == event then
+				out[#out + 1] = record
+			end
+		end
+		return out
+	end
+
+	test("waiting_for_opponent_never_asks_the_policy_or_counts_an_error", function()
+		local r, lr = wait_rig()
+		for _ = 1, 50 do
+			local status, code = lr.loop.update()
+			is_true(status == "waiting" or status == "idle", tostring(status))
+			if status == "waiting" then
+				eq(code, "loop_waiting_for_opponent")
+			end
+			lr.clock.advance(0.3)
+		end
+		eq(lr.transport.sent, 0, "no policy request while waiting")
+		local stats = lr.loop.stats()
+		eq(stats.errors, 0)
+		eq(stats.transient, 0)
+		eq(stats.no_action, 0)
+		eq(stats.requests, 0)
+		eq(stats.waits, 1)
+		is_true(stats.waiting_polls > 1)
+		eq(lr.loop.is_stopped(), false, "a long opponent wait is never deadline-aborted")
+		eq(r.broker.has_pending(), false, "the captured token is released")
+		eq(#wait_records(lr.logger, "wait_begin"), 1, "the entry is logged once, not per poll")
+		eq(wait_records(lr.logger, "wait_begin")[1].wait_state, "mp_ready_blind")
+		eq(#wait_records(lr.logger, "wait_end"), 0)
+	end)
+
+	test("waiting_for_opponent_backoff_doubles_and_is_capped", function()
+		local _, lr = wait_rig({ wait_max_backoff = 1.0 })
+		local seen = {}
+		-- Polls land at t = 0, 0.25, 0.75, 1.75: 35 steps of 0.05 s reach 1.70.
+		for _ = 1, 35 do
+			local status = lr.loop.update()
+			if status == "waiting" then
+				seen[#seen + 1] = lr.loop.describe().wait_backoff
+			end
+			lr.clock.advance(0.05)
+		end
+		eq(seen[1], 0.25)
+		eq(seen[2], 0.5)
+		eq(seen[3], 1.0)
+		eq(#seen, 3, "the cooldown suppresses polls in between")
+		for _ = 1, 100 do
+			if lr.loop.update() == "waiting" then
+				eq(lr.loop.describe().wait_backoff, 1.0, "capped")
+			end
+			lr.clock.advance(0.05)
+		end
+	end)
+
+	test("waiting_for_opponent_resumes_promptly_when_the_opponent_arrives", function()
+		local _, lr, state = wait_rig()
+		for _ = 1, 20 do
+			lr.loop.update()
+			lr.clock.advance(0.25)
+		end
+		state.value = nil
+		local issued = false
+		for _ = 1, 5 do
+			if lr.loop.update() == "issued" then
+				issued = true
+				break
+			end
+			lr.clock.advance(0.25)
+		end
+		is_true(issued, "the policy is asked within the capped backoff")
+		eq(lr.transport.sent, 1)
+		local ends = wait_records(lr.logger, "wait_end")
+		eq(#ends, 1)
+		is_true(ends[1].waited_seconds > 4, tostring(ends[1].waited_seconds))
+		is_true(lr.loop.stats().waiting_seconds > 4)
+		eq(lr.loop.describe().waiting, nil)
+		eq(lr.loop.describe().wait_backoff, nil, "the next wait starts from the base delay")
+	end)
+
+	test("waiting_for_opponent_transient_capture_is_not_a_transient", function()
+		-- A PvP no-hands wait keeps G.STATE at HAND_PLAYED, so capture fails.
+		local r = support.rig(repo, { capture_fail_times = 1000 })
+		local lr = support.loop(r, {
+			transient_backoff = 0.25,
+			max_transient_seconds = 1,
+			wait_state = function()
+				return "mp_pvp_no_hands"
+			end,
+		})
+		local status, code = lr.loop.update()
+		eq(status, "waiting")
+		eq(code, "loop_waiting_for_opponent")
+		for _ = 1, 40 do
+			lr.loop.update()
+			lr.clock.advance(0.25)
+		end
+		eq(lr.loop.is_stopped(), false)
+		eq(lr.loop.stats().transient, 0)
+		eq(lr.loop.stats().errors, 0)
+		eq(lr.loop.stats().waits, 1)
+	end)
+
+	test("waiting_for_opponent_changing_wait_kind_logs_a_new_wait", function()
+		local _, lr, state = wait_rig()
+		lr.loop.update()
+		lr.clock.advance(2)
+		state.value = "mp_pvp_countdown"
+		lr.loop.update()
+		eq(lr.loop.stats().waits, 2)
+		eq(#wait_records(lr.logger, "wait_begin"), 2)
+		eq(#wait_records(lr.logger, "wait_end"), 1)
+	end)
+
+	test("terminal_match_end_takes_precedence_over_a_wait", function()
+		local r = support.rig(repo, { frame = support.terminal_frame() })
+		local lr = support.loop(r, {
+			wait_state = function()
+				return "mp_ready_blind"
+			end,
+		})
+		local status, code = lr.loop.update()
+		eq(status, "terminal")
+		eq(code, "loop_terminal")
+	end)
+
+	test("stopping_while_waiting_closes_the_wait_record", function()
+		local _, lr = wait_rig()
+		lr.loop.update()
+		lr.clock.advance(3)
+		lr.loop.update()
+		lr.loop.stop("closed")
+		local ends = wait_records(lr.logger, "wait_end")
+		eq(#ends, 1)
+		eq(ends[1].waited_seconds, 3)
+	end)
+
+	test("wait_max_backoff_option_is_validated", function()
+		local r = support.rig(repo, {})
+		for _, bad in ipairs({ 0, -1, "1" }) do
+			local lr = support.loop(r, { wait_max_backoff = bad })
+			eq(lr.loop, nil)
+			eq(lr.code, "loop_bad_options")
+		end
+	end)
+
+	test("waiting_does_not_reset_the_consecutive_error_streak", function()
+		-- Claude review L1: capture errors alternating with successful waiting
+		-- captures must still reach the error budget.
+		local calls = 0
+		local r = support.rig(repo, {
+			capture_impl = function(default_capture)
+				return function()
+					calls = calls + 1
+					if calls % 2 == 1 then
+						return nil, "exec_unexpected_fault"
+					end
+					return default_capture()
+				end
+			end,
+		})
+		local lr = support.loop(r, {
+			max_consecutive_errors = 2,
+			-- Make the capture failure a counted error rather than a transient.
+			transient_codes = { broker_capture_failed = false },
+			wait_state = function()
+				return "mp_ready_blind"
+			end,
+		})
+		local stopped = false
+		for _ = 1, 20 do
+			local status = lr.loop.update()
+			if status == "stopped" then
+				stopped = true
+				break
+			end
+			lr.clock.advance(1)
+		end
+		is_true(stopped, "two errors separated by a wait still stop the loop")
+		eq(lr.loop.stats().errors, 2)
+	end)
+
+	test("a_decision_in_flight_when_the_wait_begins_still_completes", function()
+		local r = support.rig(repo, {})
+		local state = { value = nil }
+		local lr = support.loop(r, {
+			wait_state = function()
+				return state.value
+			end,
+		})
+		eq(lr.loop.update(), "issued")
+		state.value = "mp_ready_blind"
+		lr.transport.push({ sequence = 1, ok = true, action = play_action(r), reason = "play_best" })
+		eq(lr.loop.update(), "submitted", "the response to an earlier request is not dropped")
+		eq(lr.loop.stats().waits, 0)
+		lr.clock.advance(1)
+		local status, code = lr.loop.update()
+		eq(status, "waiting")
+		eq(code, "loop_waiting_for_opponent")
+	end)
 end
+

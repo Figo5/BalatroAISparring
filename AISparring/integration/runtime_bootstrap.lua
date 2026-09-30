@@ -294,6 +294,25 @@ local function current_blind_is_pvp(G)
 	return key == "bl_mp_nemesis"
 end
 
+-- The engine states of the PvP hand loop (select, played, redraw). Resolved by
+-- name from the real `G.STATES`; an unknown state is never a wait.
+local PVP_HAND_LOOP_STATES = { "SELECTING_HAND", "HAND_PLAYED", "DRAW_TO_HAND" }
+
+local function in_pvp_hand_loop(G)
+	local states = rget(G, "STATES")
+	local state_value = rget(G, "STATE")
+	if not is_int(state_value) then
+		return false
+	end
+	for _, name in ipairs(PVP_HAND_LOOP_STATES) do
+		local value = rget(states, name)
+		if is_int(value) and value == state_value then
+			return true
+		end
+	end
+	return false
+end
+
 function RuntimeBootstrap.mp_wait_state(mp, G)
 	local game = rget(mp, "GAME")
 	if type(game) ~= "table" then
@@ -311,7 +330,11 @@ function RuntimeBootstrap.mp_wait_state(mp, G)
 	-- no hands left, but the server has not yet signalled `end_pvp`. This is the
 	-- ordinary wait for the human's PvP turn and must not depend on
 	-- `pvp_reached` (false during the PvP round).
-	if current_blind_is_pvp(G) then
+	-- Only while the engine is still inside the PvP hand loop: Multiplayer keeps
+	-- the blind PvP through round evaluation and clears `end_pvp` once the round
+	-- moves on, so without the state check the wait could outlive the PvP round
+	-- (cash-out, shop) and silence every later decision.
+	if current_blind_is_pvp(G) and in_pvp_hand_loop(G) then
 		local hands_left = rget(rget(rget(G, "GAME"), "current_round"), "hands_left")
 		if is_int(hands_left) and hands_left <= 0 then
 			return RuntimeBootstrap.WAIT_STATES.PVP_NO_HANDS

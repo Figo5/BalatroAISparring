@@ -1076,6 +1076,10 @@ return function(ctx)
 		ctx.eq(instance.status().last_error, "boot_guard_failed")
 	end)
 
+	local HAND_STATES = {
+		SELECTING_HAND = 1, HAND_PLAYED = 2, DRAW_TO_HAND = 3, SHOP = 5, ROUND_EVAL = 8, BLIND_SELECT = 7,
+	}
+
 	test("mp_wait_state_only_trusts_grounded_mp_waits", function()
 		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
 		ctx.eq(RuntimeBootstrap.mp_wait_state(nil, nil), nil)
@@ -1092,7 +1096,11 @@ return function(ctx)
 		ctx.eq(
 			RuntimeBootstrap.mp_wait_state(
 				{ GAME = { pvp_reached = false } },
-				{ GAME = { current_round = { hands_left = 0 }, blind = { pvp = true } } }
+				{
+					STATES = HAND_STATES,
+					STATE = HAND_STATES.SELECTING_HAND,
+					GAME = { current_round = { hands_left = 0 }, blind = { pvp = true } },
+				}
 			),
 			"mp_pvp_no_hands"
 		)
@@ -1100,6 +1108,8 @@ return function(ctx)
 			RuntimeBootstrap.mp_wait_state(
 				{ GAME = { pvp_reached = false } },
 				{
+					STATES = HAND_STATES,
+					STATE = HAND_STATES.HAND_PLAYED,
 					GAME = {
 						current_round = { hands_left = -1 },
 						blind = { config = { blind = { key = "bl_mp_nemesis" } } },
@@ -1125,6 +1135,37 @@ return function(ctx)
 			RuntimeBootstrap.mp_wait_state(
 				{ GAME = { pvp_reached = true } },
 				{ GAME = { current_round = { hands_left = 0 }, blind = { config = { blind = { key = "bl_small" } } } } }
+			),
+			nil
+		)
+	end)
+
+	test("mp_pvp_no_hands_wait_ends_with_the_pvp_hand_loop", function()
+		-- Claude review M1: after PvP, Multiplayer keeps the blind PvP through
+		-- round evaluation and clears `end_pvp`; the wait must not hold there or in
+		-- the shop, or the AI would never cash out or shop.
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local function probe(state_name, states)
+			return RuntimeBootstrap.mp_wait_state(
+				{ GAME = { end_pvp = false } },
+				{
+					STATES = states or HAND_STATES,
+					STATE = (states or HAND_STATES)[state_name],
+					GAME = { current_round = { hands_left = 0 }, blind = { pvp = true } },
+				}
+			)
+		end
+		for _, name in ipairs({ "SELECTING_HAND", "HAND_PLAYED", "DRAW_TO_HAND" }) do
+			ctx.eq(probe(name), "mp_pvp_no_hands", name)
+		end
+		for _, name in ipairs({ "ROUND_EVAL", "SHOP", "BLIND_SELECT" }) do
+			ctx.eq(probe(name), nil, name)
+		end
+		-- No readable engine state: never a wait (the policy is asked instead).
+		ctx.eq(
+			RuntimeBootstrap.mp_wait_state(
+				{ GAME = {} },
+				{ GAME = { current_round = { hands_left = 0 }, blind = { pvp = true } } }
 			),
 			nil
 		)
