@@ -35,6 +35,11 @@ Constraints on all of it:
   - add hand levels and more boss effects to the simulator;
   - chain blinds with a simple shop (money, interest, Joker buys) into a
     run-level metric;
+  - Expert discard thresholds are **not** the lever. On 720 paired blinds
+    (seed 7, `benchmark_blinds.py --policy ... --paired ...`):
+    - `discard_need_pct` 100 or 125: +0.1% (t 0.6) and −1.0% (t −2.3);
+    - `discard_gain_pct` 115 or 150: −0.7% (t −1.9) and +0.4% (t 1.3);
+    - at most 9 of 720 blinds changed, so all four were left unchanged;
   - give Major League and Expert a real edge: after the economy retune
     (held-out ≈ +0.33 / +0.51 blinds per run) they match Competitive in run metrics, so
     their play-side difference is still unproven.

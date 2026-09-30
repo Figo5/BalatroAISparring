@@ -60,7 +60,7 @@ BOSSES = {
 BOSS_KEYS = sorted(BOSSES)
 
 DECIDE = r'''
-return function(repo)
+return function(repo, policy_path)
 	local support = dofile(repo .. "/tests/engine/support.lua")
 	local bundle = support.bundle(repo)
 	local function read_file(path)
@@ -74,7 +74,7 @@ return function(repo)
 		read_file(repo .. "/AISparring/ai/codec.lua"),
 		read_file(repo .. "/AISparring/ai/observation.lua"),
 		read_file(repo .. "/AISparring/ai/actions.lua")) == true)
-	local baseline = dofile(repo .. "/AISparring/ai/baseline_policy.lua")
+	local baseline = dofile(policy_path or (repo .. "/AISparring/ai/baseline_policy.lua"))
 	local sources = {}
 	return function(state, difficulty)
 		sources[difficulty] = sources[difficulty] or assert(baseline.source(difficulty))
@@ -197,14 +197,35 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--runtime", default="lupa.luajit21")
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--difficulty", action="append", choices=DIFFICULTIES, help="limit to these difficulties (repeatable)")
+    parser.add_argument("--policy", type=Path, help="policy file to evaluate instead of the repository one")
+    parser.add_argument("--paired", type=Path, metavar="BASE_POLICY",
+                        help="compare a baseline_policy.lua file against the current one on the same blinds")
     args = parser.parse_args(argv)
     LUA = importlib.import_module(args.runtime).LuaRuntime(unpack_returned_tuples=True)
-    decide = LUA.execute(DECIDE)(str(REPO))
+    decide = LUA.execute(DECIDE)(str(REPO), str(args.policy.resolve()) if args.policy else None)
     rng = random.Random(args.seed)
     blinds = [make_blind(rng, i) for i in range(args.blinds)]
+    if args.paired:
+        base = LUA.execute(DECIDE)(str(REPO), str(args.paired.resolve()))
+        out = {"blinds": len(blinds), "seed": args.seed, "base": str(args.paired), "difficulties": {}}
+        for difficulty in args.difficulty or DIFFICULTIES:
+            a = [simulate(base, b, difficulty) for b in blinds]
+            c = [simulate(decide, b, difficulty) for b in blinds]
+            diff = [int(y["cleared"]) - int(x["cleared"]) for x, y in zip(a, c)]
+            mean = statistics.mean(diff)
+            se = statistics.stdev(diff) / (len(diff) ** 0.5)
+            out["difficulties"][difficulty] = {
+                "base_clear": round(statistics.mean(int(x["cleared"]) for x in a), 4),
+                "new_clear": round(statistics.mean(int(y["cleared"]) for y in c), 4),
+                "diff": round(mean, 4), "se": round(se, 4), "t": round(mean / se, 2) if se else None,
+                "changed_blinds": sum(1 for d in diff if d),
+            }
+        print(json.dumps(out, indent=2, sort_keys=True))
+        return 0
     started = time.perf_counter()
     report = {"blinds": len(blinds), "seed": args.seed, "runtime": args.runtime, "difficulties": {}}
-    for difficulty in DIFFICULTIES:
+    for difficulty in args.difficulty or DIFFICULTIES:
         runs = [simulate(decide, blind, difficulty) for blind in blinds]
         by_ante = {}
         by_kind = {}

@@ -124,6 +124,7 @@ Glass cards never break.
 
 ```
 python tests/benchmark_blinds.py --blinds 360 --json docs/benchmarks/blinds_report.json
+python tests/benchmark_blinds.py --blinds 720 --policy candidate.lua --paired base.lua --difficulty expert   # A/B
 ```
 
 360 blinds (seed 7, LuaJIT), from `blinds_report.json`. Blind counts are in
