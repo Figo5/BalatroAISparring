@@ -953,13 +953,17 @@ def test_native_query_handle_reports_exit_while_held_open():
 
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     try:
-        create_time = launch_practice.read_owned_create_time(child)
-        assert create_time is not None
+        # read_owned_create_time expects the launcher's owned wrapper
+        # (``.handle`` is the Popen), so read from the Popen handle directly.
+        create_time = launch_practice._create_time_from_handle(launch_practice._process_handle_value(child))
+        assert create_time is not None, "create time unreadable from the child's own handle"
         child.wait(timeout=30)
         with tempfile.TemporaryDirectory() as tmp:
             config = make_config(tmp)
             identity = practice_host.read_live_identity(child.pid)
-            assert identity is not None and identity["exited"] is True
+            assert identity is not None, "exited-but-held process could not be opened"
+            assert identity["exited"] is True, identity
+            assert abs(float(identity["create_time"]) - create_time) <= launch_practice.START_TIME_TOLERANCE, identity
             verdict = practice_host.wait_for_live_exit(
                 config,
                 child.pid,
@@ -970,7 +974,7 @@ def test_native_query_handle_reports_exit_while_held_open():
                 clock=FakeClock(step=0.1),
                 sleeper=lambda _seconds: None,
             )
-            assert verdict["ok"] is True and verdict["code"] == practice_host.CODE_LIVE_EXITED
+            assert verdict["ok"] is True and verdict["code"] == practice_host.CODE_LIVE_EXITED, verdict
     finally:
         # Popen keeps its own process handle open until the object is dropped,
         # which is exactly the "exited but still openable" state under test.
