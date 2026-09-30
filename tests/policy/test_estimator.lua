@@ -386,18 +386,18 @@ return function(ctx)
 			frame.self.jokers = { Support.joker("j_joker"), Support.joker("j_joker"), Support.joker("j_joker") }
 			frame.booster.kind = "spectral"
 			frame.booster.cards = {
-				{ kind = "consumable", center = "c_hex", face_down = false },
-				{ kind = "consumable", center = "c_ectoplasm", face_down = false },
+				{ kind = "card", center = "c_hex", face_down = false },
+				{ kind = "card", center = "c_ectoplasm", face_down = false },
 			}
 			frame.certificates.items = {
-				{ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:1" }, capacity_ok = true },
-				{ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:2" }, capacity_ok = true },
+				{ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:1" } },
+				{ type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:2" } },
 				{ type = "SKIP_BOOSTER", certified = true },
 			}
 			ctx.eq(Support.run(env, difficulty, frame).action.type, "SKIP_BOOSTER", difficulty)
 			-- ...but a harmless card in the same pack is still taken.
-			frame.booster.cards[3] = { kind = "consumable", center = "c_sigil", face_down = false }
-			table.insert(frame.certificates.items, 3, { type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:3" }, capacity_ok = true })
+			frame.booster.cards[3] = { kind = "card", center = "c_sigil", face_down = false }
+			table.insert(frame.certificates.items, 3, { type = "SELECT_BOOSTER_ITEM", certified = true, card_refs = { "booster:3" } })
 			local pick = Support.run(env, difficulty, frame)
 			ctx.eq(pick.action.type, "SELECT_BOOSTER_ITEM", difficulty)
 			ctx.truthy(Support.same_refs(pick.action.card_refs, { "booster:3" }), difficulty .. " picks sigil")

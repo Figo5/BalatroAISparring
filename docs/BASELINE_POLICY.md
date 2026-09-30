@@ -246,7 +246,10 @@ The same rule applies wherever the card could hurt or waste a slot:
 
 - a refused card is never **bought** from the shop;
 - it is never **picked from a pack**, because Arcana and Spectral picks are used
-  at once. If every card in the pack is refused, the pack is skipped;
+  at once. If every card in the pack is refused, the pack is skipped. The
+  adapter builds every pack card as a playing-card record (`kind = "card"`), so
+  the policy classifies it by its public center: `j_*` is a Joker, and any other
+  `c_*` except `c_base` is a consumable (`pack_card_kind`);
 - a refused card already **held** is sold in the shop
   (`leave_shop + sell_harmful`, 30), which frees the slot for planets and
   tarots. Cards that pass the rule are kept.

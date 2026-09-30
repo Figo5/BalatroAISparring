@@ -1680,6 +1680,27 @@ local function harmful_use(observation, center)
 	return false
 end
 
+-- The adapter builds every pack card as a playing-card record (kind "card"),
+-- so a pack card's real kind comes from its public center key: "j_*" is a
+-- Joker, any other "c_*" but the plain "c_base" is a Tarot/Planet/Spectral.
+local function pack_card_kind(card)
+	if card.redacted == true then
+		return nil
+	end
+	local center = card.center
+	if type(center) ~= "string" then
+		return card.kind
+	end
+	local prefix = string.sub(center, 1, 2)
+	if prefix == "j_" then
+		return "joker"
+	end
+	if prefix == "c_" and center ~= "c_base" then
+		return "consumable"
+	end
+	return "card"
+end
+
 local function kind_value(kind)
 	if kind == "joker" then
 		return CONF.item_joker
@@ -1822,16 +1843,17 @@ local function booster_select_score(observation, action)
 	if card == nil then
 		return nil
 	end
-	if card.redacted ~= true and card.kind == "consumable" and harmful_use(observation, card.center) then
+	local kind = pack_card_kind(card)
+	if kind == "consumable" and harmful_use(observation, card.center) then
 		return nil
 	end
 	local score = CONF.booster_good
 	if card.redacted ~= true then
-		if card.kind == "joker" then
+		if kind == "joker" then
 			score = score + CONF.booster_kind_joker
-		elseif card.kind == "consumable" then
+		elseif kind == "consumable" then
 			score = score + CONF.booster_kind_consumable
-		elseif card.kind == "card" then
+		elseif kind == "card" then
 			score = score + CONF.booster_kind_card
 		end
 	end
@@ -2098,20 +2120,6 @@ local function recognized_joker(center)
 	return ADD_MULT[center] == true or X_MULT[center] == true or PINNED[center] == true
 end
 
--- SHOP-only capacity sale. The baseline frees a joker slot only when:
---   * the phase is SHOP and the visible joker board is full;
---   * the sold candidate is a visible, non-debuffed, *un-editioned* owned copy
---     of a recognized vanilla joker center;
---   * the same visible center is on offer as a joker with a recognized
---     non-negative edition (a strict, source-grounded upgrade of the same base);
---   * that offered copy is already affordable from current spendable cash while
---     preserving the difficulty reserve (the observation exposes no sale
---     proceeds, so a sale is never assumed to fund the purchase).
--- Every unclear case (unknown/face-down/different center, debuffed card, an
--- already-editioned owned copy, a negative or unrecognized offered edition,
--- unaffordable price, non-full board) yields no score, so a sell is never a
--- fallback and the board is never dumped. Selling one copy drops the board below
--- full, so no further sale can score in the following frame.
 local function sell_consumable_score(observation, action)
 	-- Only a held card the safety floor would never use is worth its slot back.
 	if observation.phase ~= "SHOP" or type(observation.self) ~= "table" then
@@ -2127,6 +2135,20 @@ local function sell_consumable_score(observation, action)
 	return CONF.leave_shop + CONF.sell_harmful
 end
 
+-- SHOP-only capacity sale. The baseline frees a joker slot only when:
+--   * the phase is SHOP and the visible joker board is full;
+--   * the sold candidate is a visible, non-debuffed, *un-editioned* owned copy
+--     of a recognized vanilla joker center;
+--   * the same visible center is on offer as a joker with a recognized
+--     non-negative edition (a strict, source-grounded upgrade of the same base);
+--   * that offered copy is already affordable from current spendable cash while
+--     preserving the difficulty reserve (the observation exposes no sale
+--     proceeds, so a sale is never assumed to fund the purchase).
+-- Every unclear case (unknown/face-down/different center, debuffed card, an
+-- already-editioned owned copy, a negative or unrecognized offered edition,
+-- unaffordable price, non-full board) yields no score, so a sell is never a
+-- fallback and the board is never dumped. Selling one copy drops the board below
+-- full, so no further sale can score in the following frame.
 local function sell_score(observation, action)
 	if action.type == "SELL_CONSUMABLE" then
 		return sell_consumable_score(observation, action)

@@ -244,8 +244,10 @@ needs the full re-certification and a companion reinstall, not
     stall, because `SKIP_BOOSTER` and `LEAVE_SHOP` are always legal.
   - If the game rejects `SELL_CONSUMABLE`, the result shows as a rejected
     decision and the loop continues.
-  - Real Balatro lets you pick an Arcana or Spectral card with full consumable
-    slots, because it is used at once. The action generator
-    (`actions.lua` `capacity_ok`) still requires a free slot, which is
-    conservative. Check whether that blocks picks in a live pack.
+  - Pack cards reach the policy as playing-card records, and the policy
+    classifies them by center key (`j_*` / `c_*`).
+    `tests/engine/test_policy_packs.lua` pins this against the adapter
+    fixture. If a live pack card's center key differs (a modded pack, for
+    example), the floor does not apply to it: check the `SELECT_BOOSTER_ITEM`
+    refs against the pack shown on screen.
 
