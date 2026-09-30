@@ -21,7 +21,8 @@ Constraints on all of it:
 ## Economy and long-term scaling (in progress)
 
 - **Done:** offered scaling Jokers use mid-life proxies (`SCALING`, §4.2).
-- **Next:** make the proxies depend on the ante (more value early); use the
+- **Done:** proxies depend on the ante (×1.25 early, ×0.75 from ante 5).
+- **Next:** use the
   displayed current value of owned scaling Jokers if the adapter can export
   it as UI-visible card text (needs a boundary review); export owned
   vouchers (Seed Money / Money Tree interest cap).

@@ -48,6 +48,22 @@ return function(ctx)
 		end
 	end)
 
+	test("scaling_proxies_are_worth_more_early", function()
+		-- Green Joker (+3 mult proxy) against a plain +4 Joker: at ante 1 the
+		-- proxy is x1.25 (3.75), still below; Ride the Bus (+5) wins early and
+		-- loses late (x0.75 = 3.75 < 4).
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			local early = shop({ "j_joker", "j_ride_the_bus" })
+			early.self.jokers = {}
+			early.match.ante = 1
+			ctx.eq(Support.run(env, difficulty, early).action.item_ref, "shop:2", difficulty .. " early")
+			local late = shop({ "j_joker", "j_ride_the_bus" })
+			late.self.jokers = {}
+			late.match.ante = 6
+			ctx.eq(Support.run(env, difficulty, late).action.item_ref, "shop:1", difficulty .. " late")
+		end
+	end)
+
 	test("strong_modelled_joker_still_beats_a_scaling_proxy", function()
 		-- Cavendish (x3) outranks Hologram's x1.3 mid-life proxy.
 		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do

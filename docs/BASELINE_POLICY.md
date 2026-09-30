@@ -231,7 +231,7 @@ rule-changing Jokers switch this off. Scaling Jokers grow over a run, and their
 current value is not in the observation, so an **offered** one (shop or pack)
 is priced as a conservative mid-life proxy of its public card text (`SCALING`).
 Only Jokers that grow from what this policy actually does (plays, discards,
-rerolls, planets) are listed. Examples: Green Joker +4 mult, Ride the Bus +5
+rerolls, planets) are listed. Examples: Green Joker +3 mult, Ride the Bus +5
 mult, Constellation ×1.3, Hologram ×1.15, Runner +30 chips. Ride the Bus gets
 no proxy when an owned Joker scores face cards, which reset it. Some Jokers
 grow only from actions the policy never takes (skipping blinds or packs,
@@ -241,8 +241,10 @@ strips enhancements the estimate values, and Madness and Ceremonial Dagger,
 which destroy Jokers. The proxies never enter play estimates, and owned
 scaling Jokers still count as no effect there. An owned scaling Joker has no
 known effect, so it also turns off estimate-based Joker reordering for that
-row. The proxies are not ante-dependent yet, although early-ante scaling is
-worth more. An additive Joker (+mult, +chips, hand bonuses, Half,
+row. Proxies depend on the public ante, because a Joker bought early has more
+rounds to grow: the growth is ×1.25 at antes 1–2, ×1 at 3–4 and ×0.75 from
+ante 5 (for ×mult proxies only the part above ×1 is scaled). Flash is +2
+(it grows only in rich runs that reroll). An additive Joker (+mult, +chips, hand bonuses, Half,
 Abstract) is priced before the **trailing run** of owned ×mult or Polychrome
 Jokers. The adapter's reorder offers only a reversal and adjacent swaps, each
 taken only above a 0.5% panel gain. Passing a ×mult Joker is such a gain,

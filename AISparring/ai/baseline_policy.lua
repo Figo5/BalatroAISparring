@@ -591,8 +591,8 @@ local MULTIPLICATIVE = { xmult = true, hand_xmult = true }
 -- estimate values. The built-up bonus of Spare Trousers and Runner applies to
 -- every hand.
 local SCALING = {
-	j_green_joker = { "mult", 4 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
-	j_flash = { "mult", 4 }, j_spare_trousers = { "mult", 4 }, j_runner = { "chips", 30 },
+	j_green_joker = { "mult", 3 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
+	j_flash = { "mult", 2 }, j_spare_trousers = { "mult", 4 }, j_runner = { "chips", 30 },
 	j_wee = { "chips", 24 }, j_castle = { "chips", 30 }, j_square = { "chips", 8 },
 	j_hologram = { "xmult", 1.15 }, j_constellation = { "xmult", 1.3 },
 }
@@ -783,7 +783,7 @@ local function estimate_score(played, held, jokers)
 				joker_count = joker_count + 1
 			end
 			if type(j) == "table" and j.debuff ~= true then
-				local e = JOKER_EFFECTS[j.center] or (j.offered and SCALING[j.center]) or nil
+				local e = JOKER_EFFECTS[j.center] or (j.offered and j.proxy) or nil
 				if e ~= nil then
 					effects[#effects + 1] = { e = e, edition = j.edition }
 				else
@@ -1798,7 +1798,20 @@ local function joker_gain(observation, center, edition)
 			end
 		end
 	end
-	table.insert(with, slot, { center = center, edition = edition, offered = offered })
+	local proxy = nil
+	if offered and SCALING[center] ~= nil then
+		-- More rounds left to grow early: x1.25 at antes 1-2, x1 at 3-4,
+		-- x0.75 from ante 5 (only the part above x1 for x-mult).
+		local ante = type(observation.match) == "table" and observation.match.ante or nil
+		local f = 1
+		if type(ante) == "number" then
+			f = ante <= 2 and 1.25 or (ante <= 4 and 1 or 0.75)
+		end
+		local p = SCALING[center]
+		local v = p[1] == "xmult" and 1 + (p[2] - 1) * f or p[2] * f
+		proxy = { p[1], v, p[3] }
+	end
+	table.insert(with, slot, { center = center, edition = edition, offered = offered, proxy = proxy })
 	local before = panel_total(owned)
 	local after = panel_total(with)
 	if before <= 0 or after <= before then
