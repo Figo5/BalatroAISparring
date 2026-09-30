@@ -411,9 +411,12 @@ return function(ctx)
 			sell.match.consumable_slots = 2
 			local want = difficulty == "rookie" and "SELL_CONSUMABLE" or "LEAVE_SHOP"
 			ctx.eq(Support.run(env, difficulty, sell).action.type, want, difficulty .. " death, free slot")
-			-- With the slots full it is sold, so it cannot block Planets.
+			-- Full slots alone do not sell it: the shop is empty, so there is
+			-- nothing for the freed slot (docs/CLAUDE_BATCH3_REVIEW.md M2).
+			-- Rookie, which can never use it, still sells it.
 			sell.match.consumable_slots = 1
-			ctx.eq(Support.run(env, difficulty, sell).action.type, "SELL_CONSUMABLE", difficulty .. " death, full slots")
+			local full = difficulty == "rookie" and "SELL_CONSUMABLE" or "LEAVE_SHOP"
+			ctx.eq(Support.run(env, difficulty, sell).action.type, full, difficulty .. " death, full slots")
 		end
 	end)
 

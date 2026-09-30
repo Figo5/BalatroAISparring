@@ -503,6 +503,14 @@ local function play_score(observation, action)
 	if cards == nil or #cards == 0 then
 		return nil
 	end
+	if #cards < MIN_CARDS then
+		-- The Psychic's five-card minimum: a short play scores nothing in game,
+		-- so it must never be chosen -- not even when it is the only play offered
+		-- (docs/CLAUDE_BATCH3_REVIEW.md M1). Returning nil removes it from the
+		-- ranking entirely, so nil (no action) beats an undersized play, and the
+		-- numeric estimate and the category fallback are both skipped.
+		return nil
+	end
 	if CONF.estimate_plays and PLAY ~= nil then
 		local value = PLAY.est[action.id]
 		if value ~= nil then
@@ -1484,12 +1492,6 @@ local function analyse_plays(observation, actions, count)
 	if plays * #s.hand * ((type(jokers) == "table" and #jokers or 0) + 2) > PLAY_WORK then
 		return info
 	end
-	-- Boss awareness (public blind key): The Psychic must play 5 cards.
-	local psychic = CONF.boss_aware and type(observation.match) == "table" and observation.match.blind == "bl_psychic"
-		and observation.match.blind_disabled ~= true
-	if psychic then
-		MIN_CARDS = 5
-	end
 	local best = nil
 	local best_name = nil
 	for i = 1, count do
@@ -1798,6 +1800,18 @@ local TAROT_FX = {
 	c_strength = "rank", c_death = "pair",
 	c_lovers = "m_wild", c_chariot = "m_steel", c_justice = "m_glass", c_devil = "m_gold",
 	c_star = "Diamonds", c_moon = "Clubs", c_sun = "Hearts", c_world = "Spades",
+}
+
+-- Relative value of a consumable, used only to choose which held Tarot to sell
+-- for a full slot (docs/CLAUDE_BATCH3_REVIEW.md M2). Planets permanently level a
+-- hand, so they outrank a targeted Tarot; Death (a copy) and the enhancement
+-- Tarots outrank the single-target rank and suit Tarots.
+local SLOT_WORTH = {
+	c_pluto = 9, c_mercury = 9, c_uranus = 9, c_venus = 9, c_saturn = 9, c_jupiter = 9,
+	c_earth = 9, c_mars = 9, c_neptune = 9, c_planet_x = 9, c_ceres = 9, c_eris = 9, c_black_hole = 9,
+	c_death = 4, c_strength = 3,
+	c_lovers = 2, c_chariot = 2, c_justice = 2, c_devil = 2,
+	c_star = 1, c_moon = 1, c_sun = 1, c_world = 1,
 }
 
 -- A targeted consumable this difficulty can never use: never bought, and sold.
@@ -2478,13 +2492,43 @@ local function sell_consumable_score(observation, action)
 		return nil
 	end
 	if not harmful_use(observation, held.center) and not unusable(held.center) then
-		-- A usable targeted Tarot waits for a useful hand, so it is sold only
-		-- when the consumable slots are full (it must not block Planets).
+		-- A usable targeted Tarot waits for a useful hand, so a full set of
+		-- consumable slots is not by itself a reason to sell it. It is freed
+		-- only when the visible shop offers a concretely better, affordable
+		-- consumable that needs the slot, and then only the lowest-value held
+		-- Tarot is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2).
 		local slots = type(observation.match) == "table" and observation.match.consumable_slots or nil
 		local list = observation.self.consumables
-		if not (TAROT_FX[held.center] and type(slots) == "number" and type(list) == "table" and #list >= slots) then
+		local worth = SLOT_WORTH[held.center]
+		if not (TAROT_FX[held.center] and type(slots) == "number" and type(list) == "table" and #list >= slots and worth ~= nil) then
 			return nil
 		end
+		for i = 1, #list do
+			local other = list[i]
+			local center = type(other) == "table" and other.center or nil
+			local w = type(center) == "string" and SLOT_WORTH[center] or nil
+			if w ~= nil and w < worth then
+				return nil
+			end
+		end
+		local spend = spendable(observation)
+		local shop = observation.shop
+		if spend == nil or type(shop) ~= "table" or type(shop.items) ~= "table" then
+			return nil
+		end
+		for i = 1, #shop.items do
+			local item = shop.items[i]
+			if type(item) == "table" and item.redacted ~= true and item.kind == "consumable" then
+				local center = item.center
+				local w = type(center) == "string" and SLOT_WORTH[center] or nil
+				local cost = item.cost
+				if w ~= nil and w > worth and not harmful_use(observation, center)
+					and type(cost) == "number" and spend - cost >= CONF.reserve then
+					return CONF.leave_shop + CONF.sell_harmful
+				end
+			end
+		end
+		return nil
 	end
 	return CONF.leave_shop + CONF.sell_harmful
 end
@@ -2756,6 +2800,13 @@ return function(observation, actions)
 	TAROT_BEFORE = nil
 	TAROT_WORK = 0
 	local match = observation.match
+	-- The Psychic must play five cards (public blind key). Resolved here, before
+	-- the estimate, so the rule holds on every path that ranks by category
+	-- instead: the rule-Joker and play-work-cap early returns, and the fallback
+	-- (docs/CLAUDE_BATCH3_REVIEW.md M1).
+	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and match.blind == "bl_psychic" then
+		MIN_CARDS = 5
+	end
 	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
 	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and type(levels) == "table"
 		and (match.blind == "bl_eye" or match.blind == "bl_mouth") then

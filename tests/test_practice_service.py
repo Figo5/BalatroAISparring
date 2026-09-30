@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -1490,10 +1491,17 @@ def test_baseline_source_provider_renders_all_difficulties():
     if not _lupa_available():
         return
     provider = ps.BaselineSourceProvider()
+    # The rendered source is compacted, so match its signature tolerantly.
+    signature = re.compile(r"function\s*\(\s*observation\s*,\s*actions\s*\)")
+    lua = importlib.import_module("lupa.lua51").LuaRuntime(unpack_returned_tuples=True)
     for difficulty in ps.DIFFICULTIES:
         source = provider.source(difficulty)
         assert isinstance(source, str) and source
-        assert "function(observation, actions)" in source
+        assert signature.search(source), difficulty
+        # The rendered chunk must actually load and evaluate to a callable
+        # decision function (a meaningful check, not just a substring).
+        decision = lua.execute(source)
+        assert decision is not None and callable(decision), difficulty
     assert provider.source("rookie") == provider.source("rookie")
 
 
