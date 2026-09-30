@@ -673,7 +673,9 @@ def test_daemon_refuses_live_duplicate_and_replaces_stale():
         finally:
             stale.stop()
 
-        marker["module_sha256"] = "0" * 64
+        # A marker that is not our well-formed schema stays foreign and is never
+        # replaced, even though its PID is dead.
+        marker["schema"] = "someone.else.v1"
         path.write_text(json.dumps(marker), encoding="utf-8")
         foreign = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
         try:
@@ -682,6 +684,7 @@ def test_daemon_refuses_live_duplicate_and_replaces_stale():
             assert error.code == practice_host.CODE_FOREIGN_DISCOVERY
         else:
             raise AssertionError("expected host_foreign_discovery")
+        assert json.loads(path.read_text(encoding="utf-8"))["schema"] == "someone.else.v1"
 
 
 def test_discovery_state_treats_exited_but_held_daemon_as_stale():
@@ -706,6 +709,264 @@ def test_discovery_state_treats_exited_but_held_daemon_as_stale():
         running = SequenceOpener([FakeLiveHandle(1000.0, None, exited=None)])
         state = practice_host.discovery_state(config, opener=running, enumerator=FakeEnumerator([]))
         assert state["state"] == "live" and state["code"] == practice_host.CODE_ALREADY_RUNNING
+
+
+def _write_marker(config, **fields):
+    marker = {
+        "schema": practice_host.DISCOVERY_SCHEMA,
+        "module_sha256": "a" * 64,
+        "version": "previous",
+        "daemon_id": "host-old",
+        "pid": 4321,
+        "create_time": 1000.0,
+    }
+    marker.update(fields)
+    path = config.resolved_discovery_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(marker), encoding="utf-8")
+    return path, marker
+
+
+def test_previous_build_marker_with_exited_daemon_is_recovered():
+    # NATIVE_TEST_PROGRESS "First human-played match": the old daemon's marker
+    # carried the previous practice_host.py hash and was refused as foreign even
+    # after that daemon exited; it had to be renamed by hand.
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        cases = (
+            # Windows: the handle is still openable but reports exited.
+            ("held_exited", SequenceOpener([FakeLiveHandle(1000.0, None, exited=True)]), FakeEnumerator([])),
+            # The PID is gone: no handle, and absent from the listing.
+            ("gone", SequenceOpener([]), FakeEnumerator([])),
+            # The PID now belongs to another process (different create time).
+            ("reused_handle", SequenceOpener([FakeLiveHandle(2000.0, None)]), FakeEnumerator([])),
+            (
+                "reused_listing",
+                SequenceOpener([]),
+                FakeEnumerator([launch_practice.ProcessInfo(4321, 2000.0, "C:/x/python.exe", name="python")]),
+            ),
+        )
+        for name, opener, enumerator in cases:
+            _write_marker(config)
+            state = practice_host.discovery_state(config, opener=opener, enumerator=enumerator)
+            assert state["state"] == "stale_previous_build", (name, state)
+            assert state["code"] == practice_host.CODE_STALE_DISCOVERY, (name, state)
+            # Same ok convention as the current build's stale_pid_reused.
+            assert state["ok"] is (not name.startswith("reused")), (name, state)
+
+
+def test_previous_build_marker_with_running_daemon_is_never_clobbered():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        cases = (
+            ("handle_running", SequenceOpener([FakeLiveHandle(1000.0, None, exited=None)]), FakeEnumerator([])),
+            ("handle_running_false", SequenceOpener([FakeLiveHandle(1000.0, None, exited=False)]), FakeEnumerator([])),
+            # Access denied on the handle, but the listing shows the exact process.
+            (
+                "listing_running",
+                SequenceOpener([]),
+                FakeEnumerator([launch_practice.ProcessInfo(4321, 1000.0, "C:/x/python.exe", name="python")]),
+            ),
+        )
+        for name, opener, enumerator in cases:
+            path, marker = _write_marker(config)
+            before = path.read_bytes()
+            state = practice_host.discovery_state(config, opener=opener, enumerator=enumerator)
+            assert state["state"] == "previous_build_live", (name, state)
+            assert state["ok"] is False and state["code"] == practice_host.CODE_PREVIOUS_BUILD_RUNNING, (name, state)
+            daemon = practice_host.HostDaemon(
+                config,
+                opener=SequenceOpener([FakeLiveHandle(1000.0, None, exited=None)]) if name.startswith("handle") else opener,
+                enumerator=enumerator,
+            )
+            try:
+                daemon.start()
+            except practice_host.HostError as error:
+                assert error.code == practice_host.CODE_PREVIOUS_BUILD_RUNNING, (name, error.code)
+            else:
+                daemon.stop()
+                raise AssertionError(f"{name}: a running previous-build daemon was clobbered")
+            assert path.read_bytes() == before, name
+
+
+def test_previous_build_marker_unverifiable_liveness_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        for name, enumerator in (
+            ("listing_failed", FakeEnumerator(error=staging.StagingError("process_enumeration_failed"))),
+            ("listing_no_create_time", FakeEnumerator([launch_practice.ProcessInfo(4321, 0.0, None, name="python")])),
+        ):
+            path, _ = _write_marker(config)
+            before = path.read_bytes()
+            state = practice_host.discovery_state(config, opener=SequenceOpener([]), enumerator=enumerator)
+            assert state["state"] == "unverified" and state["ok"] is False, (name, state)
+            daemon = practice_host.HostDaemon(config, opener=SequenceOpener([]), enumerator=enumerator)
+            try:
+                daemon.start()
+            except practice_host.HostError as error:
+                assert error.code == "practice_host_discovery_unverified", (name, error.code)
+            else:
+                daemon.stop()
+                raise AssertionError(f"{name}: unverifiable owner was clobbered")
+            assert path.read_bytes() == before, name
+
+
+def test_malformed_own_schema_markers_are_foreign():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        for name, fields in (
+            ("bool_pid", {"pid": True}),
+            ("zero_pid", {"pid": 0}),
+            ("negative_pid", {"pid": -5}),
+            ("string_pid", {"pid": "4321"}),
+            ("float_pid", {"pid": 4321.0}),
+            ("bool_time", {"create_time": True}),
+            ("zero_time", {"create_time": 0}),
+            ("missing_time", {"create_time": None}),
+            ("short_hash", {"module_sha256": "abc"}),
+            ("upper_hash", {"module_sha256": "A" * 64}),
+            ("missing_hash", {"module_sha256": None}),
+            ("infinite_time", {"create_time": float("inf")}),
+            ("nan_time", {"create_time": float("nan")}),
+            ("oversized_pid", {"pid": 2**40}),
+        ):
+            _write_marker(config, **fields)
+            state = practice_host.discovery_state(
+                config, opener=SequenceOpener([]), enumerator=FakeEnumerator([])
+            )
+            assert state["state"] == "foreign" and state["code"] == practice_host.CODE_FOREIGN_DISCOVERY, (name, state)
+        path = config.resolved_discovery_path()
+        path.write_text("{not json", encoding="utf-8")
+        state = practice_host.discovery_state(config, opener=SequenceOpener([]), enumerator=FakeEnumerator([]))
+        assert state["state"] == "foreign"
+        path.write_text("[1, 2]", encoding="utf-8")
+        state = practice_host.discovery_state(config, opener=SequenceOpener([]), enumerator=FakeEnumerator([]))
+        assert state["state"] == "foreign"
+
+
+class _RaisingOpener:
+    def __call__(self, pid):
+        raise PermissionError("access denied")
+
+
+class _NoTimeHandle(FakeLiveHandle):
+    def create_time(self):
+        return None
+
+
+class _BrokenEnumerator(launch_practice.ProcessEnumerator):
+    def list(self):
+        raise RuntimeError("powershell exploded")
+
+
+def test_marker_liveness_fallbacks_are_conservative():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        running = FakeEnumerator([launch_practice.ProcessInfo(4321, 1000.0, "C:/x/python.exe", name="python")])
+        cases = (
+            # Handle open but no create time: the listing decides.
+            ("no_time_handle_listed", SequenceOpener([_NoTimeHandle(None, None)]), running, "previous_build_live"),
+            ("no_time_handle_gone", SequenceOpener([_NoTimeHandle(None, None)]), FakeEnumerator([]), "stale_previous_build"),
+            # Elevated process: the handle open raises, the listing decides.
+            ("opener_raises_listed", _RaisingOpener(), running, "previous_build_live"),
+            ("opener_raises_gone", _RaisingOpener(), FakeEnumerator([]), "stale_previous_build"),
+            # Any listing failure proves nothing.
+            ("listing_raises", SequenceOpener([]), _BrokenEnumerator(), "unverified"),
+        )
+        for name, opener, enumerator, expected in cases:
+            _write_marker(config)
+            state = practice_host.discovery_state(config, opener=opener, enumerator=enumerator)
+            assert state["state"] == expected, (name, state)
+
+
+def test_current_build_marker_with_unverifiable_listing_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        path, _ = _write_marker(config, module_sha256=practice_host.module_sha256())
+        before = path.read_bytes()
+        listing = FakeEnumerator([launch_practice.ProcessInfo(4321, 0.0, None, name="python")])
+        state = practice_host.discovery_state(config, opener=SequenceOpener([]), enumerator=listing)
+        assert state["state"] == "unverified" and state["ok"] is False, state
+        assert path.read_bytes() == before
+
+
+def test_stale_ok_flags_match_between_builds():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        for module in ("a" * 64, practice_host.module_sha256()):
+            _write_marker(config, module_sha256=module)
+            reused = practice_host.discovery_state(
+                config, opener=SequenceOpener([FakeLiveHandle(2000.0, None)]), enumerator=FakeEnumerator([])
+            )
+            assert reused["ok"] is False and reused["process"] == "pid_reused", reused
+            exited = practice_host.discovery_state(
+                config,
+                opener=SequenceOpener([FakeLiveHandle(1000.0, None, exited=True)]),
+                enumerator=FakeEnumerator([]),
+            )
+            assert exited["ok"] is True and exited["process"] == "exited", exited
+
+
+def test_daemon_refuses_to_serve_without_its_own_create_time_on_windows():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        with patched(launch_practice, read_process_create_time=lambda pid: None), patched(
+            practice_host, _on_windows=lambda: True
+        ):
+            daemon = practice_host.HostDaemon(config, opener=SequenceOpener([]), enumerator=FakeEnumerator([]))
+            try:
+                daemon.start()
+            except practice_host.HostError as error:
+                assert error.code == practice_host.CODE_CREATE_TIME_UNAVAILABLE
+            else:
+                daemon.stop()
+                raise AssertionError("served with a marker that would read as foreign")
+        assert not config.resolved_discovery_path().exists()
+
+
+def test_daemon_start_replaces_dead_previous_build_marker_and_reports_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        path, _ = _write_marker(config)
+        daemon = practice_host.HostDaemon(
+            config, opener=SequenceOpener([FakeLiveHandle(1000.0, None, exited=True)]), enumerator=FakeEnumerator([])
+        )
+        started = daemon.start()
+        try:
+            assert started["stale_replaced"] is True
+            assert started["replaced"] == {
+                "state": "stale_previous_build",
+                "pid": 4321,
+                "module_sha256": "a" * 64,
+                "version": "previous",
+            }, started
+            written = json.loads(path.read_text(encoding="utf-8"))
+            assert written["module_sha256"] == practice_host.module_sha256()
+            assert written["pid"] == os.getpid()
+        finally:
+            daemon.stop()
+
+
+def test_reissue_allows_dead_previous_build_marker_but_not_a_running_one():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        api = FakeReissueApi(["bound_tool_changed:practice_host"])
+        _write_marker(config)
+        result = practice_host.reissue_certificate_for_tools(
+            config,
+            api=api,
+            enumerator=FakeEnumerator([]),
+            opener=SequenceOpener([FakeLiveHandle(1000.0, None, exited=None)]),
+        )
+        assert result["code"] == "reissue_host_daemon_running" and result["state"] == "previous_build_live"
+        assert not api.built
+        result = practice_host.reissue_certificate_for_tools(
+            config,
+            api=api,
+            enumerator=FakeEnumerator([]),
+            opener=SequenceOpener([FakeLiveHandle(1000.0, None, exited=True)]),
+        )
+        assert result["ok"] is True and result["code"] == "reissue_complete", result
 
 
 def test_daemon_loopback_socket_round_trip():

@@ -14,7 +14,11 @@ Scope of this module (repository-only, no live writes by the developer):
 - **Private discovery marker.** The daemon writes a discovery file under
   the gitignored repository ``work/`` tree (never a save directory) recording its
   exact PID, create time, session, bound port and module hash. A live duplicate
-  is refused; a stale marker is replaced explicitly.
+  is refused; a stale marker is replaced explicitly. A well-formed marker from a
+  previous build of this host (same schema, other module hash) is checked for
+  liveness the same way: it is replaced only when its exact PID/create time is
+  proven gone, and refused while that process runs or cannot be verified. A
+  marker that is not our well-formed schema is foreign and never replaced.
 - **Closed-game transition.** ``start`` returns an acknowledgement only when the
   request is admissible and recorded; it never launches anything. A supervisor
   thread waits for the exact original live process to exit on its own (using a
@@ -43,6 +47,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -181,6 +186,8 @@ CODE_ROLE_EXITED = "practice_role_exited"
 CODE_LIVE_CHANGED = "practice_live_state_changed"
 CODE_STALE_DISCOVERY = "practice_host_stale_discovery"
 CODE_FOREIGN_DISCOVERY = "practice_host_foreign_discovery"
+CODE_PREVIOUS_BUILD_RUNNING = "practice_host_previous_build_running"
+CODE_CREATE_TIME_UNAVAILABLE = "practice_host_create_time_unavailable"
 CODE_ALREADY_RUNNING = "practice_host_already_running"
 CODE_OPEN_RECORD_BLOCKED = "practice_session_open_unmeasured"
 CODE_CLOSURE_PENDING = "practice_host_closure_pending"
@@ -555,7 +562,7 @@ def wait_for_live_exit(
 def _confirm_absent(enumerator, live_pid: int, live_create_time: float) -> dict:
     try:
         processes = enumerator.list()
-    except staging.StagingError:
+    except Exception:  # noqa: BLE001 - any listing failure proves nothing
         return {"ok": False, "code": "practice_live_exit_unverified"}
     for info in processes:
         if int(getattr(info, "pid", -1)) != int(live_pid):
@@ -3117,34 +3124,117 @@ def read_discovery(path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
+def _discovery_marker_shape(marker: Mapping) -> bool:
+    """True for a well-formed marker in this host's own discovery schema."""
+    if marker.get("schema") != DISCOVERY_SCHEMA:
+        return False
+    pid, create_time = marker.get("pid"), marker.get("create_time")
+    # A Windows PID is a DWORD. JSON parsing accepts Infinity/NaN, which would
+    # never match a real create time and so would read as "gone".
+    if isinstance(pid, bool) or not isinstance(pid, int) or not 0 < pid <= 0xFFFFFFFF:
+        return False
+    if isinstance(create_time, bool) or not isinstance(create_time, (int, float)):
+        return False
+    if not math.isfinite(float(create_time)) or create_time <= 0:
+        return False
+    module = marker.get("module_sha256")
+    return isinstance(module, str) and _SHA256_HEX.match(module) is not None
+
+
+def _marker_process_state(pid: int, create_time: float, *, opener=None, enumerator=None) -> str:
+    """Liveness of the exact process a marker names: live | exited | pid_reused | unverified.
+
+    Query-only: one handle read (Windows keeps an exited process openable while
+    any handle is held, so ``exited`` is read from the handle), else the process
+    listing. Never terminates or signals anything.
+    """
+    identity = read_live_identity(pid, opener=opener)
+    if identity is not None and identity.get("create_time") is not None:
+        if abs(float(identity["create_time"]) - float(create_time)) <= launch_practice.START_TIME_TOLERANCE:
+            return "exited" if identity.get("exited") is True else "live"
+        return "pid_reused"
+    try:
+        listing = enumerator or launch_practice.default_enumerator()
+    except Exception:  # noqa: BLE001
+        return "unverified"
+    absent = _confirm_absent(listing, pid, float(create_time))
+    if absent.get("code") == "practice_live_exit_unverified":
+        return "unverified"
+    if absent.get("code") == "practice_live_still_running":
+        return "live"
+    if absent.get("code") == "practice_live_exit_pid_reused":
+        return "pid_reused"
+    return "exited"
+
+
 def discovery_state(config: HostConfig, *, opener=None, enumerator=None) -> dict:
-    """Classify the current discovery marker: live | stale | foreign | absent."""
+    """Classify the current discovery marker.
+
+    States:
+
+    - ``absent``: no marker.
+    - ``live``: this build's daemon is running (refuse).
+    - ``stale`` / ``stale_pid_reused``: this build's daemon is proven gone
+      (replace).
+    - ``previous_build_live``: a well-formed marker from a previous build of this
+      host whose exact process still runs (refuse; never clobber it).
+    - ``stale_previous_build``: the same, proven gone (replace).
+    - ``unverified``: liveness could not be proven either way (refuse).
+    - ``foreign``: unreadable, or not our well-formed schema (refuse).
+    """
     discovery = Path(config.resolved_discovery_path())
     marker = read_discovery(discovery)
     if marker is None:
         if discovery.exists():
             return {"ok": False, "code": CODE_FOREIGN_DISCOVERY, "state": "foreign"}
         return {"ok": True, "code": "practice_host_discovery_absent", "state": "absent"}
-    if marker.get("schema") != DISCOVERY_SCHEMA:
+    if not _discovery_marker_shape(marker):
         return {"ok": False, "code": CODE_FOREIGN_DISCOVERY, "state": "foreign"}
-    if marker.get("module_sha256") != module_sha256():
-        return {"ok": False, "code": CODE_FOREIGN_DISCOVERY, "state": "foreign"}
-    pid, create_time = marker.get("pid"), marker.get("create_time")
-    if not isinstance(pid, int) or not isinstance(create_time, (int, float)):
-        return {"ok": False, "code": CODE_FOREIGN_DISCOVERY, "state": "foreign"}
-    identity = read_live_identity(pid, opener=opener)
-    if identity is not None and identity.get("create_time") is not None:
-        if abs(float(identity["create_time"]) - float(create_time)) <= launch_practice.START_TIME_TOLERANCE:
-            if identity.get("exited") is True:
-                return {"ok": True, "code": CODE_STALE_DISCOVERY, "state": "stale", "marker": marker}
-            return {"ok": False, "code": CODE_ALREADY_RUNNING, "state": "live", "marker": marker}
-        return {"ok": False, "code": CODE_STALE_DISCOVERY, "state": "stale_pid_reused", "marker": marker}
-    absent = _confirm_absent(enumerator or launch_practice.default_enumerator(), pid, float(create_time))
-    if absent.get("code") == "practice_live_exit_unverified":
+    current_build = marker.get("module_sha256") == module_sha256()
+    process = _marker_process_state(
+        marker["pid"], float(marker["create_time"]), opener=opener, enumerator=enumerator
+    )
+    if process == "unverified":
         return {"ok": False, "code": "practice_host_discovery_unverified", "state": "unverified", "marker": marker}
-    if absent.get("code") == "practice_live_still_running":
+    if not current_build:
+        if process == "live":
+            return {
+                "ok": False,
+                "code": CODE_PREVIOUS_BUILD_RUNNING,
+                "state": "previous_build_live",
+                "marker": marker,
+            }
+        # Same ``ok`` convention as the current build: a reused PID is reported
+        # ok=False (``stale_pid_reused``) but is still replaced by ``start``.
+        return {
+            "ok": process == "exited",
+            "code": CODE_STALE_DISCOVERY,
+            "state": "stale_previous_build",
+            "marker": marker,
+            "process": process,
+        }
+    if process == "live":
         return {"ok": False, "code": CODE_ALREADY_RUNNING, "state": "live", "marker": marker}
-    return {"ok": True, "code": CODE_STALE_DISCOVERY, "state": "stale", "marker": marker}
+    if process == "pid_reused":
+        return {
+            "ok": False,
+            "code": CODE_STALE_DISCOVERY,
+            "state": "stale_pid_reused",
+            "marker": marker,
+            "process": process,
+        }
+    return {"ok": True, "code": CODE_STALE_DISCOVERY, "state": "stale", "marker": marker, "process": process}
+
+
+# Discovery states that mean another host daemon may still own the marker.
+DISCOVERY_BLOCKING_STATES = ("live", "previous_build_live", "unverified", "foreign")
 
 
 class HostDaemon:
@@ -3208,12 +3298,27 @@ class HostDaemon:
         state = discovery_state(self.config, opener=self._opener, enumerator=self._enumerator)
         if state["state"] == "live":
             raise HostError(CODE_ALREADY_RUNNING)
+        if state["state"] == "previous_build_live":
+            raise HostError(CODE_PREVIOUS_BUILD_RUNNING)
         if state["state"] == "foreign":
             raise HostError(CODE_FOREIGN_DISCOVERY)
         if state["state"] == "unverified":
             raise HostError("practice_host_discovery_unverified")
-        if state["state"] in ("stale", "stale_pid_reused"):
+        replaced = None
+        if state["state"] in ("stale", "stale_pid_reused", "stale_previous_build"):
             self.start_code = CODE_STALE_DISCOVERY
+            old = state.get("marker") or {}
+            replaced = {
+                "state": state["state"],
+                "pid": old.get("pid"),
+                "module_sha256": old.get("module_sha256"),
+                "version": old.get("version") if isinstance(old.get("version"), str) else None,
+            }
+        own_create_time = launch_practice.read_process_create_time(os.getpid())
+        if own_create_time is None and _on_windows():
+            # A marker without our create time would read as foreign on the next
+            # start and need a manual rename; refuse before binding anything.
+            raise HostError(CODE_CREATE_TIME_UNAVAILABLE)
         server = _HostControlServer((HOST, int(self.config.bind_port)), self)
         self._server = server
         self.port = int(server.server_address[1])
@@ -3226,7 +3331,7 @@ class HostDaemon:
             "daemon_id": self.daemon_id,
             "session": self.session,
             "pid": os.getpid(),
-            "create_time": launch_practice.read_process_create_time(os.getpid()),
+            "create_time": own_create_time,
             "module_sha256": module_sha256(),
             "host": HOST,
             "port": self.port,
@@ -3249,6 +3354,7 @@ class HostDaemon:
             "port": self.port,
             "discovery": str(self.config.resolved_discovery_path()),
             "stale_replaced": self.start_code == CODE_STALE_DISCOVERY,
+            "replaced": replaced,
         }
 
     def _active_supervisor(self):
@@ -3816,7 +3922,7 @@ def reissue_certificate_for_tools(
     if not closed.get("ok"):
         return {"ok": False, "code": "reissue_live_balatro_running", "problems": closed.get("problems") or []}
     daemon = discovery_state(config, opener=opener, enumerator=enumerator)
-    if daemon.get("state") in ("live", "unverified", "foreign"):
+    if daemon.get("state") in DISCOVERY_BLOCKING_STATES:
         return {"ok": False, "code": "reissue_host_daemon_running", "state": daemon.get("state")}
     live_map = staging.live_roots(
         install_root=config.live_install_root,

@@ -63,11 +63,37 @@ a save directory) with:
 - loopback `host`/`port`, the random `secret`, `started_unix` and the op/enum
   catalogue.
 
-`discovery_state()` classifies an existing marker as `live` (refused with
-`practice_host_already_running`), `stale` / `stale_pid_reused` (replaced explicitly,
-`stale_replaced: true`), `foreign` (wrong schema or module hash; refused, never
-clobbered) or `unverified` (identity could not be confirmed; refused). The secret
-is only in this private file and is never logged or returned in a response.
+`discovery_state()` classifies an existing marker. The marker's process is
+checked query-only: one handle read, where an exited-but-held Windows handle
+counts as exited, else the process listing. Nothing is ever terminated.
+
+| State | Meaning | Action |
+|---|---|---|
+| `absent` | no marker | start |
+| `live` | this build's daemon, exact PID and create time running | refuse `practice_host_already_running` |
+| `stale` / `stale_pid_reused` | this build's daemon, proven exited, or its PID now belongs to another process | replace (`stale_replaced: true`) |
+| `previous_build_live` | well-formed marker in our schema with another `module_sha256`, and its exact process is still running | refuse `practice_host_previous_build_running`; never clobbered |
+| `stale_previous_build` | the same, with its process proven gone or its PID reused | replace (`stale_replaced: true`; `replaced` reports the old pid, hash and version) |
+| `unverified` | liveness could not be proven either way | refuse |
+| `foreign` | unreadable, or not our well-formed schema (`pid` not a positive DWORD, `create_time` not a finite positive number, or `module_sha256` not 64 lowercase hex) | refuse; never clobbered |
+
+`serve` on Windows refuses to start (`practice_host_create_time_unavailable`)
+when it cannot read its own create time, because a marker without one would read
+as foreign next time. `ok` in the result follows one convention for both builds:
+a reused PID is reported `ok: false` and still replaced by `serve`. Any failure
+of the process listing counts as `unverified`. Note that the live menu matches
+the marker's `version` (`practice_host/1`), not the module hash. While a
+previous build is still running, the menu keeps talking to that build until it
+is stopped.
+
+A previous build is recognised by structure only: our exact schema string and
+field shapes, in our private `work/` directory. That is enough, because it is
+replaced only when its owning process is proven gone. `reissue-certificate`
+refuses on `live`, `previous_build_live`, `unverified` and `foreign`. Before
+this change, the first human-played match needed a manual marker rename after
+the exit fix, because an exited previous-build daemon was classified `foreign`.
+The secret is only in this private file and is never logged or returned in a
+response.
 
 ## 4. Daemon wire protocol
 
