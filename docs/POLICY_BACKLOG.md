@@ -22,6 +22,11 @@ Constraints on all of it:
 
 - **Done:** offered scaling Jokers use mid-life proxies (`SCALING`, §4.2).
 - **Done:** proxies depend on the ante (×1.25 early, ×0.75 from ante 5).
+- **Fixed:** the Spare Trousers proxy used the wrong key (`j_spare_trousers`;
+  vanilla's is `j_trousers`), so it never applied.
+- **Fixed:** the slot-pressure sale could sell a grown scaling Joker (for
+  example a ×2.5 Hologram) to buy a fresh editioned copy, resetting it.
+  `GROWS` Jokers are never sold that way.
 - **Next:** use the
   displayed current value of owned scaling Jokers if the adapter can export
   it as UI-visible card text (needs a boundary review).
@@ -66,7 +71,7 @@ Constraints on all of it:
   - The Psychic: a play of fewer than five cards is estimated at 0 (paired
     A/B +0.7% overall);
   - The Eye and The Mouth (paired A/B +0.7% / +0.4% overall).
-- **Source size:** 50.2 KB after the render-time space squeeze: about 7 KB
+- **Source size:** 50.5 KB after the render-time space squeeze: about 7 KB
   under `SOURCE_GUARD` and 15 KB under the hard cap.
 - **Open (review Lows):**
   - ~~the adapter offers few five-card plays under The Psychic~~: fixed with

@@ -315,7 +315,7 @@ STAGES = ("early", "mid", "late")
 # Stress families (--hard): outside the shared model, so only reliability is
 # meaningful. Unmodelled Jokers count as no effect in the reference scorer.
 SCALING_JOKERS = ["j_ride_the_bus", "j_green_joker", "j_supernova", "j_obelisk", "j_hologram",
-                  "j_constellation", "j_lucky_cat", "j_runner", "j_square", "j_spare_trousers"]
+                  "j_constellation", "j_lucky_cat", "j_runner", "j_square", "j_trousers"]
 RULE_JOKERS = ["j_four_fingers", "j_shortcut", "j_smeared", "j_splash", "j_pareidolia"]
 # Boss blinds and the cards they debuff (suit bosses, The Plant); others change
 # the rules without debuffing (The Psychic, The Eye, The Mouth, The Flint...).

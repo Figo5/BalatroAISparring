@@ -9,31 +9,31 @@
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 13.68,
-      "latency_ms_p95": 23.589,
-      "max_instructions": 854000,
+      "latency_ms_mean": 15.126,
+      "latency_ms_p95": 24.928,
+      "max_instructions": 752000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.8759,
+      "play_optimal": 0.8828,
       "play_rate": 0.7323,
-      "regret": 0.0538
+      "regret": 0.0479
     },
     "expert": {
       "clear_taken": 0.9672,
       "decisions": 198,
       "discard_quality": null,
-      "discard_rate": 0.3232,
+      "discard_rate": 0.3182,
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 14.35,
-      "latency_ms_p95": 25.636,
-      "max_instructions": 1036000,
+      "latency_ms_mean": 15.734,
+      "latency_ms_p95": 28.165,
+      "max_instructions": 898000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.8657,
-      "play_rate": 0.6768,
-      "regret": 0.0582
+      "play_optimal": 0.8741,
+      "play_rate": 0.6818,
+      "regret": 0.0515
     },
     "major_league": {
       "clear_taken": 0.9672,
@@ -43,14 +43,14 @@
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 13.106,
-      "latency_ms_p95": 21.231,
-      "max_instructions": 852000,
+      "latency_ms_mean": 14.659,
+      "latency_ms_p95": 24.504,
+      "max_instructions": 750000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.8732,
+      "play_optimal": 0.8803,
       "play_rate": 0.7172,
-      "regret": 0.0549
+      "regret": 0.049
     },
     "rookie": {
       "clear_taken": 0.7869,
@@ -60,14 +60,14 @@
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 11.931,
-      "latency_ms_p95": 18.576,
-      "max_instructions": 185000,
+      "latency_ms_mean": 13.047,
+      "latency_ms_p95": 21.638,
+      "max_instructions": 161000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.6648,
+      "play_optimal": 0.6703,
       "play_rate": 0.9192,
-      "regret": 0.1443
+      "regret": 0.1397
     }
   },
   "distribution": "hard",
@@ -78,15 +78,15 @@
         "decisions": 48,
         "discard_rate": 0.4375,
         "failures": 0,
-        "max_instructions": 714000,
+        "max_instructions": 625000,
         "play_optimal": 1.0
       },
       "expert": {
         "clear_taken": 1.0,
         "decisions": 48,
-        "discard_rate": 0.5208,
+        "discard_rate": 0.5,
         "failures": 0,
-        "max_instructions": 822000,
+        "max_instructions": 711000,
         "play_optimal": 1.0
       },
       "major_league": {
@@ -94,7 +94,7 @@
         "decisions": 48,
         "discard_rate": 0.4583,
         "failures": 0,
-        "max_instructions": 681000,
+        "max_instructions": 596000,
         "play_optimal": 1.0
       },
       "rookie": {
@@ -102,7 +102,7 @@
         "decisions": 48,
         "discard_rate": 0.1667,
         "failures": 0,
-        "max_instructions": 124000,
+        "max_instructions": 108000,
         "play_optimal": 0.7
       }
     },
@@ -112,7 +112,7 @@
         "decisions": 37,
         "discard_rate": 0.1081,
         "failures": 0,
-        "max_instructions": 852000,
+        "max_instructions": 743000,
         "play_optimal": 1.0
       },
       "expert": {
@@ -120,7 +120,7 @@
         "decisions": 37,
         "discard_rate": 0.1622,
         "failures": 0,
-        "max_instructions": 1036000,
+        "max_instructions": 898000,
         "play_optimal": 1.0
       },
       "major_league": {
@@ -128,7 +128,7 @@
         "decisions": 37,
         "discard_rate": 0.1351,
         "failures": 0,
-        "max_instructions": 851000,
+        "max_instructions": 742000,
         "play_optimal": 1.0
       },
       "rookie": {
@@ -136,7 +136,7 @@
         "decisions": 37,
         "discard_rate": 0.027,
         "failures": 0,
-        "max_instructions": 171000,
+        "max_instructions": 148000,
         "play_optimal": 0.6111
       }
     },
@@ -146,7 +146,7 @@
         "decisions": 14,
         "discard_rate": 0.4286,
         "failures": 0,
-        "max_instructions": 854000,
+        "max_instructions": 752000,
         "play_optimal": 1.0
       },
       "expert": {
@@ -154,7 +154,7 @@
         "decisions": 14,
         "discard_rate": 0.6429,
         "failures": 0,
-        "max_instructions": 1026000,
+        "max_instructions": 897000,
         "play_optimal": 1.0
       },
       "major_league": {
@@ -162,7 +162,7 @@
         "decisions": 14,
         "discard_rate": 0.4286,
         "failures": 0,
-        "max_instructions": 852000,
+        "max_instructions": 750000,
         "play_optimal": 1.0
       },
       "rookie": {
@@ -170,7 +170,7 @@
         "decisions": 14,
         "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 185000,
+        "max_instructions": 161000,
         "play_optimal": 0.5
       }
     },
@@ -180,32 +180,32 @@
         "decisions": 36,
         "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 86000,
-        "play_optimal": 0.6667
+        "max_instructions": 81000,
+        "play_optimal": 0.6944
       },
       "expert": {
         "clear_taken": 0.75,
         "decisions": 36,
         "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 86000,
-        "play_optimal": 0.6667
+        "max_instructions": 81000,
+        "play_optimal": 0.6944
       },
       "major_league": {
         "clear_taken": 0.75,
         "decisions": 36,
         "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 86000,
-        "play_optimal": 0.6667
+        "max_instructions": 81000,
+        "play_optimal": 0.6944
       },
       "rookie": {
         "clear_taken": 0.75,
         "decisions": 36,
         "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 85000,
-        "play_optimal": 0.6667
+        "max_instructions": 80000,
+        "play_optimal": 0.6944
       }
     },
     "rule/pvp": {
@@ -214,7 +214,7 @@
         "decisions": 12,
         "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 86000,
+        "max_instructions": 81000,
         "play_optimal": 0.4545
       },
       "expert": {
@@ -222,7 +222,7 @@
         "decisions": 12,
         "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 86000,
+        "max_instructions": 81000,
         "play_optimal": 0.4545
       },
       "major_league": {
@@ -230,7 +230,7 @@
         "decisions": 12,
         "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 86000,
+        "max_instructions": 81000,
         "play_optimal": 0.4545
       },
       "rookie": {
@@ -238,7 +238,7 @@
         "decisions": 12,
         "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 85000,
+        "max_instructions": 79000,
         "play_optimal": 0.4545
       }
     },
@@ -248,7 +248,7 @@
         "decisions": 40,
         "discard_rate": 0.4,
         "failures": 0,
-        "max_instructions": 670000,
+        "max_instructions": 601000,
         "play_optimal": 1.0
       },
       "expert": {
@@ -256,7 +256,7 @@
         "decisions": 40,
         "discard_rate": 0.425,
         "failures": 0,
-        "max_instructions": 792000,
+        "max_instructions": 718000,
         "play_optimal": 1.0
       },
       "major_league": {
@@ -264,7 +264,7 @@
         "decisions": 40,
         "discard_rate": 0.425,
         "failures": 0,
-        "max_instructions": 667000,
+        "max_instructions": 603000,
         "play_optimal": 1.0
       },
       "rookie": {
@@ -272,7 +272,7 @@
         "decisions": 40,
         "discard_rate": 0.1,
         "failures": 0,
-        "max_instructions": 124000,
+        "max_instructions": 111000,
         "play_optimal": 0.75
       }
     },
@@ -282,7 +282,7 @@
         "decisions": 11,
         "discard_rate": 0.4545,
         "failures": 0,
-        "max_instructions": 604000,
+        "max_instructions": 541000,
         "play_optimal": 1.0
       },
       "expert": {
@@ -290,7 +290,7 @@
         "decisions": 11,
         "discard_rate": 0.5455,
         "failures": 0,
-        "max_instructions": 749000,
+        "max_instructions": 651000,
         "play_optimal": 1.0
       },
       "major_league": {
@@ -298,7 +298,7 @@
         "decisions": 11,
         "discard_rate": 0.4545,
         "failures": 0,
-        "max_instructions": 603000,
+        "max_instructions": 538000,
         "play_optimal": 1.0
       },
       "rookie": {
@@ -306,7 +306,7 @@
         "decisions": 11,
         "discard_rate": 0.1818,
         "failures": 0,
-        "max_instructions": 124000,
+        "max_instructions": 111000,
         "play_optimal": 0.8889
       }
     }
@@ -319,5 +319,5 @@
     23,
     37
   ],
-  "wall_seconds": 18.6
+  "wall_seconds": 20.31
 }

@@ -606,7 +606,7 @@ everything is skipped the policy returns no action.
 | `OPEN_BOOSTER` | Preferred purchase of a visible pack, reserve-aware. |
 | `REROLL` | Selective: only meaningful above a surplus threshold; otherwise leave. |
 | `LEAVE_SHOP` | The usual resolution when nothing is worth buying or money is tight. |
-| `SELL_JOKER` | Scored only in `SHOP` under visible slot pressure (full joker board plus a specific, already-affordable, strictly-better same-center copy on offer); no score in every other phase. |
+| `SELL_JOKER` | Scored only in `SHOP` under visible slot pressure (full joker board plus a specific, already-affordable, strictly-better same-center copy on offer); never for a Joker whose built-up value a sale resets (`GROWS`: Hologram, Green Joker, Spare Trousers, Constellation, Obelisk, …); no score in every other phase. |
 | `SELL_CONSUMABLE` | **Never selected** (no score); consumable slot pressure is not implemented. |
 | `SELECT_BOOSTER_ITEM` | Preferred pack pick; known kind weighted. |
 | `SKIP_BOOSTER` | Positive but well below picking; also the only option when nothing is usable. |

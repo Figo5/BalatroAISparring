@@ -93,8 +93,8 @@ runtime:
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
 | failures / illegal | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| max sandbox instructions (budget 2,000,000) | 185k | 854k | 852k | 1,036k |
-| mean / p95 latency, LuaJIT | 12 / 19 ms | 14 / 24 ms | 13 / 21 ms | 14 / 26 ms |
+| max sandbox instructions (budget 2,000,000) | 161k | 752k | 750k | 898k |
+| mean / p95 latency, LuaJIT | 13 / 22 ms | 15 / 25 ms | 15 / 25 ms | 16 / 28 ms |
 
 The `boss` and `scaling` families still show about 100% agreement. That is
 exactly the shared blind spot: neither side models those effects, so this

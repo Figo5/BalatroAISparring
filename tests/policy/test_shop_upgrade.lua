@@ -113,4 +113,19 @@ return function(ctx)
 			end
 		end
 	end)
+
+	-- A grown scaling Joker (Hologram, Green Joker...) is never sold for a
+	-- fresh editioned copy: the sale would reset its built-up value.
+	test("grown_scaling_joker_is_not_sold_for_a_fresh_copy", function()
+		for _, center in ipairs({ "j_hologram", "j_green_joker", "j_trousers" }) do
+			local frame = Support.full_slot_upgrade_frame()
+			frame.shop.items[1].center = center
+			frame.self.jokers[1].center = center
+			for _, difficulty in ipairs(Support.DIFFICULTIES) do
+				local result = Support.run(env, difficulty, frame)
+				ctx.is_true(result.ok == true, difficulty .. ":" .. tostring(result.code))
+				ctx.neq(result.action.type, "SELL_JOKER", difficulty .. "_" .. center)
+			end
+		end
+	end)
 end

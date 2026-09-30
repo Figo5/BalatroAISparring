@@ -597,7 +597,7 @@ local MULTIPLICATIVE = { xmult = true, hand_xmult = true }
 -- every hand.
 local SCALING = {
 	j_green_joker = { "mult", 3 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
-	j_flash = { "mult", 2 }, j_spare_trousers = { "mult", 4 }, j_runner = { "chips", 30 },
+	j_flash = { "mult", 2 }, j_trousers = { "mult", 4 }, j_runner = { "chips", 30 },
 	j_wee = { "chips", 24 }, j_castle = { "chips", 30 }, j_square = { "chips", 8 },
 	j_hologram = { "xmult", 1.15 }, j_constellation = { "xmult", 1.3 },
 }
@@ -2389,6 +2389,12 @@ local function reorder_score(observation, action)
 	return CONF.reorder + gain
 end
 
+-- Jokers whose built-up value a sale resets: never sold for a fresh copy.
+local GROWS = {
+	j_ride_the_bus = true, j_green_joker = true, j_trousers = true, j_hologram = true, j_constellation = true,
+	j_obelisk = true, j_yorick = true, j_campfire = true, j_glass = true, j_madness = true, j_loyalty_card = true,
+}
+
 local function recognized_joker(center)
 	if type(center) ~= "string" then
 		return false
@@ -2459,7 +2465,7 @@ local function sell_score(observation, action)
 		return nil
 	end
 	local center = owned.center
-	if not recognized_joker(center) then
+	if not recognized_joker(center) or GROWS[center] then
 		return nil
 	end
 	local spend = spendable(observation)
@@ -2691,8 +2697,8 @@ local function strip_line(line)
 end
 
 -- Drop a space outside quotes when a neighbour is punctuation, unless that
--- would join "--" (a comment), a digit with "." (a malformed number) or open
--- a long bracket ("[[" / "[="). Line breaks are kept, so the token stream and
+-- would join "--" (a comment), "." with "." or a digit (a different
+-- operator or a malformed number) or open a long bracket ("[[" / "[="). Line breaks are kept, so the token stream and
 -- line numbers are unchanged (tests compare Lua 5.1 bytecode).
 local PUNCT = {}
 for c in string.gmatch("=+-*/,(){}[]<>~.#%^;:", ".") do
@@ -2722,7 +2728,7 @@ local function squeeze_line(line)
 			local b = string.sub(line, i + 1, i + 1)
 			local drop = (PUNCT[a] or PUNCT[b]) and not (a == "-" and b == "-")
 				and not (a == "[" and (b == "[" or b == "="))
-				and not (string.find(a, "%d") and b == ".") and not (a == "." and string.find(b, "%d"))
+				and not (string.find(a, "%d") and b == ".") and not (a == "." and (b == "." or string.find(b, "%d")))
 			if not drop then
 				out[#out + 1] = c
 			end
@@ -2749,7 +2755,6 @@ local function strip_template(text, squeeze)
 end
 
 local STRIPPED = strip_template(TEMPLATE, true)
-local LOOSE = strip_template(TEMPLATE, false)
 
 -- Practical guard well below the sandbox's hard 65536-byte cap, so policy
 -- growth has to recover space instead of creeping up to the limit.
@@ -2811,19 +2816,23 @@ function BaselinePolicy.describe()
 	return out
 end
 
--- The same policy rendered from the unstripped template (comments kept). Only
--- for tests proving the stripped source is equivalent; it may exceed the
--- sandbox cap and is never sent to the policy worker.
--- Stripped but not squeezed (spaces kept): for the bytecode-equality test.
+-- Stripped but not squeezed (spaces kept), built on first use: only for the
+-- bytecode-equality test, never sent to the policy worker.
+local LOOSE = nil
+
 function BaselinePolicy.loose_source(difficulty)
 	local config = type(difficulty) == "string" and CONFIGS[difficulty] or nil
 	local literal = config ~= nil and render_config(config) or nil
+	LOOSE = LOOSE or strip_template(TEMPLATE, false)
 	if literal == nil or LOOSE == nil then
 		return nil, CODE.UNKNOWN_DIFFICULTY
 	end
 	return string.format(LOOSE, literal)
 end
 
+-- The same policy rendered from the unstripped template (comments kept). Only
+-- for tests proving the stripped source is equivalent; it may exceed the
+-- sandbox cap and is never sent to the policy worker.
 function BaselinePolicy.readable_source(difficulty)
 	local config = type(difficulty) == "string" and CONFIGS[difficulty] or nil
 	local literal = config ~= nil and render_config(config) or nil
