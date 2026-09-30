@@ -29,6 +29,7 @@ local LIMITS = {
 	shop = 16,
 	shop_booster = 16,
 	vouchers = 16,
+	owned_vouchers = 32,
 	booster = 16,
 	targets = 16,
 	token = 64,
@@ -462,6 +463,54 @@ local function copy_hand_levels(source)
 	return out
 end
 
+-- The AI's own redeemed voucher keys (adapter `owned_vouchers`): a plain
+-- array of at most LIMITS.owned_vouchers strings matching `^v_[a-z0-9_]+$`
+-- (<= 32 bytes), strictly increasing bytewise. Output records carry only the
+-- key; they are not bound to engine objects and no action targets them.
+local function bytes_before(a, b)
+	local n = math.min(#a, #b)
+	for i = 1, n do
+		local x, y = string.byte(a, i), string.byte(b, i)
+		if x ~= y then
+			return x < y
+		end
+	end
+	return #a < #b
+end
+
+local function copy_owned_vouchers(source)
+	if source == nil then
+		return nil
+	end
+	if not is_plain(source) then
+		return nil, CODE.BAD_VIEW
+	end
+	local n = 0
+	for key in next, source do
+		n = n + 1
+		if not is_int(key) or key < 1 or n > LIMITS.owned_vouchers then
+			return nil, CODE.BAD_VIEW
+		end
+	end
+	local out = {}
+	local previous = nil
+	for i = 1, n do
+		local key = rawget(source, i)
+		if type(key) ~= "string" or #key > 32 or string.find(key, "^v_[a-z0-9_]+$") == nil then
+			return nil, CODE.BAD_VIEW
+		end
+		if previous ~= nil and not bytes_before(previous, key) then
+			return nil, CODE.BAD_VIEW
+		end
+		previous = key
+		out[i] = { face_down = false, center = key }
+	end
+	if n == 0 then
+		return nil
+	end
+	return out
+end
+
 local function copy_deck(source)
 	if source == nil then
 		return nil
@@ -682,6 +731,13 @@ local function build_self(G, view, phase)
 	end
 	if levels ~= nil then
 		out.hand_levels = levels
+	end
+	local owned, owned_code = copy_owned_vouchers(rget(view_self, "owned_vouchers"))
+	if owned_code ~= nil then
+		return nil, owned_code
+	end
+	if owned ~= nil then
+		out.vouchers = owned
 	end
 	return out
 end

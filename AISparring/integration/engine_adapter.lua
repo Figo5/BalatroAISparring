@@ -718,6 +718,53 @@ local HAND_LEVEL_KEYS = {
 	["Flush House"] = "flush_house", ["Flush Five"] = "flush_five",
 }
 
+-- The AI's own redeemed vouchers, as Run Info shows them: keys of
+-- `G.GAME.used_vouchers` whose value is true and whose `G.P_CENTERS` entry is
+-- a Voucher. Bytewise sorted, at most OWNED_VOUCHERS keys, at most
+-- OWNED_VOUCHER_SCAN entries inspected. Fail-soft: nil when unreadable or
+-- empty (docs/OWNED_VOUCHERS_DESIGN.md).
+local OWNED_VOUCHERS = 32
+local OWNED_VOUCHER_SCAN = 256
+
+local function bytes_before(a, b)
+	local n = math.min(#a, #b)
+	for i = 1, n do
+		local x, y = string.byte(a, i), string.byte(b, i)
+		if x ~= y then
+			return x < y
+		end
+	end
+	return #a < #b
+end
+
+local function owned_voucher_keys(G)
+	local used = rpath(G, "GAME", "used_vouchers")
+	local centers = rget(G, "P_CENTERS")
+	if type(used) ~= "table" or type(centers) ~= "table" then
+		return nil
+	end
+	local keys = {}
+	local scanned = 0
+	for key, value in next, used do
+		scanned = scanned + 1
+		if scanned > OWNED_VOUCHER_SCAN then
+			break
+		end
+		if value == true and type(key) == "string" and #key <= 32 and string.find(key, "^v_[a-z0-9_]+$") ~= nil
+			and rget(rget(centers, key), "set") == "Voucher" then
+			keys[#keys + 1] = key
+		end
+	end
+	if #keys == 0 then
+		return nil
+	end
+	table.sort(keys, bytes_before)
+	while #keys > OWNED_VOUCHERS do
+		keys[#keys] = nil
+	end
+	return keys
+end
+
 local function build_self(G, phase, hand_cards)
 	local out = {}
 	local game = rget(G, "GAME")
@@ -756,6 +803,7 @@ local function build_self(G, phase, hand_cards)
 			out.hand_levels = levels
 		end
 	end
+	out.owned_vouchers = owned_voucher_keys(G)
 	-- Only while a hand is being played: outside the blind (shop, blind
 	-- select) the previous blind's value is not what the UI is showing.
 	if PHASE_ALLOWS_HAND[phase] == true and engine_pvp_boss(G) == false then

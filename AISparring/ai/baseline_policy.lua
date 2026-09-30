@@ -190,6 +190,9 @@ local WORK = 0
 local SHOP_BEST = false
 -- BUY_ITEM Joker scores computed by best_joker, reused by score_of (per decision).
 local BUY_SCORES = {}
+-- Interest cap (interest dollars) for this decision: CONF.interest_cap, raised
+-- to 10 by an owned Seed Money and 20 by Money Tree (vanilla $50 / $100).
+local INTEREST_CAP = CONF.interest_cap
 
 local function byte_less(a, b)
 	local na = #a
@@ -1674,8 +1677,8 @@ local function economy_bonus(left)
 		return 0
 	end
 	local interest = math.floor(left / 5)
-	if interest > CONF.interest_cap then
-		interest = CONF.interest_cap
+	if interest > INTEREST_CAP then
+		interest = INTEREST_CAP
 	end
 	if interest < 0 then
 		interest = 0
@@ -2654,6 +2657,19 @@ return function(observation, actions)
 	WORK = 0
 	SHOP_BEST = false
 	BUY_SCORES = {}
+	INTEREST_CAP = CONF.interest_cap
+	local owned_vouchers = type(observation.self) == "table" and observation.self.vouchers or nil
+	if type(owned_vouchers) == "table" then
+		for i = 1, #owned_vouchers do
+			local v = owned_vouchers[i]
+			local center = type(v) == "table" and v.center or nil
+			if center == "v_money_tree" and INTEREST_CAP < 20 then
+				INTEREST_CAP = 20
+			elseif center == "v_seed_money" and INTEREST_CAP < 10 then
+				INTEREST_CAP = 10
+			end
+		end
+	end
 	if CONF.use_levels and type(observation.self) == "table" and type(observation.self.hand_levels) == "table" then
 		LEVELS = observation.self.hand_levels
 	end

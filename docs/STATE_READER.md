@@ -336,8 +336,18 @@ Deliberately unsupported or unproven (denied, omitted or refused rather than gue
   (`wheel_flipped`) cards as `?` and has no unknown bucket, so a rank/suit aggregate cannot
   represent what the player sees and would leak hidden face-down identity (M2_SOURCE_MAP §6).
 - **Tags** (`self.tags`) are not projected (no engine-card backing path is defined).
-- **Owned vouchers** (`self.vouchers`) are not projected (owned vouchers are not ordered engine
-  cards); only current shop vouchers are supported.
+- **Owned vouchers** (`self.vouchers`) are projected from the adapter's plain
+  `owned_vouchers` key list (`copy_owned_vouchers`, docs/OWNED_VOUCHERS_DESIGN.md):
+  - at most 32 strings matching `^v_[a-z0-9_]+$` (≤ 32 bytes), strictly
+    increasing bytewise;
+  - anything else is `reader_bad_view` (fail-closed);
+  - each record is `{ face_down = false, center = key }`, with no engine
+    binding;
+  - no action targets them: `BUY_VOUCHER` accepts only `shop_voucher` refs;
+  - a `vouchers` field in the view is ignored.
+
+  This is the AI's own Run Info voucher list, reviewed against
+  `docs/FAIRNESS.md` (own, human-visible run information).
 - **Opponent deck/jokers/shop, future shop/reroll/pack contents, seeds and deck order** are
   never read.
 - **Timers** are copied only as exact certified rendered strings; the reader performs no timer
@@ -383,6 +393,6 @@ No game or live runtime is executed.
 
 The reader consumes the pure schema as it currently stands: total-only `deck`,
 `consumable_target.source_ref` (derived here from `source.ordinal`), and the `shop_booster`
-zone for `shop.boosters`/`OPEN_BOOSTER`. Any future addition (tags, owned vouchers, additional
+zone for `shop.boosters`/`OPEN_BOOSTER`, and owned vouchers as plain keys (§ above). Any future addition (tags, additional
 zones, a certified deck-preview aggregate with an unknown bucket) must update both this
 document and `docs/AI_OBSERVATION.md`, and be re-reviewed against `docs/FAIRNESS.md`.

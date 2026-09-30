@@ -24,8 +24,7 @@ Constraints on all of it:
 - **Done:** proxies depend on the ante (×1.25 early, ×0.75 from ante 5).
 - **Next:** use the
   displayed current value of owned scaling Jokers if the adapter can export
-  it as UI-visible card text (needs a boundary review); export owned
-  vouchers (Seed Money / Money Tree interest cap).
+  it as UI-visible card text (needs a boundary review).
 
 ## Open observations from the Batch 2 review (lower priority)
 
@@ -53,17 +52,9 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
   Joker-level effect is priced before the trailing run of owned x-mult or
   Polychrome Jokers, only when the post-purchase row qualifies for the
   estimate-based reorder (`tests/policy/test_joker_slot.lua`).
-- **Seed Money / Money Tree interest cap is not modelled.** `interest_cap` is
-  fixed at 5. The policy cannot see owned vouchers yet: the adapter and reader
-  never fill `self.vouchers`, although the schema allows it. Fixing this needs
-  a trusted-integration change that exports `G.GAME.used_vouchers`, which Run
-  Info shows publicly, through adapter → reader → observation, with a fairness
-  review.
-  Design sketch for review: the adapter reads `G.GAME.used_vouchers` (keys
-  only, bounded to 32, sorted), emits `self.vouchers` as
-  `{ kind = "voucher", center = key }` records with no engine binding. The
-  reader copies them through a string allowlist (`v_[a-z_]+`) instead of the
-  card-zone identity path. The policy then derives `interest_cap` 10 or 20.
+- ~~**Seed Money / Money Tree interest cap is not modelled.**~~ Done: owned
+  vouchers are exported (docs/OWNED_VOUCHERS_DESIGN.md, architecture-reviewed)
+  and the policy's interest cap follows them.
 - ~~**Match-history list may show Windows junctions.**~~ Fixed: listing and
   `review` share `is_session_dir`, which requires a real directory (not a
   symlink or junction) that resolves directly under the root.

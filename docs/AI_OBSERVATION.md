@@ -185,7 +185,7 @@ may contain `>>`), `ante`, `round`, `lives`, `hands_per_round`,
 | `hand` | ordered `card` array, only when phase permits **and** `hand_visible = true` |
 | `jokers` | ordered `joker` array |
 | `consumables` | ordered `consumable` array |
-| `vouchers` | ordered `voucher` array |
+| `vouchers` | ordered `voucher` array: the AI's own redeemed vouchers (`center` only, ids `voucher:N`, not action targets) |
 | `tags` | ordered `tag` array |
 | `deck` | aggregate, see below |
 | `hand_levels` | optional map, keyed only by the allowlisted poker-hand tokens `high_card`, `pair`, `two_pair`, `three`, `straight`, `flush`, `full_house`, `four`, `straight_flush`, `five`, `flush_house`, `flush_five`. Each value is exactly `{ level, chips, mult }` (non-negative ints): the current base values the Run Info "Poker Hands" screen shows. The adapter only includes hands the UI lists (`visible ~= false`), so undiscovered secret hands stay hidden. Unknown names are never traversed. Malformed entries reject the frame (`observation_invalid_field`). |
@@ -356,8 +356,8 @@ certificates = {
 - Integers must be integral and in int32 bounds (signed for `money`, otherwise
   non-negative); displayed scores/timers are strings; no seeds, no RNG, no hidden
   ids.
-- Bounds: hand/jokers/consumables 64, vouchers/tags/shop/shop_booster/booster/
-  targets 16, certificate items 128, ref arrays 64, absolute array scan 256,
+- Bounds: hand/jokers/consumables 64, owned vouchers (`self.vouchers`) 32,
+  shop vouchers/tags/shop/shop_booster/booster/targets 16, certificate items 128, ref arrays 64, absolute array scan 256,
   token 64, display 32, visible text 128, ref 64.
 
 Static codes: `ok`, `observation_bad_codec`, `observation_bad_frame`,

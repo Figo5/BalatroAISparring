@@ -9,6 +9,8 @@ local LIMIT = {
 	jokers = 64,
 	consumables = 64,
 	vouchers = 16,
+	-- The AI's own redeemed vouchers (self.vouchers); shop vouchers keep 16.
+	owned_vouchers = 32,
 	tags = 16,
 	shop = 16,
 	booster = 16,
@@ -453,7 +455,7 @@ local function read_self(t, state, rules)
 	local sections = {
 		{ "jokers", LIMIT.jokers, "joker", "joker" },
 		{ "consumables", LIMIT.consumables, "consumable", "consumable" },
-		{ "vouchers", LIMIT.vouchers, "voucher", "voucher" },
+		{ "vouchers", LIMIT.owned_vouchers, "voucher", "voucher" },
 		{ "tags", LIMIT.tags, "tag", "tag" },
 	}
 	if rules.hand and out.hand_visible == true then

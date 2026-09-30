@@ -496,7 +496,14 @@ acceptance:
   the only stop condition. The runtime coordinator MUST stop the decision loop when
   either `MP.GAME.won == true` or the engine state is `GAME_OVER`. No observation
   field is added (M2 schema kept intact); the coordinator reads the signal directly.
-- **Deck total and tags/owned vouchers** remain unsupported, as in M2.
+- **Deck total and tags** remain unsupported, as in M2.
+- **Owned vouchers** are exported as `self.owned_vouchers`, a plain key list
+  (docs/OWNED_VOUCHERS_DESIGN.md):
+  - keys of `G.GAME.used_vouchers` with value `true` whose raw
+    `G.P_CENTERS[key].set` is `"Voucher"` (what Run Info lists);
+  - `^v_[a-z0-9_]+$`, ≤ 32 bytes, bytewise sorted, at most 32;
+  - at most 256 entries inspected;
+  - fail-soft: omitted when unreadable or empty.
 - **Targeted consumables (`CONSUMABLE_SELECTION`)** are implemented legally (M3)
   **when** the trusted `target_selection()` port names the active source and its
   bounds; without that port the phase is refused (`engine_no_decision_state`). The
