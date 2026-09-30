@@ -2698,8 +2698,9 @@ end
 
 -- Drop a space outside quotes when a neighbour is punctuation, unless that
 -- would join "--" (a comment), "." with "." or a digit (a different
--- operator or a malformed number) or open a long bracket ("[[" / "[="). Line breaks are kept, so the token stream and
--- line numbers are unchanged (tests compare Lua 5.1 bytecode).
+-- operator or a malformed number) or open a long bracket ("[[" / "[=").
+-- Line breaks are kept, so the token stream and line numbers are unchanged
+-- (tests compare Lua 5.1 bytecode).
 local PUNCT = {}
 for c in string.gmatch("=+-*/,(){}[]<>~.#%^;:", ".") do
 	PUNCT[c] = true

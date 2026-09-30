@@ -1101,7 +1101,8 @@ local RANK_VALUE = {
 -- Bounded, deterministic selections of hand ordinals, ordered so that useful
 -- 3-5 card hands reach the catalogue before the pair enumeration can fill the
 -- cap. Priority:
---   0. (The Psychic only) rank groups and two pair padded to five cards;
+--   0. (The Psychic only) rank groups and two pair padded to five cards
+--      (visible-rank kickers first, then other cards by position);
 --   1. visible rank groups (pairs / triples / quads);
 --   2. two pair and full house over visible ranks;
 --   3. five-card straights over visible ranks (Ace high and low);
@@ -1182,7 +1183,8 @@ local function hand_selections(cards, count, max_k, cap, pad)
 	table.sort(suit_order, byte_less)
 
 	-- 0. (The Psychic only) rank groups and two pair padded to five cards with
-	-- the highest other visible-rank cards, so a scoring five-card play exists.
+	-- the highest other visible-rank cards, then any other card by position,
+	-- so a scoring five-card play exists.
 	if pad and max_k >= 5 then
 		local kickers = {}
 		for i = 1, count do
