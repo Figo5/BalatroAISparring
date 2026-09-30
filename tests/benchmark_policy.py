@@ -335,7 +335,10 @@ def make_scenario(rng, family="mixed"):
     deck = [(r, s) for r in RANKS for s in SUITS]
     rng.shuffle(deck)
     hand = []
-    for rank, suit in deck[: rng.choice(shape.get("hand_sizes", [8]))]:
+    # Only stress families draw a hand size, so the default families keep the
+    # exact random stream the stored baselines were generated with.
+    size = rng.choice(shape["hand_sizes"]) if shape.get("hand_sizes") else 8
+    for rank, suit in deck[:size]:
         card = {"rank": rank, "suit": suit}
         roll = rng.random()
         if roll < shape["enhance"]:

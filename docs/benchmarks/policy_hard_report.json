@@ -1,73 +1,73 @@
 {
-  "coverage": 0.9575,
+  "coverage": 0.9601,
   "difficulties": {
     "competitive": {
-      "clear_taken": 0.9844,
+      "clear_taken": 0.9672,
       "decisions": 198,
       "discard_quality": null,
-      "discard_rate": 0.3081,
+      "discard_rate": 0.2677,
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 14.876,
-      "latency_ms_p95": 28.211,
-      "max_instructions": 893000,
+      "latency_ms_mean": 13.68,
+      "latency_ms_p95": 23.589,
+      "max_instructions": 854000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.9051,
-      "play_rate": 0.6919,
-      "regret": 0.0545
+      "play_optimal": 0.8759,
+      "play_rate": 0.7323,
+      "regret": 0.0538
     },
     "expert": {
-      "clear_taken": 0.9844,
+      "clear_taken": 0.9672,
       "decisions": 198,
       "discard_quality": null,
-      "discard_rate": 0.3333,
+      "discard_rate": 0.3232,
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 15.398,
-      "latency_ms_p95": 28.642,
+      "latency_ms_mean": 14.35,
+      "latency_ms_p95": 25.636,
       "max_instructions": 1036000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.9015,
-      "play_rate": 0.6667,
-      "regret": 0.0566
+      "play_optimal": 0.8657,
+      "play_rate": 0.6768,
+      "regret": 0.0582
     },
     "major_league": {
-      "clear_taken": 0.9844,
+      "clear_taken": 0.9672,
       "decisions": 198,
       "discard_quality": null,
-      "discard_rate": 0.3131,
+      "discard_rate": 0.2828,
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 14.39,
-      "latency_ms_p95": 25.108,
-      "max_instructions": 897000,
+      "latency_ms_mean": 13.106,
+      "latency_ms_p95": 21.231,
+      "max_instructions": 852000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.9044,
-      "play_rate": 0.6869,
+      "play_optimal": 0.8732,
+      "play_rate": 0.7172,
       "regret": 0.0549
     },
     "rookie": {
-      "clear_taken": 0.8125,
+      "clear_taken": 0.7869,
       "decisions": 198,
       "discard_quality": null,
-      "discard_rate": 0.1313,
+      "discard_rate": 0.0808,
       "failures": 0,
       "forced_discard_quality": null,
       "illegal": 0,
-      "latency_ms_mean": 13.401,
-      "latency_ms_p95": 24.271,
-      "max_instructions": 168000,
+      "latency_ms_mean": 11.931,
+      "latency_ms_p95": 18.576,
+      "max_instructions": 185000,
       "no_action": 0,
       "other": 0,
-      "play_optimal": 0.7151,
-      "play_rate": 0.8687,
-      "regret": 0.1222
+      "play_optimal": 0.6648,
+      "play_rate": 0.9192,
+      "regret": 0.1443
     }
   },
   "distribution": "hard",
@@ -76,238 +76,238 @@
       "competitive": {
         "clear_taken": 1.0,
         "decisions": 48,
-        "discard_rate": 0.4583,
+        "discard_rate": 0.4375,
         "failures": 0,
-        "max_instructions": 710000,
+        "max_instructions": 714000,
         "play_optimal": 1.0
       },
       "expert": {
         "clear_taken": 1.0,
         "decisions": 48,
-        "discard_rate": 0.4792,
+        "discard_rate": 0.5208,
         "failures": 0,
-        "max_instructions": 828000,
+        "max_instructions": 822000,
         "play_optimal": 1.0
       },
       "major_league": {
         "clear_taken": 1.0,
         "decisions": 48,
-        "discard_rate": 0.4792,
+        "discard_rate": 0.4583,
         "failures": 0,
-        "max_instructions": 699000,
+        "max_instructions": 681000,
         "play_optimal": 1.0
       },
       "rookie": {
-        "clear_taken": 0.7143,
+        "clear_taken": 0.75,
         "decisions": 48,
-        "discard_rate": 0.2083,
+        "discard_rate": 0.1667,
         "failures": 0,
-        "max_instructions": 128000,
-        "play_optimal": 0.7105
+        "max_instructions": 124000,
+        "play_optimal": 0.7
       }
     },
     "large_hand": {
       "competitive": {
         "clear_taken": 1.0,
-        "decisions": 43,
-        "discard_rate": 0.2326,
+        "decisions": 37,
+        "discard_rate": 0.1081,
         "failures": 0,
-        "max_instructions": 846000,
+        "max_instructions": 852000,
         "play_optimal": 1.0
       },
       "expert": {
         "clear_taken": 1.0,
-        "decisions": 43,
-        "discard_rate": 0.2558,
+        "decisions": 37,
+        "discard_rate": 0.1622,
         "failures": 0,
         "max_instructions": 1036000,
         "play_optimal": 1.0
       },
       "major_league": {
         "clear_taken": 1.0,
-        "decisions": 43,
-        "discard_rate": 0.2326,
+        "decisions": 37,
+        "discard_rate": 0.1351,
         "failures": 0,
-        "max_instructions": 844000,
+        "max_instructions": 851000,
         "play_optimal": 1.0
       },
       "rookie": {
-        "clear_taken": 0.9091,
-        "decisions": 43,
-        "discard_rate": 0.0233,
+        "clear_taken": 0.8261,
+        "decisions": 37,
+        "discard_rate": 0.027,
         "failures": 0,
-        "max_instructions": 168000,
-        "play_optimal": 0.7381
+        "max_instructions": 171000,
+        "play_optimal": 0.6111
       }
     },
     "large_hand/pvp": {
       "competitive": {
         "clear_taken": null,
-        "decisions": 8,
-        "discard_rate": 0.25,
+        "decisions": 14,
+        "discard_rate": 0.4286,
         "failures": 0,
-        "max_instructions": 893000,
+        "max_instructions": 854000,
         "play_optimal": 1.0
       },
       "expert": {
         "clear_taken": null,
-        "decisions": 8,
-        "discard_rate": 0.5,
+        "decisions": 14,
+        "discard_rate": 0.6429,
         "failures": 0,
-        "max_instructions": 1019000,
+        "max_instructions": 1026000,
         "play_optimal": 1.0
       },
       "major_league": {
         "clear_taken": null,
-        "decisions": 8,
-        "discard_rate": 0.25,
+        "decisions": 14,
+        "discard_rate": 0.4286,
         "failures": 0,
-        "max_instructions": 897000,
+        "max_instructions": 852000,
         "play_optimal": 1.0
       },
       "rookie": {
         "clear_taken": null,
-        "decisions": 8,
-        "discard_rate": 0.125,
+        "decisions": 14,
+        "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 168000,
-        "play_optimal": 0.7143
+        "max_instructions": 185000,
+        "play_optimal": 0.5
       }
     },
     "rule": {
       "competitive": {
-        "clear_taken": 0.9167,
+        "clear_taken": 0.75,
         "decisions": 36,
-        "discard_rate": 0.0556,
+        "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 89000,
-        "play_optimal": 0.6765
+        "max_instructions": 86000,
+        "play_optimal": 0.6667
       },
       "expert": {
-        "clear_taken": 0.9167,
+        "clear_taken": 0.75,
         "decisions": 36,
-        "discard_rate": 0.0556,
+        "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 89000,
-        "play_optimal": 0.6765
+        "max_instructions": 86000,
+        "play_optimal": 0.6667
       },
       "major_league": {
-        "clear_taken": 0.9167,
+        "clear_taken": 0.75,
         "decisions": 36,
-        "discard_rate": 0.0556,
+        "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 89000,
-        "play_optimal": 0.6765
+        "max_instructions": 86000,
+        "play_optimal": 0.6667
       },
       "rookie": {
-        "clear_taken": 0.9167,
+        "clear_taken": 0.75,
         "decisions": 36,
-        "discard_rate": 0.0556,
+        "discard_rate": 0.0,
         "failures": 0,
-        "max_instructions": 88000,
-        "play_optimal": 0.6765
+        "max_instructions": 85000,
+        "play_optimal": 0.6667
       }
     },
     "rule/pvp": {
       "competitive": {
         "clear_taken": null,
         "decisions": 12,
-        "discard_rate": 0.0,
+        "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 84000,
-        "play_optimal": 0.8333
+        "max_instructions": 86000,
+        "play_optimal": 0.4545
       },
       "expert": {
         "clear_taken": null,
         "decisions": 12,
-        "discard_rate": 0.0,
+        "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 84000,
-        "play_optimal": 0.8333
+        "max_instructions": 86000,
+        "play_optimal": 0.4545
       },
       "major_league": {
         "clear_taken": null,
         "decisions": 12,
-        "discard_rate": 0.0,
+        "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 84000,
-        "play_optimal": 0.8333
+        "max_instructions": 86000,
+        "play_optimal": 0.4545
       },
       "rookie": {
         "clear_taken": null,
         "decisions": 12,
-        "discard_rate": 0.0,
+        "discard_rate": 0.0833,
         "failures": 0,
-        "max_instructions": 84000,
-        "play_optimal": 0.8333
+        "max_instructions": 85000,
+        "play_optimal": 0.4545
       }
     },
     "scaling": {
       "competitive": {
         "clear_taken": 1.0,
-        "decisions": 39,
-        "discard_rate": 0.4872,
+        "decisions": 40,
+        "discard_rate": 0.4,
         "failures": 0,
-        "max_instructions": 629000,
+        "max_instructions": 670000,
         "play_optimal": 1.0
       },
       "expert": {
         "clear_taken": 1.0,
-        "decisions": 39,
-        "discard_rate": 0.4872,
+        "decisions": 40,
+        "discard_rate": 0.425,
         "failures": 0,
-        "max_instructions": 778000,
+        "max_instructions": 792000,
         "play_optimal": 1.0
       },
       "major_league": {
         "clear_taken": 1.0,
-        "decisions": 39,
-        "discard_rate": 0.4872,
-        "failures": 0,
-        "max_instructions": 629000,
-        "play_optimal": 1.0
-      },
-      "rookie": {
-        "clear_taken": 0.6875,
-        "decisions": 39,
-        "discard_rate": 0.2051,
-        "failures": 0,
-        "max_instructions": 127000,
-        "play_optimal": 0.6774
-      }
-    },
-    "scaling/pvp": {
-      "competitive": {
-        "clear_taken": null,
-        "decisions": 12,
-        "discard_rate": 0.5,
-        "failures": 0,
-        "max_instructions": 683000,
-        "play_optimal": 1.0
-      },
-      "expert": {
-        "clear_taken": null,
-        "decisions": 12,
-        "discard_rate": 0.5833,
-        "failures": 0,
-        "max_instructions": 837000,
-        "play_optimal": 1.0
-      },
-      "major_league": {
-        "clear_taken": null,
-        "decisions": 12,
-        "discard_rate": 0.5,
+        "decisions": 40,
+        "discard_rate": 0.425,
         "failures": 0,
         "max_instructions": 667000,
         "play_optimal": 1.0
       },
       "rookie": {
-        "clear_taken": null,
-        "decisions": 12,
-        "discard_rate": 0.3333,
+        "clear_taken": 0.7857,
+        "decisions": 40,
+        "discard_rate": 0.1,
         "failures": 0,
-        "max_instructions": 126000,
+        "max_instructions": 124000,
         "play_optimal": 0.75
+      }
+    },
+    "scaling/pvp": {
+      "competitive": {
+        "clear_taken": null,
+        "decisions": 11,
+        "discard_rate": 0.4545,
+        "failures": 0,
+        "max_instructions": 604000,
+        "play_optimal": 1.0
+      },
+      "expert": {
+        "clear_taken": null,
+        "decisions": 11,
+        "discard_rate": 0.5455,
+        "failures": 0,
+        "max_instructions": 749000,
+        "play_optimal": 1.0
+      },
+      "major_league": {
+        "clear_taken": null,
+        "decisions": 11,
+        "discard_rate": 0.4545,
+        "failures": 0,
+        "max_instructions": 603000,
+        "play_optimal": 1.0
+      },
+      "rookie": {
+        "clear_taken": null,
+        "decisions": 11,
+        "discard_rate": 0.1818,
+        "failures": 0,
+        "max_instructions": 124000,
+        "play_optimal": 0.8889
       }
     }
   },
@@ -319,5 +319,5 @@
     23,
     37
   ],
-  "wall_seconds": 19.96
+  "wall_seconds": 18.6
 }
