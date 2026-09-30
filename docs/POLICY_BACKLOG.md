@@ -51,9 +51,9 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
   `{ kind = "voucher", center = key }` records with no engine binding. The
   reader copies them through a string allowlist (`v_[a-z_]+`) instead of the
   card-zone identity path. The policy then derives `interest_cap` 10 or 20.
-- **Match-history list may show Windows junctions.** `tools/match_history.py`
-  review rejects junction paths, but the list view may still display them. Make
-  both paths use the same filter.
+- ~~**Match-history list may show Windows junctions.**~~ Fixed: listing and
+  `review` share `is_session_dir`, which requires a real directory (not a
+  symlink or junction) that resolves directly under the root.
 
 ## Measurement notes
 

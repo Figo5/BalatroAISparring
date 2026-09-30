@@ -140,6 +140,21 @@ def match_record(session_dir: Path) -> Optional[dict]:
     }
 
 
+def is_session_dir(root: Path, path: Path) -> bool:
+    """A real session workspace directly under ``root``: not a symlink and not
+    a Windows junction or any other link that resolves elsewhere. The listing
+    and ``review`` share this rule."""
+    try:
+        if not path.is_dir() or path.is_symlink():
+            return False
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return False
+        return path.resolve().parent == root.resolve()
+    except OSError:
+        return False
+
+
 def iter_sessions(root: Path) -> Iterable[Path]:
     if not root.is_dir():
         return []
@@ -147,9 +162,7 @@ def iter_sessions(root: Path) -> Iterable[Path]:
         children = list(root.iterdir())
     except OSError:
         return []
-    # Symlinked session folders are skipped: history reads only real
-    # workspaces under the root.
-    return sorted((c for c in children if c.is_dir() and not c.is_symlink()), key=lambda p: p.name)
+    return sorted((c for c in children if is_session_dir(root, c)), key=lambda p: p.name)
 
 
 def history(root: Path) -> dict:
@@ -269,7 +282,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "review":
         session_dir = args.root / args.session
-        if not session_dir.is_dir() or session_dir.resolve().parent != args.root.resolve():
+        if not is_session_dir(args.root, session_dir):
             print(f"unknown session: {args.session}", file=sys.stderr)
             return 2
         print(json.dumps(review(session_dir), indent=2, sort_keys=True, default=str))

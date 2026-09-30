@@ -121,6 +121,23 @@ def test_bad_host_timings_and_symlinked_sessions_are_tolerated():
         assert match_history.main(["--root", str(root), "review", "linked"]) == 2
 
 
+def test_links_resolving_outside_the_root_are_not_listed():
+    # A Windows junction is not a symlink to Python < 3.12; the shared rule
+    # also rejects any directory that resolves outside the root.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "sessions"
+        outside = Path(tmp) / "elsewhere" / "s9"
+        root.mkdir()
+        outside.mkdir(parents=True)
+        (root / "real").mkdir()
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+        names = [p.name for p in match_history.iter_sessions(root)]
+        assert names == ["real"], names
+        assert match_history.is_session_dir(root, root / "real")
+        assert not match_history.is_session_dir(root, root / "linked")
+        assert not match_history.is_session_dir(root, outside)
+
+
 def test_oversized_files_are_skipped():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
