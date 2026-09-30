@@ -214,7 +214,7 @@ def main(argv=None):
             c = [simulate(decide, b, difficulty) for b in blinds]
             diff = [int(y["cleared"]) - int(x["cleared"]) for x, y in zip(a, c)]
             mean = statistics.mean(diff)
-            se = statistics.stdev(diff) / (len(diff) ** 0.5)
+            se = statistics.stdev(diff) / (len(diff) ** 0.5) if len(diff) > 1 else 0.0
             out["difficulties"][difficulty] = {
                 "base_clear": round(statistics.mean(int(x["cleared"]) for x in a), 4),
                 "new_clear": round(statistics.mean(int(y["cleared"]) for y in c), 4),
@@ -222,6 +222,9 @@ def main(argv=None):
                 "changed_blinds": sum(1 for d in diff if d),
             }
         print(json.dumps(out, indent=2, sort_keys=True))
+        if args.json:
+            args.json.parent.mkdir(parents=True, exist_ok=True)
+            args.json.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return 0
     started = time.perf_counter()
     report = {"blinds": len(blinds), "seed": args.seed, "runtime": args.runtime, "difficulties": {}}

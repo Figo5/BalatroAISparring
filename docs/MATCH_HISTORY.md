@@ -44,7 +44,7 @@ logs:
 | Field | Meaning |
 |---|---|
 | `rows` | the play-phase rows to compare with screenshots, at most 200: tick, phase, hand size, blind requirement, current score and hand levels |
-| `budget_errors` | decisions that ended with `policy_budget_exceeded` |
+| `budget_errors` | decisions that ended with `policy_budget_exceeded`, i.e. the sandbox instruction budget. A service wall-clock timeout has its own code and is not counted here; it appears under `reasons` and `aborts` |
 | `decisions_with_10_plus_cards` | decisions made with 10 or more cards in hand |
 | `max_hand_size` | the largest hand seen |
 | `latency_by_hand_size` | latency p50 / p95 / max, split into ≤ 9 and 10+ cards |

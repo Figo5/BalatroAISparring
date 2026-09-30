@@ -88,6 +88,17 @@ return function(ctx)
 		end
 	end)
 
+	test("targeted_rule_matches_the_unwired_target_port", function()
+		-- TARGETED (never buy / sell consumables needing hand targets) is only
+		-- right while the live runtime wires no target_selection port. If this
+		-- fails, the port was wired: revisit TARGETED in baseline_policy.lua.
+		local handle = assert(io.open(ctx.repo_root .. "/AISparring/integration/companion_host.lua", "rb"))
+		local host = handle:read("*a")
+		handle:close()
+		ctx.eq(string.find(host, "target_selection", 1, true), nil, "companion_host_wires_no_target_port")
+		ctx.truthy(string.find(Support.source(env, "competitive"), "c_strength", 1, true) ~= nil, "targeted_list_present")
+	end)
+
 	test("policy_source_is_deterministic", function()
 		for i = 1, #difficulties do
 			local name = difficulties[i]

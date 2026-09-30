@@ -1895,10 +1895,12 @@ local VOUCHER_VALUE = {
 }
 
 -- Pack kind by center prefix (smart_packs tiers): Jokers first while a slot is
--- free, then planets; Standard packs rarely beat keeping the money. A Buffoon
+-- free, then planets; Standard packs rarely beat keeping the money. Arcana and
+-- Spectral are discounted: most of their cards need hand targets (TARGETED),
+-- which cannot be used live. A Buffoon
 -- pack with every Joker slot full is not opened at all (open_booster_score).
 local PACK_VALUE = {
-	{ "p_buffoon", 60 }, { "p_celestial", 30 }, { "p_arcana", 10 }, { "p_spectral", 0 }, { "p_standard", -20 },
+	{ "p_buffoon", 60 }, { "p_celestial", 30 }, { "p_arcana", -10 }, { "p_spectral", -10 }, { "p_standard", -20 },
 	{ "p_mp_standard", -20 },
 }
 

@@ -291,7 +291,9 @@ enhancement Tarots, Aura, Cryptid (`TARGETED`). The live runtime wires no
 target-selection port, so `CONSUMABLE_SELECTION` never occurs there. Such a
 card is therefore never bought, and a held one is sold to free its slot. Pack
 picks are already gated by the engine's own `can_use` predicate. If the port
-is ever wired, `TARGETED` must be revisited.
+is ever wired, `TARGETED` must be revisited: `test_source.lua` fails when
+`companion_host.lua` mentions `target_selection`. Arcana and Spectral packs
+are discounted (−10) for the same reason.
 
 Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
 first. Every other consumable keeps the flat `use_consumable` score.
@@ -355,8 +357,8 @@ center prefix:
 | Buffoon, all Joker slots full | never opened (only a Negative Joker could be taken) |
 | Buffoon, slot count unknown | 0 |
 | Celestial | +30 |
-| Arcana | +10 |
-| Spectral | 0 |
+| Arcana | −10 (most cards need hand targets) |
+| Spectral | −10 (same) |
 | Standard (`p_standard*`, Multiplayer `p_mp_standard*`) | -20 |
 
 **Picking inside a pack.**
