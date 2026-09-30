@@ -80,8 +80,10 @@ Constraints on all of it:
   - ~~The Eye and The Mouth need hand-type history this round~~: done
     (docs/HAND_HISTORY_DESIGN.md, architecture-reviewed). The Flint scales
     scoring uniformly and is not modelled;
-  - with fewer than five visible-rank cards (for example Stone cards), no
-    padded candidate is offered.
+  - ~~with fewer than five visible-rank cards (for example Stone cards), no
+    padded candidate is offered~~: fixed, padding falls back to other cards by
+    position (a test checks that a face-down card's hidden rank does not
+    change the offer).
 
 ## Consumable reasoning (in progress)
 

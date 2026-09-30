@@ -502,8 +502,10 @@ acceptance:
   signature (docs/BLIND_DISABLED_DESIGN.md).
 - **The Psychic** (`bl_psychic`, not `disabled`) scores only five-card hands.
   So `PLAY_CARDS` candidates then also include rank groups and two pair,
-  padded to five cards with the highest other visible-rank cards (at most 10,
-  within the usual 40-selection cap). Discard candidates are unchanged
+  padded to five cards with the highest other visible-rank cards, then, if
+  those run out, other cards (Stone, face-down) by position (at most 10,
+  within the usual 40-selection cap). The fill order depends only on visible
+  identities, never on hidden ones. Discard candidates are unchanged
   (`tests/engine/test_psychic_candidates.lua`).
 - **Owned vouchers** are exported as `self.owned_vouchers`, a plain key list
   (docs/OWNED_VOUCHERS_DESIGN.md):

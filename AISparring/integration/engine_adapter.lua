@@ -1195,6 +1195,13 @@ local function hand_selections(cards, count, max_k, cap, pad)
 			end
 			return a < b
 		end)
+		-- Then any other card by position (Stone, face-down): the order depends
+		-- only on which identities are visible, never on hidden ones.
+		for i = 1, count do
+			if rank_values[i] == nil then
+				kickers[#kickers + 1] = i
+			end
+		end
 		local function padded(base)
 			local used = {}
 			local out_sel = {}
