@@ -48,6 +48,13 @@ return function(ctx)
 				ctx.vector("joker_slot_anchored_" .. difficulty .. "_" .. k, result.action.item_ref)
 			end
 		end
+		-- A neutral Joker behind the x-mult blocks the adjacent swaps, so the
+		-- new Joker would stay at the end: price it there (review M-A).
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			local result = Support.run(env, difficulty, shop({ "j_gros_michel", "j_cavendish", "j_scary_face" }, { "j_photograph", "j_joker" }))
+			ctx.eq(result.action.item_ref, "shop:1", difficulty .. " blocked slot")
+			ctx.vector("joker_slot_blocked_" .. difficulty, result.action.item_ref)
+		end
 		-- Without a x-mult Joker owned, placement changes nothing.
 		local plain = Support.run(env, "competitive", shop({ "j_joker" }, { "j_scary_face", "j_joker" }))
 		ctx.vector("joker_slot_plain", plain.action.item_ref)

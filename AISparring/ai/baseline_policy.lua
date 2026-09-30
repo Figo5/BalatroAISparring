@@ -1721,8 +1721,8 @@ local function joker_gain(observation, center, edition)
 		return 0
 	end
 	-- Place the new Joker where the reorder step would: an additive
-	-- (+mult/+chips) Joker goes before the first owned x-mult Joker or
-	-- Polychrome. Only when the row after purchase qualifies for the
+	-- (+mult/+chips) Joker goes before the trailing x-mult / Polychrome
+	-- Jokers. Only when the row after purchase qualifies for the
 	-- estimate-based reorder (reorder_score): every Joker known, none pinned,
 	-- at most REORDER_EST_MAX_JOKERS. Otherwise it stays at the end.
 	local e = JOKER_EFFECTS[center]
@@ -1734,10 +1734,15 @@ local function joker_gain(observation, center, edition)
 		end
 	end
 	if movable and ADDITIVE[e[1]] then
+		-- Only past the trailing run of x-mult/Polychrome Jokers: the adapter
+		-- offers adjacent swaps, and each of those swaps is a clear gain, while
+		-- a neutral Joker in between would stop the move.
 		for i = #owned, 1, -1 do
 			local o = JOKER_EFFECTS[owned[i].center]
 			if owned[i].edition == "polychrome" or (o ~= nil and MULTIPLICATIVE[o[1]]) then
 				slot = i
+			else
+				break
 			end
 		end
 	end

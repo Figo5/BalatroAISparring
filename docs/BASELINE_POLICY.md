@@ -226,14 +226,16 @@ flush, straight and high card ×1 each. For example, with nothing owned a +4-mul
 Joker beats The Duo on this pair-heavy panel. With Gros Michel (+15 mult) owned,
 The Duo's ×2 wins. Unknown or scaling Jokers keep the flat kind value, and
 rule-changing Jokers switch this off. An additive Joker (+mult, +chips, hand bonuses, Half,
-Abstract) is priced before the first owned ×mult or Polychrome Joker. That is
-where the estimate-based reorder puts it, so this applies only when the row
-after purchase qualifies for that reorder: every Joker has a known effect, none
-is pinned, debuffed or redacted, and there are at most 8. Otherwise, for
-example with an unknown Joker or Misprint owned, the reorder never moves it,
-so it is priced at the end of the row. The greedy reorder takes a swap only
-above a 0.5% panel gain, so a ×mult Joker that affects only a low-weight panel
-hand may not be passed; this is not reproduced, but it is a known risk.
+Abstract) is priced before the **trailing run** of owned ×mult or Polychrome
+Jokers. The adapter's reorder offers only a reversal and adjacent swaps, each
+taken only above a 0.5% panel gain. Passing a ×mult Joker is such a gain,
+while a neutral Joker in between (per-card, held or another additive Joker)
+would stop the move. So this pricing applies only when the post-purchase row
+qualifies for the estimate-based reorder: every Joker known, none pinned,
+debuffed or redacted, and at most 8. Otherwise the new Joker is priced at the
+end of the row. Residual risk: the adapter sends no reorder when an
+engine-pinned card is present or its certificate cap is reached, and then the
+move never happens.
 
 A `REORDER_JOKERS` candidate is judged by the same panel when every owned Joker
 has a known effect and none is pinned. It is taken only if it improves the panel
@@ -383,8 +385,10 @@ part, so it is bounded deterministically:
 - **Absolute cap.** The discard allowance is `WORK + DISCARD_WORK`, but never
   more than `TOTAL_WORK` (30000) for the whole decision. Before this cap, a play
   estimate close to `PLAY_WORK` plus the full discard share could reach the
-  budget with 12 cards and 48+ Jokers (re-review N2). Absurd shapes now measure
-  at most 1.11M, and `test_budget.lua` holds them to a 1.25M guard.
+  budget with 12 cards and 48+ Jokers (re-review N2). The test's absurd shapes
+  now measure at most 1.11M and are held to a 1.25M guard. Heavy per-card
+  Joker rows (12 cards / 20–64 Jokers) reach about 1.28M, still well under the
+  budget.
 
 Measured worst cases use the real adapter catalogue (≈40 plays + ≈40 discards),
 3 discards and 3 hands left, and cards with enhancements, Red seals and

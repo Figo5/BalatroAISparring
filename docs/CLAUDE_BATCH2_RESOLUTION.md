@@ -29,8 +29,8 @@ the worst cases are 1.337M instructions on Lua 5.1 and 1.356M on LuaJIT (68%),
 with 0 failures. A wider sweep up to 20 Jokers peaks at 1.43M. The local
 re-review (`docs/CLAUDE_BATCH2_REREVIEW.md`, N2) showed that 12-card hands with
 48–64 Jokers could still exceed the budget, because the discard allowance was
-relative. An absolute `TOTAL_WORK` cap closes this: such shapes now measure at
-most 1.11M. Shapes past `PLAY_WORK` fall back to category ranking and stay
+relative. An absolute `TOTAL_WORK` cap closes this: the test's shapes now
+measure at most 1.11M, and heavy per-card Joker rows at most about 1.28M. Shapes past `PLAY_WORK` fall back to category ranking and stay
 under 0.25M.
 
 `tests/policy/test_budget.lua` covers:
@@ -142,7 +142,8 @@ follow-up commit:
   under a 1.25M guard; the old limits fail it.
 - **N3 (Low, tuning):** Joker vs a slightly cheaper pack when only one fits.
   The intrinsic margin is now `JOKER_MARGIN` = 50, so a $2–3 price gap no
-  longer decides. A Joker that drains the money still loses. Both of the
+  longer decides. A Joker that drains the money still loses to a pack about
+  $5 or more cheaper; against a pack only $2 cheaper it now wins. Both of the
   review's cases are pinned in `test_shop_joker_first.lua`.
 - **N4 (Low):** `astra_host_server_native.py` now waits for the database
   within its deadline. It needs the local game reference, so it is unverified
