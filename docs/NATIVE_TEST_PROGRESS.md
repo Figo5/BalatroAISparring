@@ -184,3 +184,18 @@ All tests use real engine shapes and failed first. Final verdict: READY to reins
 - Claude review of the diff.
 - Re-certification: the certificate binds the host and launcher sources, and the discovery marker binds the module hash. This change touches no staging, Lua patch or mod bytes and no measured launch behaviour, which is the same basis as the P2 role repair. So `practice_host.py reissue-certificate` re-issues the current certificate from its own seven receipts. It refuses unless live Balatro is closed, no host daemon is running, and the only certificate problems are `bound_tool_changed:launcher` or `bound_tool_changed:practice_host`. Anything else requires a full re-certification.
 - Restart the practice host daemon, then have the user retry Play → AI Sparring.
+
+## First human-played match (September 29, ~22:20–23:00 ET)
+
+The exit fix was applied on the user's machine. The host suite passed 99/99 there after the native-test correction `c398271`, including the real Windows exited-but-held reproduction, and the launcher suite passed 64/64. `reissue-certificate` refused once with `reissue_host_daemon_running state=foreign`, because the old daemon's discovery marker carried the previous `practice_host.py` hash. The old daemon was stopped and the marker renamed to `practice_host.old-before-exitfix.json`; the reissue then produced certificate `c19c6dfc…` from the `b48b5a0b…` receipts.
+
+Session `s-f6805722616c9375446bb20a`: the user clicked Play → AI Sparring in live Balatro.
+- **Hand-off (22:22–22:25):** the live exit was observed (PID 12720, `pid_reused=false`). This is the step that previously failed. The fresh backup, gates, match server and both staged roles followed. The live-exit to role-launch interval was about 3.5 min, much longer than the 40–60 s the user was told.
+- **Match:** the user played a full match against the AI and reported it as "pretty good".
+- **Report:** `phase=completed`, `code=practice_host_ok`, live verdict `session_passed`, `changed_roots=[]` and receipt verdict `passed`. The host lockout was cleared. The logs are `decisions.jsonl` (68 KB) and `results.jsonl` (28 KB).
+
+**The user's one finding:** the AI's jokers were not visible on the end screen. This comes from the companion send guard, which blocks `getEndGameJokers`/`receiveEndGameJokers` unconditionally (`mp_driver.lua` `SEND_BLOCKED`). The original requirement was only "no **pre-end** `getEndGameJokers`" (`PROTOTYPE_GATES.md`). A post-match-end allowance would restore the original presentation, but it changes companion Lua bytes, so it needs review, full re-certification and a reinstall.
+
+**Other follow-ups:**
+- Tell users to expect a hand-off of about 3–4 min, or shorten it.
+- A new host version should treat an old-hash discovery marker whose PID has exited as stale rather than foreign.
