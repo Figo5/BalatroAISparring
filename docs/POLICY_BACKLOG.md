@@ -61,7 +61,8 @@ Constraints on all of it:
 - **Open (review Lows):**
   - the adapter offers few five-card plays (rank groups have no kickers), so
     a split two pair has no five-card candidate under The Psychic;
-  - discard EV still counts plays of fewer than five cards under The Psychic;
+  - ~~discard EV still counts plays of fewer than five cards under The
+    Psychic~~: fixed (`MIN_CARDS`); neutral in A/B;
   - a boss disabled by Chicot or Luchador (`G.GAME.blind.disabled`) keeps its
     key, so the rule still applies. Publishing a `blind_disabled` flag is an
     adapter and observation change that needs review;

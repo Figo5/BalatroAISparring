@@ -194,6 +194,8 @@ local LEVELS = nil
 local WORK = 0
 -- The best certified Joker purchase in this shop decision (best_joker), or false.
 local SHOP_BEST = false
+-- Minimum cards a play needs to score this decision (5 under The Psychic).
+local MIN_CARDS = 0
 -- BUY_ITEM Joker scores computed by best_joker, reused by score_of (per decision).
 local BUY_SCORES = {}
 -- Interest cap (interest dollars) for this decision: CONF.interest_cap, raised
@@ -1021,7 +1023,7 @@ local RANK_NAMES = { [2] = "2", [3] = "3", [4] = "4", [5] = "5", [6] = "6", [7] 
 local function best_play_value(cards, jokers)
 	local best = 0
 	local function try(list)
-		if #list == 0 or #list > 5 then
+		if #list == 0 or #list > 5 or #list < MIN_CARDS then
 			return
 		end
 		local held = {}
@@ -1223,7 +1225,7 @@ local function discard_ev(observation, discard_refs, jokers, need)
 	-- `play` is the exact target play (kept cards plus synthetic draws), priced
 	-- with the effect-bearing kept cards it leaves in hand.
 	local function consider(p, play)
-		if p <= 0 or #play == 0 or #play > 5 then
+		if p <= 0 or #play == 0 or #play > 5 or #play < MIN_CARDS then
 			return
 		end
 		local held = nil
@@ -1565,6 +1567,9 @@ local function analyse_plays(observation, actions, count)
 	end
 	-- Boss awareness (public blind key): The Psychic must play 5 cards.
 	local psychic = CONF.boss_aware and type(observation.match) == "table" and observation.match.blind == "bl_psychic"
+	if psychic then
+		MIN_CARDS = 5
+	end
 	local best = nil
 	local best_name = nil
 	for i = 1, count do
@@ -1576,7 +1581,7 @@ local function analyse_plays(observation, actions, count)
 				if value ~= nil and (value ~= value or value >= ESTIMATE_CAP) then
 					value = ESTIMATE_CAP
 				end
-				if psychic and #cards < 5 then
+				if #cards < MIN_CARDS then
 					-- The Psychic: a hand of fewer than 5 cards scores nothing.
 					value = 0
 				end
@@ -2704,6 +2709,7 @@ return function(observation, actions)
 	LEVELS = nil
 	WORK = 0
 	SHOP_BEST = false
+	MIN_CARDS = 0
 	BUY_SCORES = {}
 	INTEREST_CAP = CONF.interest_cap
 	local owned_vouchers = type(observation.self) == "table" and observation.self.vouchers or nil

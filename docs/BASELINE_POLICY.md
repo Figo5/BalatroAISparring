@@ -221,7 +221,10 @@ discards.
 **Boss awareness (`boss_aware`, Competitive and above).** The blind key in
 `match.blind` is public (shown on screen). Under **The Psychic** (`bl_psychic`,
 "must play 5 cards"), a play of fewer than five cards is estimated at 0, so
-five-card plays win and discard mode can trigger. Other bosses need history
+five-card plays win and discard mode can trigger. The draw-aware discard
+search applies the same rule (`MIN_CARDS`, reset per decision). That change
+was neutral in paired A/B (0.0% / +0.3%), and it keeps the estimate
+consistent. Other bosses need history
 (The Eye, The Mouth) or change scoring uniformly (The Flint), and are not
 modelled yet.
 
