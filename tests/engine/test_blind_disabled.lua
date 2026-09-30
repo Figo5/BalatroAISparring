@@ -64,6 +64,30 @@ return function(ctx)
 		eq(c2, "reader_bad_view", "orphan code")
 	end)
 
+	test("reader_cross_check_edges", function()
+		-- View false with no engine flag: accepted (boss rules stay on).
+		local unset = step(engine({}))
+		unset.ui_view.match.blind_disabled = false
+		is_true(bundle.reader.capture(unset.runtime, unset.ui_view) ~= nil, "false with unset engine")
+		-- View false while the engine says disabled: rejected.
+		local lie = step(engine({ disabled = true }))
+		lie.ui_view.match.blind_disabled = false
+		local handle, code = bundle.reader.capture(lie.runtime, lie.ui_view)
+		eq(handle, nil, "false vs engine true")
+		eq(code, "reader_bad_view", "false vs engine true code")
+	end)
+
+	test("flipping_disabled_changes_the_decision_epoch", function()
+		local e = engine({ disabled = false })
+		local pipeline = support.pipeline(bundle, e, {})
+		local first = assert(pipeline.adapter.step())
+		local same = assert(pipeline.adapter.step())
+		eq(same.epoch, first.epoch, "unchanged state keeps the epoch")
+		e.G.GAME.blind.disabled = true
+		local flipped = assert(pipeline.adapter.step())
+		is_true(flipped.epoch ~= first.epoch, "disabled flip moves the epoch")
+	end)
+
 	test("observation_types_the_flag_as_bool", function()
 		local ex = export(engine({ disabled = true }))
 		local frame = {}
