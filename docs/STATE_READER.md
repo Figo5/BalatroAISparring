@@ -124,6 +124,11 @@ ui_view = {
       consumable = { <consumable record>, ... },     -- positional
     },
     deck = { total = int },        -- total ONLY; by_suit/by_rank unsupported and never read
+    hand_levels = {                -- optional; only allowlisted hand tokens (copy_hand_levels)
+      pair = { level = int, chips = int, mult = int,
+               played_this_round = int },  -- optional, 0..1000, hand phases only; else reader_bad_view
+    },
+    owned_vouchers = { "v_...", ... },     -- optional, see below
   },
 
   opponent = {                     -- opt-in; dropped unless certified == true

@@ -446,6 +446,72 @@ return function(ctx)
 		end
 	end)
 
+	-- A Pair (A A) and a Heart flush (A 2 5 9 K) in one hand; normally the
+	-- flush wins. docs/HAND_HISTORY_DESIGN.md.
+	local function eye_mouth_frame(blind, played, extra)
+		local frame = Support.pair_frame()
+		local function c(rank, suit)
+			return { kind = "card", rank = rank, suit = suit, center = "c_base", face_down = false }
+		end
+		frame.self.hand = { c("Ace", "Hearts"), c("Ace", "Diamonds"), c("2", "Hearts"), c("5", "Hearts"), c("9", "Hearts"), c("King", "Hearts") }
+		frame.certificates.items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2" } },
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:3", "hand:4", "hand:5", "hand:6" } },
+			{ type = "DISCARD_CARDS", certified = true, card_refs = { "hand:3", "hand:4" } },
+		}
+		frame.match.blind = blind
+		frame.self.hand_levels = {}
+		for name, n in pairs(played) do
+			local base = ({ pair = { 10, 2 }, flush = { 35, 4 }, high_card = { 5, 1 } })[name]
+			frame.self.hand_levels[name] = { level = 1, chips = base[1], mult = base[2], played_this_round = n }
+		end
+		for k, v in pairs(extra or {}) do
+			frame.match[k] = v
+		end
+		return frame
+	end
+
+	local function pick(difficulty, frame)
+		local result = Support.run(env, difficulty, frame)
+		ctx.is_true(result.ok == true, difficulty)
+		if result.action.type ~= "PLAY_CARDS" then
+			return result.action.type
+		end
+		return #result.action.card_refs == 2 and "pair" or "flush"
+	end
+
+	test("eye_and_mouth_block_hand_types", function()
+		for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+			ctx.eq(pick(difficulty, eye_mouth_frame("bl_small", {})), "flush", difficulty .. " normal")
+			-- The Eye: the flush was already played this round.
+			ctx.eq(pick(difficulty, eye_mouth_frame("bl_eye", { flush = 1 })), "pair", difficulty .. " eye")
+			-- The Mouth: a Pair was played first, so only Pairs score.
+			ctx.eq(pick(difficulty, eye_mouth_frame("bl_mouth", { pair = 1 })), "pair", difficulty .. " mouth")
+			-- Disabled (Chicot / Luchador): back to normal.
+			ctx.eq(pick(difficulty, eye_mouth_frame("bl_eye", { flush = 1 }, { blind_disabled = true })), "flush", difficulty .. " disabled")
+			-- Nothing played yet this round: no restriction.
+			ctx.eq(pick(difficulty, eye_mouth_frame("bl_mouth", { flush = 0 })), "flush", difficulty .. " first hand")
+			-- Both types already played under The Eye: every play scores
+			-- nothing, so a discard is preferred.
+			ctx.eq(pick(difficulty, eye_mouth_frame("bl_eye", { flush = 1, pair = 1 })), "DISCARD_CARDS", difficulty .. " all blocked")
+		end
+		-- Rookie is not boss-aware.
+		ctx.eq(pick("rookie", eye_mouth_frame("bl_eye", { flush = 1 })), "flush", "rookie")
+	end)
+
+	test("eye_blocks_types_in_the_rule_joker_fallback", function()
+		-- Four Fingers switches the estimate off; the category fallback must
+		-- still respect The Eye.
+		for _, difficulty in ipairs({ "competitive", "expert" }) do
+			local frame = eye_mouth_frame("bl_eye", { flush = 1 })
+			frame.self.jokers = { Support.joker("j_four_fingers") }
+			ctx.eq(pick(difficulty, frame), "pair", difficulty .. " fallback eye")
+			local normal = eye_mouth_frame("bl_small", {})
+			normal.self.jokers = { Support.joker("j_four_fingers") }
+			ctx.eq(pick(difficulty, normal), "flush", difficulty .. " fallback normal")
+		end
+	end)
+
 	test("planets_are_used_before_other_consumables", function()
 		local result = Support.run(env, "competitive", use_frame({ "c_fool", "c_jupiter" }, 5, 0))
 		ctx.eq(result.action.type, "USE_CONSUMABLE")

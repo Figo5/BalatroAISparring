@@ -116,7 +116,9 @@ A first step towards full-run (Gauntlet) metrics:
   - The Club, Goad, Window and Head debuff their suit (ante 1+);
   - The Plant debuffs face cards (ante 4+);
   - The Psychic scores only 5-card hands (ante 1+);
-  - The Needle allows one hand, and The Water allows no discards (ante 2+).
+  - The Needle allows one hand, and The Water allows no discards (ante 2+);
+  - The Mouth allows only the first hand type played (ante 2+);
+  - The Eye allows no repeated hand type (ante 3+).
 
 Plays are scored with the shared reference model. So this measures how well
 play and discard decisions are sequenced under real random draws within that
@@ -133,28 +135,33 @@ brackets:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| blinds cleared | 58.6% | 81.7% | 81.4% | 80.8% |
-| cleared, ante 1 / 2 / 3 / 4 | 81 / 64 / 53 / 36% | 97 / 84 / 82 / 63% | 94 / 86 / 81 / 64% | 91 / 86 / 81 / 66% |
-| small (120) / big (120) | 78 / 61% | 96 / 85% | 96 / 85% | 95 / 84% |
-| Club (14) / Goad (19) / Window (23) / Head (19) | 36 / 47 / 57 / 37% | 71 / 74 / 57 / 79% | 71 / 74 / 57 / 68% | 64 / 74 / 65 / 68% |
-| The Psychic (19) | 37% | 79% | 84% | 74% |
-| The Needle (13) / The Water (11) | 8 / 0% | 62 / 0% | 62 / 0% | 69 / 0% |
-| The Plant (2, ante 4 only) | 100% | 100% | 100% | 100% |
+| blinds cleared | 55.6% | 77.8% | 77.8% | 78.1% |
+| cleared, ante 1 / 2 / 3 / 4 | 79 / 60 / 52 / 31% | 97 / 81 / 77 / 57% | 94 / 81 / 77 / 59% | 92 / 82 / 77 / 61% |
+| small (120) / big (120) | 76 / 62% | 90 / 85% | 91 / 85% | 92 / 85% |
+| Club (12) / Goad (11) / Window (21) / Head (12) | 42 / 27 / 62 / 50% | 75 / 64 / 76 / 92% | 83 / 64 / 76 / 75% | 67 / 64 / 76 / 75% |
+| The Psychic (19) | 11% | 74% | 74% | 79% |
+| The Mouth (14) / The Eye (9) | 14 / 33% | 29 / 44% | 29 / 44% | 36 / 44% |
+| The Needle (6) / The Water (12) | 0 / 8% | 67 / 8% | 67 / 8% | 67 / 8% |
+| The Plant (4, ante 4 only) | 0% | 0% | 0% | 0% |
 | failures / step-cap stops | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| max sandbox instructions | 157k | 868k | 865k | 974k |
+| max sandbox instructions | 142k | 730k | 726k | 827k |
 
 The strong tiers are close to each other here. Major League's differences are
 mostly in shop and reserve settings, which this simulator does not exercise.
-Per-boss rows rest on 2–23 blinds and are noisy. Adding The Psychic reshuffled
+Per-boss rows rest on 4–21 blinds and are noisy. Adding bosses reshuffles
 which boss each seed draws, so these rows are not comparable with earlier
-reports. For example, The Water is 0 of 11 here but was 25% of 12 before.
+reports.
 
-**Boss awareness under The Psychic** (`boss_aware`) is judged by paired A/B
-(720 blinds, seed 7): +0.7% overall for Competitive and Expert, from 7 changed
-blinds netting +5. The Psychic is about 4% of blinds, so its own clear rate
-rises by roughly 17 points. The adapter also offers rank groups and two pair
-padded to five cards under The Psychic. That raised Psychic clears on these
-19 blinds from 68% to 79% / 84% / 74% (Competitive / Major League / Expert).
+Boss awareness is judged by paired A/B on 720 blinds (seed 7):
+
+| Rule | Competitive | Expert |
+|---|---|---|
+| The Psychic (`boss_aware`) | +0.7% | +0.7% |
+| The Eye and The Mouth (`played_this_round`) | +0.7% (t = 1.7) | +0.4% (t = 1.0) |
+
+The adapter also offers rank groups and two pair padded to five cards under
+The Psychic. On the earlier 19-blind sample, that raised Psychic clears from
+68% to 74–84%.
 
 ## Run simulator (`tests/benchmark_runs.py`)
 
@@ -186,18 +193,18 @@ git show 5b0cd64:AISparring/ai/baseline_policy.lua > /tmp/old.lua     # pre-retu
 python tests/benchmark_runs.py --paired /tmp/old.lua --seed 37 --runs 150   # A/B on the same seeds
 ```
 
-60 runs (seed 11, LuaJIT), from `runs_report.json`, with The Psychic
-included and the current policy:
+60 runs (seed 11, LuaJIT), from `runs_report.json`, with every modelled boss
+and the current policy:
 
 | | Rookie | Competitive | Major League | Expert |
 |---|---|---|---|---|
-| mean blinds cleared (of 18) | 5.0 | 11.8 | 11.8 | 11.5 |
-| mean ante reached | 2.3 | 4.6 | 4.5 | 4.5 |
-| reached ante 4 / 6 | 20 / 7% | 78 / 32% | 77 / 32% | 78 / 30% |
-| planets / rerolls per run | 3.0 / 1.0 | 8.4 / 3.9 | 8.1 / 3.8 | 7.8 / 3.9 |
-| money at the end | $7 | $31 | $34 | $35 |
+| mean blinds cleared (of 18) | 5.1 | 11.4 | 11.3 | 10.7 |
+| mean ante reached | 2.4 | 4.4 | 4.4 | 4.2 |
+| reached ante 4 / 6 | 20 / 7% | 77 / 25% | 73 / 28% | 68 / 25% |
+| planets / rerolls per run | 2.9 / 1.0 | 7.7 / 3.2 | 7.1 / 3.2 | 6.5 / 3.2 |
+| money at the end | $7 | $31 | $34 | $33 |
 | failures | 0 | 0 | 0 | 0 |
-| max sandbox instructions | 154k | 868k | 868k | 1,004k |
+| max sandbox instructions | 139k | 780k | 780k | 907k |
 
 This simulator exposed Major League and Expert hoarding money above the
 interest cap. Their economy was retuned and judged on held-out seeds

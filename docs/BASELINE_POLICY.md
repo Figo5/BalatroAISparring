@@ -224,9 +224,20 @@ discards.
 five-card plays win and discard mode can trigger. The draw-aware discard
 search applies the same rule (`MIN_CARDS`, reset per decision). That change
 was neutral in paired A/B (0.0% / +0.3%), and it keeps the estimate
-consistent. Other bosses need history
-(The Eye, The Mouth) or change scoring uniformly (The Flint), and are not
-modelled yet.
+consistent. Under **The Eye** (no repeat
+hand types) and **The Mouth** (one hand type per round), the AI's own
+`hand_levels[*].played_this_round` blocks hand types. A blocked type is
+estimated at 0 in the play estimate, the discard search and the category
+fallback, so a discard wins when every play is blocked
+(docs/HAND_HISTORY_DESIGN.md). A disabled boss (`match.blind_disabled`)
+lifts every boss rule. The Flint scales scoring uniformly and is not modelled.
+
+**Category fallback.** Without an estimate (rule-changing Jokers, absurd
+sizes), plays are ranked by hand category from `classify_scoring`, then the
+top scoring rank, then the rank sum. Discards sit between High Card and Pair.
+This replaced the older `evaluate()` ranking, which ignored Wild cards in
+flushes and misread Five of a Kind. The change also recovered about 1.9 KB of
+source.
 
 ### 4.2 Shop Jokers and Joker order (Competitive, Major League)
 
@@ -491,6 +502,7 @@ stripped copy, which:
 | This change, if unstripped | 66,538–66,545 bytes (over the cap) |
 | This change, stripped | **51,544–51,551 bytes** (≈14.0 KB, 21%, under the cap) |
 | After the follow-up backlog commits | 53,110–53,117 bytes (≈12.4 KB under the cap, 4.2 KB under the guard) |
+| After boss awareness (Psychic, Eye, Mouth), with the fallback rewritten | 55,279–55,286 bytes (≈10.2 KB under the cap, 2.0 KB under the guard) |
 
 `BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).
 `tests/policy/test_source.lua` fails when a rendered source exceeds it or when

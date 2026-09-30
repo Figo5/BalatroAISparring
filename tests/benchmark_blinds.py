@@ -5,7 +5,8 @@ A step towards full-run (Gauntlet) metrics. Each simulated blind deals from a
 shuffled standard 52-card deck and lets the policy act repeatedly (play or
 discard, then draw back to the hand size) until the displayed requirement is
 reached or no hands remain. Boss blinds apply the effects the fixture can
-represent (suit / face debuffs, The Needle, The Water, The Psychic). Every decision goes
+represent (suit / face debuffs, The Needle, The Water, The Psychic, The Eye,
+The Mouth). Every decision goes
 through the real trusted
 pipeline: engine fixture -> EngineAdapter -> StateReader -> AIObservation ->
 sandboxed policy (tools/lua/policy_env.lua).
@@ -58,7 +59,12 @@ BOSSES = {
     "bl_plant": {"debuff": "face", "min_ante": 4}, "bl_needle": {"hands": 1, "req": 1.0, "min_ante": 2},
     "bl_water": {"discards": 0, "min_ante": 2},
     "bl_psychic": {"min_cards": 5, "min_ante": 1},
+    "bl_eye": {"history": "eye", "min_ante": 3},
+    "bl_mouth": {"history": "mouth", "min_ante": 2},
 }
+# Engine hand names for hand types the reference classifier can return.
+ENGINE_HAND = {name: entry[2] for name, entry in bp.LEVEL_UP.items()}
+ENGINE_HAND.update({"five": "Five of a Kind", "flush_house": "Flush House", "flush_five": "Flush Five"})
 BOSS_KEYS = sorted(BOSSES)
 
 DECIDE = r'''
@@ -99,6 +105,13 @@ return function(repo, policy_path)
 			blind_key = state.boss or "bl_small",
 		})
 		engine.G.GAME.blind.chips = state.requirement
+		if state.played ~= nil then
+			local hands = {}
+			for name, n in pairs(state.played) do
+				hands[name] = { level = 1, chips = n.chips, mult = n.mult, visible = true, played_this_round = n.count }
+			end
+			engine.G.GAME.hands = hands
+		end
 		local step, code = support.pipeline(bundle, engine, {}).adapter.step()
 		if step == nil then
 			return { ok = false, code = tostring(code) }
@@ -152,6 +165,7 @@ def simulate(decide, blind, difficulty):
         deck.append(card)
     hand = [deck.pop(0) for _ in range(HAND_SIZE)]
     chips, hands_left, discards_left = 0, effect.get("hands", HANDS), effect.get("discards", DISCARDS)
+    played = {}
     stats = {"decisions": 0, "failures": 0, "discards": 0, "latency": [], "instructions": 0, "step_cap": 0}
     for step in range(MAX_STEPS + 1):
         if chips >= blind["requirement"] or hands_left == 0:
@@ -163,6 +177,10 @@ def simulate(decide, blind, difficulty):
             "hand": hand, "jokers": blind["jokers"], "hands_left": hands_left,
             "discards_left": discards_left, "chips": chips, "requirement": blind["requirement"],
             "boss": blind.get("boss"),
+            "played": {
+                ENGINE_HAND[name]: {"count": count, "chips": bp.HAND_BASE[name][0], "mult": bp.HAND_BASE[name][1]}
+                for name, count in played.items()
+            } if effect.get("history") else None,
         }
         result = bp.from_lua(decide(bp.to_lua(LUA, state), difficulty))
         stats["decisions"] += 1
@@ -175,7 +193,12 @@ def simulate(decide, blind, difficulty):
         chosen = [hand[i] for i in idx]
         rest = [hand[i] for i in range(len(hand)) if i not in idx]
         if result["type"] == "PLAY_CARDS":
-            if len(chosen) >= effect.get("min_cards", 0):
+            name = bp.classify(chosen)[0]
+            history = effect.get("history")
+            blocked = (history == "eye" and played.get(name, 0) > 0) or (
+                history == "mouth" and played and name not in played)
+            played[name] = played.get(name, 0) + 1
+            if len(chosen) >= effect.get("min_cards", 0) and not blocked:
                 chips += int(bp.reference_score(chosen, rest, blind["jokers"]))
             hands_left -= 1
         else:
@@ -255,7 +278,7 @@ def main(argv=None):
     report["wall_seconds"] = round(time.perf_counter() - started, 2)
     report["interpretation"] = (
         "blind clears under real random draws, scored with the shared reference model; "
-        "not a Balatro win rate (only debuff/hand/discard/Psychic boss effects; no scaling Jokers, shops or opponents)"
+        "not a Balatro win rate (only debuff/hand/discard/Psychic/Eye/Mouth boss effects; no scaling Jokers, shops or opponents)"
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.json:

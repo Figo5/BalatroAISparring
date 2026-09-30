@@ -821,6 +821,13 @@ local function build_self(G, phase, hand_cards)
 				if level ~= nil and level <= 100000 and hand_chips ~= nil and hand_mult ~= nil then
 					levels = levels or {}
 					levels[name] = { level = level, chips = hand_chips, mult = hand_mult }
+					-- The AI's own hands this round (The Eye / The Mouth), only
+					-- while a hand is being played: elsewhere the counts are stale
+					-- (docs/HAND_HISTORY_DESIGN.md).
+					local played = int_field(rget(entry, "played_this_round"))
+					if PHASE_ALLOWS_HAND[phase] == true and played ~= nil and played >= 0 and played <= 1000 then
+						levels[name].played_this_round = played
+					end
 				end
 			end
 		end

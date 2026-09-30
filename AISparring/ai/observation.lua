@@ -397,6 +397,13 @@ local function read_hand_levels(t)
 			end
 			out = out or {}
 			out[name] = { level = level, chips = chips, mult = mult }
+			if rawget(entry, "played_this_round") ~= nil then
+				local c4, played = read_int(entry, "played_this_round", 0, 1000)
+				if c4 ~= nil or played == nil then
+					return CODE.BAD_FIELD
+				end
+				out[name].played_this_round = played
+			end
 		end
 	end
 	return nil, out

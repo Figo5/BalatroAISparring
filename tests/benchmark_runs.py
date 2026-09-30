@@ -122,6 +122,14 @@ return function(repo, policy_path)
 		for name, entry in pairs(state.levels) do
 			hands[entry.engine] = { level = entry.level, chips = entry.chips, mult = entry.mult, visible = true }
 		end
+		for engine_name, count in pairs(state.played or {}) do
+			local h = hands[engine_name]
+			if h == nil then
+				h = { level = 1, chips = state.base[engine_name][1], mult = state.base[engine_name][2], visible = true }
+				hands[engine_name] = h
+			end
+			h.played_this_round = count
+		end
 		engine.G.GAME.hands = hands
 		local step, code = support.pipeline(bundle, engine, {}).adapter.step()
 		if step == nil then
@@ -182,6 +190,8 @@ def play_blind(fn, run, blind, difficulty, stats):
     hand = [deck.pop(0) for _ in range(bb.HAND_SIZE)]
     chips, hands_left, discards_left = 0, effect.get("hands", bb.HANDS), effect.get("discards", bb.DISCARDS)
     levels = {name: {"chips": e["chips"], "mult": e["mult"]} for name, e in run["levels"].items()}
+    played = {}
+    history = effect.get("history")
     for step in range(bb.MAX_STEPS + 1):
         if chips >= blind["requirement"] or hands_left == 0:
             break
@@ -193,6 +203,8 @@ def play_blind(fn, run, blind, difficulty, stats):
             "dollars": run["money"], "ante": blind["ante"], "round": run["round"],
             "hands_left": hands_left, "discards_left": discards_left, "chips": chips,
             "requirement": blind["requirement"], "boss": blind.get("boss"), "levels": run["levels"],
+            "played": {bb.ENGINE_HAND[n]: c for n, c in played.items()} if history else None,
+            "base": {bb.ENGINE_HAND[n]: list(bp.HAND_BASE[n]) for n in played} if history else None,
         }
         result = decide(fn, state, difficulty, stats)
         if not result.get("ok") or result.get("type") not in ("PLAY_CARDS", "DISCARD_CARDS"):
@@ -203,7 +215,11 @@ def play_blind(fn, run, blind, difficulty, stats):
         chosen = [hand[i] for i in idx]
         rest = [hand[i] for i in range(len(hand)) if i not in idx]
         if result["type"] == "PLAY_CARDS":
-            if len(chosen) >= effect.get("min_cards", 0):
+            name = bp.classify(chosen)[0]
+            blocked = (history == "eye" and played.get(name, 0) > 0) or (
+                history == "mouth" and played and name not in played)
+            played[name] = played.get(name, 0) + 1
+            if len(chosen) >= effect.get("min_cards", 0) and not blocked:
                 chips += int(bp.reference_score(chosen, rest, [j["center"] for j in run["jokers"]], levels))
             hands_left -= 1
         else:

@@ -196,6 +196,21 @@ local WORK = 0
 local SHOP_BEST = false
 -- Minimum cards a play needs to score this decision (5 under The Psychic).
 local MIN_CARDS = 0
+-- Hand types that score nothing this decision (docs/HAND_HISTORY_DESIGN.md):
+-- under The Eye the types already played this round; under The Mouth every
+-- type but those played. nil when no such boss is active.
+local EYE_PLAYED = nil
+local MOUTH_ONLY = nil
+
+local function blocked_hand(name)
+	if EYE_PLAYED ~= nil and EYE_PLAYED[name] then
+		return true
+	end
+	if MOUTH_ONLY ~= nil and not MOUTH_ONLY[name] then
+		return true
+	end
+	return false
+end
 -- BUY_ITEM Joker scores computed by best_joker, reused by score_of (per decision).
 local BUY_SCORES = {}
 -- Interest cap (interest dollars) for this decision: CONF.interest_cap, raised
@@ -219,72 +234,23 @@ local function byte_less(a, b)
 	return na < nb
 end
 
+-- Accepted rank spellings: single characters (A K Q J T, either case, 2-9),
+-- "10" and the full names (capitalised or lower case).
+local RANK_OF = {
+	A = 14, a = 14, K = 13, k = 13, Q = 12, q = 12, J = 11, j = 11, T = 10, t = 10, ["10"] = 10,
+	["2"] = 2, ["3"] = 3, ["4"] = 4, ["5"] = 5, ["6"] = 6, ["7"] = 7, ["8"] = 8, ["9"] = 9,
+	Ace = 14, ace = 14, King = 13, king = 13, Queen = 12, queen = 12, Jack = 11, jack = 11, Ten = 10, ten = 10,
+}
+
 local function rank_value(rank)
-	if type(rank) ~= "string" then
-		return nil
-	end
-	local n = #rank
-	if n == 1 then
-		if rank == "A" or rank == "a" then
-			return 14
-		end
-		if rank == "K" or rank == "k" then
-			return 13
-		end
-		if rank == "Q" or rank == "q" then
-			return 12
-		end
-		if rank == "J" or rank == "j" then
-			return 11
-		end
-		if rank == "T" or rank == "t" then
-			return 10
-		end
-		local b = string.byte(rank, 1)
-		if b ~= nil and b >= 50 and b <= 57 then
-			return b - 48
-		end
-		return nil
-	end
-	if n == 2 and string.byte(rank, 1) == 49 and string.byte(rank, 2) == 48 then
-		return 10
-	end
-	if rank == "Ace" or rank == "ace" then
-		return 14
-	end
-	if rank == "King" or rank == "king" then
-		return 13
-	end
-	if rank == "Queen" or rank == "queen" then
-		return 12
-	end
-	if rank == "Jack" or rank == "jack" then
-		return 11
-	end
-	if rank == "Ten" or rank == "ten" then
-		return 10
-	end
-	return nil
+	return type(rank) == "string" and RANK_OF[rank] or nil
 end
 
+-- Suits by their first letter, either case.
+local SUIT_OF = { H = "H", h = "H", D = "D", d = "D", C = "C", c = "C", S = "S", s = "S" }
+
 local function suit_key(suit)
-	if type(suit) ~= "string" then
-		return nil
-	end
-	local c = string.sub(suit, 1, 1)
-	if c == "H" or c == "h" then
-		return "H"
-	end
-	if c == "D" or c == "d" then
-		return "D"
-	end
-	if c == "C" or c == "c" then
-		return "C"
-	end
-	if c == "S" or c == "s" then
-		return "S"
-	end
-	return nil
+	return type(suit) == "string" and SUIT_OF[string.sub(suit, 1, 1)] or nil
 end
 
 local function center_bonus(center)
@@ -372,17 +338,6 @@ local function cards_for(observation, refs)
 	return out
 end
 
-local function has_straight(counts)
-	if (counts[14] or 0) > 0 and (counts[2] or 0) > 0 and (counts[3] or 0) > 0 and (counts[4] or 0) > 0 and (counts[5] or 0) > 0 then
-		return 5
-	end
-	for start = 2, 10 do
-		if (counts[start] or 0) > 0 and (counts[start + 1] or 0) > 0 and (counts[start + 2] or 0) > 0 and (counts[start + 3] or 0) > 0 and (counts[start + 4] or 0) > 0 then
-			return start + 4
-		end
-	end
-	return nil
-end
 
 local function in_run(counts, rv)
 	for start = rv - 2, rv do
@@ -400,244 +355,6 @@ local function in_run(counts, rv)
 	return false
 end
 
-local function evaluate(cards)
-	local n = #cards
-	if n == 0 then
-		return nil
-	end
-	local counts = {}
-	local suitc = {}
-	local sum = 0
-	local bonus = 0
-	local debuffed = 0
-	for i = 1, n do
-		local c = cards[i]
-		if type(c) ~= "table" or c.redacted == true then
-			return nil
-		end
-		local rv = rank_value(c.rank)
-		local sk = suit_key(c.suit)
-		if rv == nil or sk == nil then
-			return nil
-		end
-		counts[rv] = (counts[rv] or 0) + 1
-		suitc[sk] = (suitc[sk] or 0) + 1
-		if c.debuff == true then
-			debuffed = debuffed + 1
-		else
-			sum = sum + rv
-			bonus = bonus + center_bonus(c.center) + edition_bonus(c.edition)
-		end
-	end
-	local pairs_n = 0
-	local trips_n = 0
-	local quads_n = 0
-	local pair_hi = 0
-	local trip_hi = 0
-	local quad_hi = 0
-	local max_rank = 0
-	for r = 2, 14 do
-		local c = counts[r] or 0
-		if c > 0 and r > max_rank then
-			max_rank = r
-		end
-		if c == 4 then
-			quads_n = quads_n + 1
-			if r > quad_hi then
-				quad_hi = r
-			end
-		end
-		if c == 3 then
-			trips_n = trips_n + 1
-			if r > trip_hi then
-				trip_hi = r
-			end
-		end
-		if c == 2 then
-			pairs_n = pairs_n + 1
-			if r > pair_hi then
-				pair_hi = r
-			end
-		end
-	end
-	local flush = false
-	if n >= 5 then
-		local keys = { "H", "D", "C", "S" }
-		for i = 1, 4 do
-			if (suitc[keys[i]] or 0) == n then
-				flush = true
-			end
-		end
-	end
-	local straight_top = nil
-	if n >= 5 then
-		straight_top = has_straight(counts)
-	end
-	local v
-	local primary
-	local minimal
-	if n == 5 and flush and straight_top ~= nil then
-		v = 9
-		primary = straight_top
-		minimal = 5
-	elseif quads_n >= 1 then
-		v = 8
-		primary = quad_hi
-		minimal = 4
-	elseif trips_n >= 1 and (pairs_n >= 1 or trips_n >= 2) then
-		v = 7
-		primary = trip_hi
-		minimal = 5
-	elseif flush then
-		v = 6
-		primary = max_rank
-		minimal = 5
-	elseif straight_top ~= nil then
-		v = 5
-		primary = straight_top
-		minimal = 5
-	elseif trips_n >= 1 then
-		v = 4
-		primary = trip_hi
-		minimal = 3
-	elseif pairs_n >= 2 then
-		v = 3
-		primary = pair_hi
-		minimal = 4
-	elseif pairs_n == 1 then
-		v = 2
-		primary = pair_hi
-		minimal = 2
-	else
-		v = 1
-		primary = max_rank
-		minimal = 1
-	end
-	return v, primary, sum, n, minimal, bonus, debuffed
-end
-
-local function play_score(observation, action)
-	local cards = cards_for(observation, action.card_refs)
-	if cards == nil or #cards == 0 then
-		return nil
-	end
-	if CONF.estimate_plays and PLAY ~= nil then
-		local value = PLAY.est[action.id]
-		if value ~= nil then
-			-- Scaled to this decision's best estimate so late-game values keep
-			-- full resolution; strictly increasing in the estimate.
-			local scale = PLAY.best or 1000
-			if scale < 1000 then
-				scale = 1000
-			end
-			local score = 400000 + 300000 * value / (value + scale)
-			if PLAY.remaining ~= nil and value >= PLAY.remaining then
-				score = score + 250000
-			end
-			return score
-		end
-	end
-	local v, primary, sum, n, minimal, bonus, debuffed = evaluate(cards)
-	if v == nil then
-		return CONF.unknown + 1
-	end
-	local score = v * 100000 + primary * 1000 + sum * 2
-	score = score - (n - minimal) * CONF.play_junk
-	score = score + bonus * CONF.enhance_value
-	score = score - debuffed * CONF.debuff_penalty
-	return score
-end
-
--- Balatro score estimate (public rules): level-1 base chips/mult per hand, the
--- chips of the cards that actually score, visible enhancements, editions and red
--- seals, cards held in hand, and a table of simple Joker effects keyed by the
--- visible Joker center. Only public, displayed facts are used. Scaling Jokers,
--- hand levels and boss effects are unknown and ignored, so this is a relative
--- estimate for choosing between plays, not an exact score.
-local HAND_BASE = {
-	high_card = { 5, 1 }, pair = { 10, 2 }, two_pair = { 20, 2 }, three = { 30, 3 },
-	straight = { 30, 4 }, flush = { 35, 4 }, full_house = { 40, 4 }, four = { 60, 7 },
-	straight_flush = { 100, 8 }, five = { 120, 12 }, flush_house = { 140, 14 }, flush_five = { 160, 16 },
-}
-local CONTAINS = {
-	pair = { pair = true, two_pair = true, three = true, full_house = true, four = true, five = true, flush_house = true, flush_five = true },
-	two_pair = { two_pair = true, full_house = true, flush_house = true },
-	three = { three = true, full_house = true, four = true, five = true, flush_house = true, flush_five = true },
-	four = { four = true, five = true, flush_five = true },
-	straight = { straight = true, straight_flush = true },
-	flush = { flush = true, straight_flush = true, flush_house = true, flush_five = true },
-}
-local JOKER_EFFECTS = {
-	j_joker = { "mult", 4 }, j_misprint = { "mult", 11 }, j_gros_michel = { "mult", 15 },
-	j_cavendish = { "xmult", 3 }, j_stuntman = { "chips", 250 },
-	j_greedy_joker = { "suit_mult", 3, "D" }, j_lusty_joker = { "suit_mult", 3, "H" },
-	j_wrathful_joker = { "suit_mult", 3, "S" }, j_gluttenous_joker = { "suit_mult", 3, "C" },
-	j_jolly = { "hand_mult", 8, "pair" }, j_zany = { "hand_mult", 12, "three" },
-	j_mad = { "hand_mult", 10, "two_pair" }, j_crazy = { "hand_mult", 12, "straight" },
-	j_droll = { "hand_mult", 10, "flush" },
-	j_sly = { "hand_chips", 50, "pair" }, j_wily = { "hand_chips", 100, "three" },
-	j_clever = { "hand_chips", 80, "two_pair" }, j_devious = { "hand_chips", 100, "straight" },
-	j_crafty = { "hand_chips", 80, "flush" },
-	j_duo = { "hand_xmult", 2, "pair" }, j_trio = { "hand_xmult", 3, "three" },
-	j_family = { "hand_xmult", 4, "four" }, j_order = { "hand_xmult", 3, "straight" },
-	j_tribe = { "hand_xmult", 2, "flush" },
-	j_half = { "half", 20 }, j_scary_face = { "face_chips", 30 }, j_smiley = { "face_mult", 5 },
-	j_even_steven = { "even_mult", 4 }, j_odd_todd = { "odd_chips", 31 }, j_scholar = { "ace" },
-	j_fibonacci = { "fib_mult", 8 }, j_walkie_talkie = { "walkie" }, j_triboulet = { "kq_xmult", 2 },
-	j_abstract = { "abstract", 3 }, j_baron = { "held_king" }, j_shoot_the_moon = { "held_queen", 13 },
-	j_photograph = { "photo" },
-}
-
--- Joker-level effect kinds by order sensitivity (per-card effects apply
--- during card scoring, before any of these).
-local ADDITIVE = { mult = true, chips = true, hand_mult = true, hand_chips = true, half = true, abstract = true }
-local MULTIPLICATIVE = { xmult = true, hand_xmult = true }
-
--- Scaling Jokers grow over a run, so their current value is not visible when
--- offered. For shop and pack valuation only (never play estimates), an offered
--- one is priced as a conservative mid-life effect from its public card text.
--- Only Jokers that grow from what this policy actually does (plays, discards,
--- rerolls, planets) are listed. Throwback, Red Card, Campfire, Obelisk and
--- Lucky Cat grow from actions it never takes; Vampire strips enhancements the
--- estimate values. The built-up bonus of Spare Trousers and Runner applies to
--- every hand.
-local SCALING = {
-	j_green_joker = { "mult", 3 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
-	j_flash = { "mult", 2 }, j_spare_trousers = { "mult", 4 }, j_runner = { "chips", 30 },
-	j_wee = { "chips", 24 }, j_castle = { "chips", 30 }, j_square = { "chips", 8 },
-	j_hologram = { "xmult", 1.15 }, j_constellation = { "xmult", 1.3 },
-}
--- Joker kinds that score face cards: they reset Ride the Bus.
-local FACE_KINDS = { face_chips = true, face_mult = true, photo = true, kq_xmult = true }
-
-local RULE_JOKERS = {
-	j_four_fingers = true, j_shortcut = true, j_smeared = true, j_splash = true, j_pareidolia = true,
-}
--- Estimates are clamped here (also NaN), far above any meaningful score.
-local ESTIMATE_CAP = 1e15
--- Draw-aware discard search: at most this many candidates, best cheap
--- heuristic first, while WORK stays under DISCARD_WORK (measured worst cases
--- in docs/BASELINE_POLICY.md).
-local DISCARD_EV_LIMIT = 40
-local DISCARD_WORK = 24000
-local PLAY_WORK = 24000
--- Absolute cap on play plus discard work in one decision (review N2): the
--- discard share is also cut when the play estimate already used a lot.
-local TOTAL_WORK = 30000
--- Estimate-based Joker ordering is limited to small Joker rows and a bounded
--- number of candidates per decision, so it always fits the sandbox budget.
-local REORDER_EST_MAX_JOKERS = 8
-local REORDER_EST_LIMIT = 20
-
-local function card_chip_value(rv)
-	if rv == 14 then
-		return 11
-	end
-	if rv >= 11 then
-		return 10
-	end
-	return rv
-end
 
 local function is_stone(card)
 	return card.center == "m_stone"
@@ -766,6 +483,157 @@ local function classify_scoring(cards)
 	end
 	return name, scoring
 end
+
+-- Hand categories for the fallback ranking (discards sit between 1 and 2).
+local CATEGORY = {
+	high_card = 1, pair = 2, two_pair = 3, three = 4, straight = 5, flush = 6, full_house = 7,
+	four = 8, straight_flush = 9, five = 10, flush_house = 11, flush_five = 12,
+}
+
+local function play_score(observation, action)
+	local cards = cards_for(observation, action.card_refs)
+	if cards == nil or #cards == 0 then
+		return nil
+	end
+	if CONF.estimate_plays and PLAY ~= nil then
+		local value = PLAY.est[action.id]
+		if value ~= nil then
+			-- Scaled to this decision's best estimate so late-game values keep
+			-- full resolution; strictly increasing in the estimate.
+			local scale = PLAY.best or 1000
+			if scale < 1000 then
+				scale = 1000
+			end
+			local score = 400000 + 300000 * value / (value + scale)
+			if PLAY.remaining ~= nil and value >= PLAY.remaining then
+				score = score + 250000
+			end
+			return score
+		end
+	end
+	-- Category fallback (rule-changing Jokers, absurd sizes, estimate off):
+	-- hand category, then the top scoring rank, then the rank sum.
+	local name, scoring = classify_scoring(cards)
+	if name == nil or blocked_hand(name) then
+		-- Unreadable, or a type The Eye / The Mouth blocks: a discard wins.
+		return CONF.unknown + 1
+	end
+	local primary, sum, minimal, bonus, debuffed = 0, 0, 0, 0, 0
+	for i = 1, #cards do
+		local c = cards[i]
+		local rv = (not is_stone(c)) and rank_value(c.rank) or 0
+		if c.debuff == true then
+			debuffed = debuffed + 1
+		else
+			sum = sum + rv
+			bonus = bonus + center_bonus(c.center) + edition_bonus(c.edition)
+		end
+		if scoring[i] then
+			minimal = minimal + 1
+			if rv > primary then
+				primary = rv
+			end
+		end
+	end
+	local score = CATEGORY[name] * 100000 + primary * 1000 + sum * 2
+	score = score - (#cards - minimal) * CONF.play_junk
+	score = score + bonus * CONF.enhance_value
+	score = score - debuffed * CONF.debuff_penalty
+	return score
+end
+
+-- Balatro score estimate (public rules): level-1 base chips/mult per hand, the
+-- chips of the cards that actually score, visible enhancements, editions and red
+-- seals, cards held in hand, and a table of simple Joker effects keyed by the
+-- visible Joker center. Only public, displayed facts are used. Scaling Jokers,
+-- hand levels and boss effects are unknown and ignored, so this is a relative
+-- estimate for choosing between plays, not an exact score.
+local HAND_BASE = {
+	high_card = { 5, 1 }, pair = { 10, 2 }, two_pair = { 20, 2 }, three = { 30, 3 },
+	straight = { 30, 4 }, flush = { 35, 4 }, full_house = { 40, 4 }, four = { 60, 7 },
+	straight_flush = { 100, 8 }, five = { 120, 12 }, flush_house = { 140, 14 }, flush_five = { 160, 16 },
+}
+local CONTAINS = {
+	pair = { pair = true, two_pair = true, three = true, full_house = true, four = true, five = true, flush_house = true, flush_five = true },
+	two_pair = { two_pair = true, full_house = true, flush_house = true },
+	three = { three = true, full_house = true, four = true, five = true, flush_house = true, flush_five = true },
+	four = { four = true, five = true, flush_five = true },
+	straight = { straight = true, straight_flush = true },
+	flush = { flush = true, straight_flush = true, flush_house = true, flush_five = true },
+}
+local JOKER_EFFECTS = {
+	j_joker = { "mult", 4 }, j_misprint = { "mult", 11 }, j_gros_michel = { "mult", 15 },
+	j_cavendish = { "xmult", 3 }, j_stuntman = { "chips", 250 },
+	j_greedy_joker = { "suit_mult", 3, "D" }, j_lusty_joker = { "suit_mult", 3, "H" },
+	j_wrathful_joker = { "suit_mult", 3, "S" }, j_gluttenous_joker = { "suit_mult", 3, "C" },
+	j_jolly = { "hand_mult", 8, "pair" }, j_zany = { "hand_mult", 12, "three" },
+	j_mad = { "hand_mult", 10, "two_pair" }, j_crazy = { "hand_mult", 12, "straight" },
+	j_droll = { "hand_mult", 10, "flush" },
+	j_sly = { "hand_chips", 50, "pair" }, j_wily = { "hand_chips", 100, "three" },
+	j_clever = { "hand_chips", 80, "two_pair" }, j_devious = { "hand_chips", 100, "straight" },
+	j_crafty = { "hand_chips", 80, "flush" },
+	j_duo = { "hand_xmult", 2, "pair" }, j_trio = { "hand_xmult", 3, "three" },
+	j_family = { "hand_xmult", 4, "four" }, j_order = { "hand_xmult", 3, "straight" },
+	j_tribe = { "hand_xmult", 2, "flush" },
+	j_half = { "half", 20 }, j_scary_face = { "face_chips", 30 }, j_smiley = { "face_mult", 5 },
+	j_even_steven = { "even_mult", 4 }, j_odd_todd = { "odd_chips", 31 }, j_scholar = { "ace" },
+	j_fibonacci = { "fib_mult", 8 }, j_walkie_talkie = { "walkie" }, j_triboulet = { "kq_xmult", 2 },
+	j_abstract = { "abstract", 3 }, j_baron = { "held_king" }, j_shoot_the_moon = { "held_queen", 13 },
+	j_photograph = { "photo" },
+}
+
+-- Joker-level effect kinds by order sensitivity (per-card effects apply
+-- during card scoring, before any of these).
+local ADDITIVE = { mult = true, chips = true, hand_mult = true, hand_chips = true, half = true, abstract = true }
+local MULTIPLICATIVE = { xmult = true, hand_xmult = true }
+
+-- Scaling Jokers grow over a run, so their current value is not visible when
+-- offered. For shop and pack valuation only (never play estimates), an offered
+-- one is priced as a conservative mid-life effect from its public card text.
+-- Only Jokers that grow from what this policy actually does (plays, discards,
+-- rerolls, planets) are listed. Throwback, Red Card, Campfire, Obelisk and
+-- Lucky Cat grow from actions it never takes; Vampire strips enhancements the
+-- estimate values. The built-up bonus of Spare Trousers and Runner applies to
+-- every hand.
+local SCALING = {
+	j_green_joker = { "mult", 3 }, j_ride_the_bus = { "mult", 5 }, j_supernova = { "mult", 4 },
+	j_flash = { "mult", 2 }, j_spare_trousers = { "mult", 4 }, j_runner = { "chips", 30 },
+	j_wee = { "chips", 24 }, j_castle = { "chips", 30 }, j_square = { "chips", 8 },
+	j_hologram = { "xmult", 1.15 }, j_constellation = { "xmult", 1.3 },
+}
+-- Joker kinds that score face cards: they reset Ride the Bus.
+local FACE_KINDS = { face_chips = true, face_mult = true, photo = true, kq_xmult = true }
+
+local RULE_JOKERS = {
+	j_four_fingers = true, j_shortcut = true, j_smeared = true, j_splash = true, j_pareidolia = true,
+}
+-- Estimates are clamped here (also NaN), far above any meaningful score.
+local ESTIMATE_CAP = 1e15
+-- Draw-aware discard search: at most this many candidates, best cheap
+-- heuristic first, while WORK stays under DISCARD_WORK (measured worst cases
+-- in docs/BASELINE_POLICY.md).
+local DISCARD_EV_LIMIT = 40
+local DISCARD_WORK = 24000
+local PLAY_WORK = 24000
+-- Absolute cap on play plus discard work in one decision (review N2): the
+-- discard share is also cut when the play estimate already used a lot.
+local TOTAL_WORK = 30000
+-- Estimate-based Joker ordering is limited to small Joker rows and a bounded
+-- number of candidates per decision, so it always fits the sandbox budget.
+local REORDER_EST_MAX_JOKERS = 8
+local REORDER_EST_LIMIT = 20
+
+local function card_chip_value(rv)
+	if rv == 14 then
+		return 11
+	end
+	if rv >= 11 then
+		return 10
+	end
+	return rv
+end
+
+
 
 -- Expected score of playing `played` while `held` stays in hand. `jokers` is
 -- the ordered visible Joker list, or nil to ignore Jokers.
@@ -1036,8 +904,8 @@ local function best_play_value(cards, jokers)
 				held[#held + 1] = cards[i]
 			end
 		end
-		local value = estimate_score(list, held, jokers)
-		if value ~= nil and value > best then
+		local value, name = estimate_score(list, held, jokers)
+		if value ~= nil and value > best and not blocked_hand(name) then
 			best = value
 		end
 	end
@@ -1241,8 +1109,8 @@ local function discard_ev(observation, discard_refs, jokers, need)
 				end
 			end
 		end
-		local value = estimate_score(play, held, jokers)
-		if value == nil then
+		local value, name = estimate_score(play, held, jokers)
+		if value == nil or blocked_hand(name) then
 			return
 		end
 		local candidate = p * value + (1 - p) * base
@@ -1582,8 +1450,9 @@ local function analyse_plays(observation, actions, count)
 				if value ~= nil and (value ~= value or value >= ESTIMATE_CAP) then
 					value = ESTIMATE_CAP
 				end
-				if #cards < MIN_CARDS then
-					-- The Psychic: a hand of fewer than 5 cards scores nothing.
+				if #cards < MIN_CARDS or (value ~= nil and blocked_hand(name)) then
+					-- The Psychic: fewer than 5 cards; The Eye / The Mouth: a
+					-- blocked hand type. Either scores nothing.
 					value = 0
 				end
 				if value ~= nil then
@@ -2711,6 +2580,30 @@ return function(observation, actions)
 	WORK = 0
 	SHOP_BEST = false
 	MIN_CARDS = 0
+	EYE_PLAYED = nil
+	MOUTH_ONLY = nil
+	local match = observation.match
+	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
+	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and type(levels) == "table"
+		and (match.blind == "bl_eye" or match.blind == "bl_mouth") then
+		local played = nil
+		for name, entry in pairs(levels) do
+			if type(entry) == "table" and type(entry.played_this_round) == "number" and entry.played_this_round >= 1 then
+				played = played or {}
+				played[name] = true
+			end
+		end
+		if played ~= nil then
+			-- The Mouth: if several types show as played (a debuffed off-type
+			-- hand still counts), the first cannot be told apart, so all of
+			-- them stay allowed.
+			if match.blind == "bl_eye" then
+				EYE_PLAYED = played
+			else
+				MOUTH_ONLY = played
+			end
+		end
+	end
 	BUY_SCORES = {}
 	INTEREST_CAP = CONF.interest_cap
 	local owned_vouchers = type(observation.self) == "table" and observation.self.vouchers or nil

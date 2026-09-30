@@ -62,8 +62,12 @@ Constraints on all of it:
 
 ## Boss awareness (in progress)
 
-- **Done:** The Psychic. A play of fewer than five cards is estimated at 0.
-  Paired A/B gave +0.7% overall.
+- **Done:**
+  - The Psychic: a play of fewer than five cards is estimated at 0 (paired
+    A/B +0.7% overall);
+  - The Eye and The Mouth (paired A/B +0.7% / +0.4% overall).
+- **Source size:** 55.3 KB, about 2 KB under `SOURCE_GUARD`. The next policy
+  growth needs another space-recovery pass first.
 - **Open (review Lows):**
   - ~~the adapter offers few five-card plays under The Psychic~~: fixed with
     padded rank groups and two pair (Psychic clears 68% → 74–84% on 19
@@ -72,10 +76,10 @@ Constraints on all of it:
     Psychic~~: fixed (`MIN_CARDS`); neutral in A/B;
   - ~~a boss disabled by Chicot or Luchador keeps its key~~: fixed with an
     engine-cross-checked `match.blind_disabled` (docs/BLIND_DISABLED_DESIGN.md,
-    architecture-reviewed). Publishing a `blind_disabled` flag is an
-    adapter and observation change that needs review;
-  - The Eye and The Mouth need hand-type history this round, and The Flint
-    scales scoring uniformly;
+    architecture-reviewed);
+  - ~~The Eye and The Mouth need hand-type history this round~~: done
+    (docs/HAND_HISTORY_DESIGN.md, architecture-reviewed). The Flint scales
+    scoring uniformly and is not modelled;
   - with fewer than five visible-rank cards (for example Stone cards), no
     padded candidate is offered.
 

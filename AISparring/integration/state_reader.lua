@@ -458,6 +458,13 @@ local function copy_hand_levels(source)
 			end
 			out = out or {}
 			out[name] = { level = level, chips = chips, mult = mult }
+			local played = rawget(entry, "played_this_round")
+			if played ~= nil then
+				if not is_int(played) or played < 0 or played > 1000 then
+					return nil, CODE.BAD_VIEW
+				end
+				out[name].played_this_round = played
+			end
 		end
 	end
 	return out

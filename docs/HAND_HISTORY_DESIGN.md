@@ -1,6 +1,23 @@
 # Design: hand types played this round (The Eye, The Mouth)
 
-Status: **proposed, awaiting architecture review.** No code yet.
+Status: **implemented.** The architecture review approved it with changes,
+all applied:
+
+- **High:**
+  - the Eye / Mouth filter also applies in the category fallback used under
+    rule-changing Jokers (a test with Four Fingers covers it);
+  - the fairness justification is corrected (see below).
+- **Medium:**
+  - `played_this_round` is exported only in hand phases, because elsewhere
+    the counts are stale;
+  - the filter is per decision (`EYE_PLAYED` / `MOUTH_ONLY`, reset at entry)
+    and applies to the estimate, the discard search and the fallback;
+  - when every play is blocked, a discard wins;
+  - the reader rejects anything but an integer 0..1000 (`reader_bad_view`).
+- **Low:** the reader does not cross-check `hand_levels` against the engine.
+  A wrong value would only hurt the AI's own play and would leak nothing.
+
+Re-certification is required; `schema_version` stays 1 (an optional field).
 
 ## Why
 
@@ -18,11 +35,14 @@ throw away a hand. The Psychic is already handled from the public blind key
 ## Fairness
 
 This is the AI's own history within the current round: the hands it played
-itself a moment ago. A human player remembers them. The engine keeps them as
-`G.GAME.hands[name].played_this_round`, next to the `level` / `chips` / `mult`
-already exported from Run Info. Nothing about the opponent, the deck or the
-future is involved. Only hands Run Info lists (`visible == true`) are exported,
-and every hand that has been played is visible.
+itself a moment ago. It is **not** shown as a per-round number on screen: Run
+Info shows only lifetime play counts. The justification is the player's own
+memory of the round, plus vanilla's "Not Allowed" preview when a blocked type
+is selected under these bosses. The engine keeps the value as
+`G.GAME.hands[name].played_this_round`. Nothing about the opponent, the deck
+or the future is involved: in a PvP blind the opponent's hands never enter
+the local `G.GAME.hands`. Only hands Run Info lists (`visible == true`) are
+exported, and every hand that has been played is visible.
 
 ## Change
 
@@ -43,9 +63,10 @@ Follow the `hand_levels` path exactly:
    - under `bl_mouth`, once any hand has `played_this_round >= 1`, a play of
      any other type.
 
-   The discard search applies the same filter. Hand types come from the
-   policy's own classifier, which already falls back to category ranking under
-   rule-changing Jokers.
+   The discard search and the category fallback (rule-changing Jokers) apply
+   the same filter. Under The Mouth, if several types show as played (a
+   debuffed off-type hand still counts), the first cannot be identified, so
+   all played types stay allowed.
 
 ## Tests
 
