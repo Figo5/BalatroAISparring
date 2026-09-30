@@ -65,10 +65,13 @@ Constraints on all of it:
   - ~~discard EV still counts plays of fewer than five cards under The
     Psychic~~: fixed (`MIN_CARDS`); neutral in A/B;
   - a boss disabled by Chicot or Luchador (`G.GAME.blind.disabled`) keeps its
-    key, so the rule still applies. Publishing a `blind_disabled` flag is an
+    key, so the policy rule still applies (the adapter's padding already
+    checks `disabled`). Publishing a `blind_disabled` flag is an
     adapter and observation change that needs review;
   - The Eye and The Mouth need hand-type history this round, and The Flint
-    scales scoring uniformly.
+    scales scoring uniformly;
+  - with fewer than five visible-rank cards (for example Stone cards), no
+    padded candidate is offered.
 
 ## Consumable reasoning (in progress)
 

@@ -498,8 +498,8 @@ acceptance:
   field is added (M2 schema kept intact); the coordinator reads the signal directly.
 - **Deck total and tags** remain unsupported, as in M2.
 - **The Psychic** (`bl_psychic`, not `disabled`) scores only five-card hands.
-  So `PLAY_CARDS` candidates then also include every rank group and two pair,
-  padded to five cards with the highest other visible-rank cards (up to 10,
+  So `PLAY_CARDS` candidates then also include rank groups and two pair,
+  padded to five cards with the highest other visible-rank cards (at most 10,
   within the usual 40-selection cap). Discard candidates are unchanged
   (`tests/engine/test_psychic_candidates.lua`).
 - **Owned vouchers** are exported as `self.owned_vouchers`, a plain key list

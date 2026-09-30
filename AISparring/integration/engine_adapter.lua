@@ -1081,6 +1081,7 @@ local RANK_VALUE = {
 -- Bounded, deterministic selections of hand ordinals, ordered so that useful
 -- 3-5 card hands reach the catalogue before the pair enumeration can fill the
 -- cap. Priority:
+--   0. (The Psychic only) rank groups and two pair padded to five cards;
 --   1. visible rank groups (pairs / triples / quads);
 --   2. two pair and full house over visible ranks;
 --   3. five-card straights over visible ranks (Ace high and low);
@@ -1101,7 +1102,14 @@ local function hand_selections(cards, count, max_k, cap, pad)
 		if #out >= cap then
 			return false
 		end
-		local key = table.concat(selection, ",")
+		-- Order-insensitive key: the same card set is one play whatever the
+		-- order it was built in (e.g. a padded pair that equals a full house).
+		local sorted = {}
+		for i = 1, #selection do
+			sorted[i] = selection[i]
+		end
+		table.sort(sorted)
+		local key = table.concat(sorted, ",")
 		if seen[key] then
 			return false
 		end
