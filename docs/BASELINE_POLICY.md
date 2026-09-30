@@ -225,7 +225,9 @@ hand levels. The panel weights: pair ×4, two pair ×2, and three of a kind,
 flush, straight and high card ×1 each. For example, with nothing owned a +4-mult
 Joker beats The Duo on this pair-heavy panel. With Gros Michel (+15 mult) owned,
 The Duo's ×2 wins. Unknown or scaling Jokers keep the flat kind value, and
-rule-changing Jokers switch this off.
+rule-changing Jokers switch this off. An additive Joker (+mult, +chips, hand bonuses, Half,
+Abstract) is priced before the first owned ×mult or Polychrome Joker, where the
+reorder step puts it, not at the end of the row.
 
 A `REORDER_JOKERS` candidate is judged by the same panel when every owned Joker
 has a known effect and none is pinned. It is taken only if it improves the panel

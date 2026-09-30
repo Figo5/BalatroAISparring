@@ -37,15 +37,20 @@ From `docs/CLAUDE_BATCH2_REVIEW.md` (resolution notes in
 - **Imagined draw suits inflate some suit-Joker estimates.** Synthetic draws
   take fixed suits (for example a Spades rank filler), which can add a
   Wrathful Joker bonus that a random draw would not.
-- **New-Joker valuation assumes end-of-row placement.** `joker_gain` appends
-  the offered Joker, so ×mult Jokers bought before +mult ones are valued as if
-  already well ordered (the reorder step fixes the order later).
+- ~~**New-Joker valuation assumes end-of-row placement.**~~ Fixed: an additive
+  Joker-level effect is priced before the first owned x-mult or Polychrome
+  Joker, where the reorder step puts it (`tests/policy/test_joker_slot.lua`).
 - **Seed Money / Money Tree interest cap is not modelled.** `interest_cap` is
   fixed at 5. The policy cannot see owned vouchers yet: the adapter and reader
   never fill `self.vouchers`, although the schema allows it. Fixing this needs
   a trusted-integration change that exports `G.GAME.used_vouchers`, which Run
   Info shows publicly, through adapter → reader → observation, with a fairness
   review.
+  Design sketch for review: the adapter reads `G.GAME.used_vouchers` (keys
+  only, bounded to 32, sorted), emits `self.vouchers` as
+  `{ kind = "voucher", center = key }` records with no engine binding. The
+  reader copies them through a string allowlist (`v_[a-z_]+`) instead of the
+  card-zone identity path. The policy then derives `interest_cap` 10 or 20.
 - **Match-history list may show Windows junctions.** `tools/match_history.py`
   review rejects junction paths, but the list view may still display them. Make
   both paths use the same filter.

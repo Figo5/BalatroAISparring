@@ -577,6 +577,11 @@ local JOKER_EFFECTS = {
 	j_photograph = { "photo" },
 }
 
+-- Joker-level effect kinds by order sensitivity (per-card effects apply
+-- during card scoring, before any of these).
+local ADDITIVE = { mult = true, chips = true, hand_mult = true, hand_chips = true, half = true, abstract = true }
+local MULTIPLICATIVE = { xmult = true, hand_xmult = true }
+
 local RULE_JOKERS = {
 	j_four_fingers = true, j_shortcut = true, j_smeared = true, j_splash = true, j_pareidolia = true,
 }
@@ -1692,11 +1697,24 @@ local function joker_gain(observation, center, edition)
 	if RULE_JOKERS[center] then
 		return 0
 	end
+	-- Place the new Joker where the reorder step would: an additive
+	-- (+mult/+chips) Joker goes before the first owned x-mult Joker or
+	-- Polychrome, so it is not undervalued by end-of-row placement.
+	local e = JOKER_EFFECTS[center]
+	local slot = #owned + 1
+	if e ~= nil and ADDITIVE[e[1]] and edition ~= "polychrome" then
+		for i = #owned, 1, -1 do
+			local o = JOKER_EFFECTS[owned[i].center]
+			if owned[i].edition == "polychrome" or (o ~= nil and MULTIPLICATIVE[o[1]]) then
+				slot = i
+			end
+		end
+	end
 	local with = {}
 	for i = 1, #owned do
 		with[i] = owned[i]
 	end
-	with[#with + 1] = { center = center, edition = edition }
+	table.insert(with, slot, { center = center, edition = edition })
 	local before = panel_total(owned)
 	local after = panel_total(with)
 	if before <= 0 or after <= before then
