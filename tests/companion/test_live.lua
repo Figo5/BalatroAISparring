@@ -188,6 +188,9 @@ return function(ctx)
 			end },
 			quit = function()
 				quits = quits + 1
+				if overrides.quit_throws then
+					error("quit listener failed")
+				end
 				return true
 			end,
 		}
@@ -237,6 +240,46 @@ return function(ctx)
 		eq(state.quits(), 1, "still once")
 	end)
 
+	-- Live crash (September 29): the menu passed the bare definition to the real
+	-- G.FUNCS.overlay_menu, which expects `{ definition = ... }`; the failed
+	-- UIBox build left G.OVERLAY_MENU == true and the next draw crashed.
+	test("every live menu screen opens through the real overlay_menu shape", function()
+		local instance, state = build_live()
+		eq(instance.install(), true, "install")
+		local controller = instance.controller()
+		local G = state.ui.G
+		local function opened(label, before)
+			is_true(#state.ustate.overlays == before + 1, label .. " overlay built")
+			is_true(type(G.OVERLAY_MENU) == "table", label .. " leaves a real overlay, not the boolean sentinel")
+		end
+		local n = #state.ustate.overlays
+		controller.open_settings()
+		opened("settings", n)
+		n = #state.ustate.overlays
+		G.FUNCS.aisp_select({ config = { id = "aisp:difficulty:rookie" } })
+		opened("refresh after select", n)
+		n = #state.ustate.overlays
+		eq(controller.open_confirm(), true, "confirm prompt")
+		opened("confirm", n)
+		n = #state.ustate.overlays
+		controller.cancel_confirm()
+		is_true(G.OVERLAY_MENU ~= true, "cancel never leaves the sentinel")
+	end)
+
+	test("a failing overlay build never leaves the boolean sentinel behind", function()
+		local instance, state = build_live()
+		eq(instance.install(), true, "install")
+		local G = state.ui.G
+		local real = G.FUNCS.overlay_menu
+		G.FUNCS.overlay_menu = function(args)
+			G.OVERLAY_MENU = true
+			error("UIBox build failed")
+		end
+		instance.controller().open_settings()
+		is_true(G.OVERLAY_MENU ~= true, "sentinel cleared after a failed build")
+		G.FUNCS.overlay_menu = real
+	end)
+
 	test("cancel, rejection and timeout never quit", function()
 		local cancel, cancel_state = build_live()
 		cancel.install()
@@ -261,10 +304,69 @@ return function(ctx)
 		local timeout_controller = timeout.controller()
 		timeout_controller.open_confirm()
 		timeout_controller.confirm_start()
-		timeout_state.set_now(timeout_state.now() + 30)
+		timeout_state.set_now(timeout_state.now() + support.menu(ctx.repo_root).MenuController.ACK_TIMEOUT + 1)
 		timeout_controller.update(timeout_state.now())
 		eq(timeout_state.quits(), 0, "timeout does not quit")
 		eq(timeout_controller.state(), "failed", "failed state")
+	end)
+
+	-- Handoff review (M1/M2/F3/F4/F7): the launcher acks only after ~40 s of
+	-- gates; a modal waiting screen stays up and is never closed before the
+	-- quit; the ack re-checks the main menu; uninstall closes our screen.
+	test("start keeps a modal waiting screen and a slow ack still quits once", function()
+		local instance, state = build_live()
+		eq(instance.install(), true, "install")
+		local controller = instance.controller()
+		local G = state.ui.G
+		eq(controller.open_confirm(), true, "confirm prompt")
+		local exits_before = state.ustate.exits
+		eq(controller.confirm_start(), true, "start sent")
+		is_true(type(G.OVERLAY_MENU) == "table", "waiting screen is up")
+		eq(G.OVERLAY_MENU.config and G.OVERLAY_MENU.config.no_esc, true, "waiting screen is modal (no_esc)")
+		eq(state.ustate.exits, exits_before, "the waiting screen is not closed (no settings save before quit)")
+		state.set_now(state.now() + 45)
+		controller.update(state.now())
+		eq(controller.state(), "awaiting_ack", "a 45 s gate is still inside the ack window")
+		state.transport.push({ ok = true, code = "practice_host_start_accepted", ticket = "t1" })
+		controller.update(state.now())
+		eq(state.quits(), 1, "quit exactly once after the slow ack")
+		eq(state.ustate.exits, exits_before, "still no overlay exit before the quit")
+	end)
+
+	test("an ack after the game left the main menu never quits", function()
+		local instance, state = build_live()
+		eq(instance.install(), true, "install")
+		local controller = instance.controller()
+		eq(controller.open_confirm(), true, "confirm prompt")
+		eq(controller.confirm_start(), true, "start sent")
+		state.ui.G.STAGE = 2
+		state.transport.push({ ok = true, code = "practice_host_start_accepted", ticket = "t1" })
+		local status = controller.update(state.now())
+		eq(status, "failed", "refused")
+		eq(state.quits(), 0, "no quit mid-run")
+	end)
+
+	test("confirm, diagnostic and error screens are modal", function()
+		local instance, state = build_live()
+		eq(instance.install(), true, "install")
+		local controller = instance.controller()
+		local G = state.ui.G
+		eq(controller.open_confirm(), true, "confirm prompt")
+		eq(G.OVERLAY_MENU.config and G.OVERLAY_MENU.config.no_esc, true, "confirm is modal")
+		controller.open_settings()
+		is_true(G.OVERLAY_MENU.config == nil or G.OVERLAY_MENU.config.no_esc ~= true, "settings keep Esc")
+	end)
+
+	test("uninstall closes an open AI Sparring screen before unregistering", function()
+		local instance, state = build_live()
+		eq(instance.install(), true, "install")
+		local controller = instance.controller()
+		local G = state.ui.G
+		controller.open_settings()
+		is_true(type(G.OVERLAY_MENU) == "table", "settings open")
+		controller.uninstall()
+		eq(G.OVERLAY_MENU, nil, "our screen was closed")
+		eq(G.FUNCS.aisp_select, nil, "callbacks unregistered")
 	end)
 
 	test("non-main-menu probe suppresses the practice button", function()
@@ -287,7 +389,7 @@ return function(ctx)
 		eq(controller.open_confirm(), true, "confirm prompt")
 		eq(controller.confirm_start(), true, "start sent")
 		-- Never accept the ack; advance the real injected clock past the bound.
-		state.set_now(state.now() + 30)
+		state.set_now(state.now() + support.menu(ctx.repo_root).MenuController.ACK_TIMEOUT + 1)
 		local status = instance.update(0.016)
 		eq(status, "failed", "update surfaces the timeout")
 		eq(controller.state(), "failed", "failed state")
@@ -319,9 +421,10 @@ return function(ctx)
 		}
 		local host = host_module.live_host(ports)
 		eq(host.available(), true, "available")
-		eq(#made, 1, "first transport built")
+		eq(#made, 0, "availability opens no connection (launcher idle timeout, H1)")
 		local first = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
 		is_true(first ~= nil, "first request")
+		eq(#made, 1, "first transport built at request time")
 		made[1].error_code = "companion_transport_error"
 		eq(host.poll_start(first).status, "error", "error surfaced")
 		-- The next attempt must rebuild a fresh worker, not reuse the dead one.
@@ -332,5 +435,152 @@ return function(ctx)
 		local response = host.poll_start(second)
 		eq(response.status, "ok", "new worker accepted")
 		eq(response.ticket, "t2", "ticket from the new worker")
+	end)
+
+	-- Live review H1: the launcher drops a connection after 10 s idle and the
+	-- LÖVE channels are process-global by name, so a kept-open connection died
+	-- before Start and a rebuilt worker replayed the dead worker's queue.
+	local function h1_host(made)
+		return host_module.live_host({
+			companion = { role = "live", discovery_path = "C:/repo/work/aisparring-host/practice_host.json" },
+			read_discovery = function()
+				return support.marker()
+			end,
+			identity = support.identity(),
+			transport_factory = function()
+				local built = support.transport()
+				made[#made + 1] = built
+				return built
+			end,
+			encode = support.encoder({}),
+			json_null = support.NULL,
+			JSON = {},
+			decode = function()
+				return nil
+			end,
+			quit = function()
+				return true
+			end,
+		})
+	end
+
+	test("every start opens a fresh connection and releases it after the answer", function()
+		local made = {}
+		local host = h1_host(made)
+		for _ = 1, 3 do
+			eq(host.available(), true, "available")
+		end
+		eq(#made, 0, "browsing the menu opens no connection")
+		local first = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		eq(#made, 1, "one connection for the start")
+		eq(#made[1].sent, 1, "the request is sent on the fresh connection immediately")
+		made[1].push({ ok = false, code = "practice_host_ticket_active" })
+		eq(host.poll_start(first).status, "rejected", "rejection surfaced")
+		eq(made[1].closed, true, "connection released after the answer")
+		local second = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		eq(#made, 2, "the retry uses a new connection")
+		eq(#made[2].sent, 1, "only the retry's own request is sent on it")
+		made[2].push({ ok = true, code = "practice_host_start_accepted", ticket = "t9" })
+		eq(host.poll_start(second).status, "ok", "accepted")
+		eq(made[2].closed, true, "released")
+	end)
+
+	test("an abandoned request frees the host for the next Start (L4)", function()
+		local made = {}
+		local host = h1_host(made)
+		local first = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		is_true(first ~= nil, "first request")
+		local busy_id, busy_code = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		eq(busy_id, nil, "busy while pending")
+		eq(host.abandon(first), true, "abandon")
+		eq(made[1].closed, true, "abandoned connection released")
+		local second = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		is_true(second ~= nil, "a new Start is accepted after abandon")
+	end)
+
+	test("a menu timeout abandons the host request so Start works again", function()
+		local instance, state = build_live()
+		instance.install()
+		local controller = instance.controller()
+		eq(controller.open_confirm(), true, "confirm")
+		eq(controller.confirm_start(), true, "start sent")
+		state.set_now(state.now() + support.menu(ctx.repo_root).MenuController.ACK_TIMEOUT + 1)
+		eq(instance.update(0.016), "failed", "timed out")
+		controller.reset()
+		eq(controller.open_confirm(), true, "confirm again")
+		eq(controller.confirm_start(), true, "a retry is accepted, not refused as busy")
+	end)
+
+	test("a quit that reports failure shows the closable error, not the waiting screen (L1)", function()
+		local instance, state = build_live({ quit_throws = true })
+		instance.install()
+		local controller = instance.controller()
+		eq(controller.open_confirm(), true, "confirm")
+		eq(controller.confirm_start(), true, "start sent")
+		local waiting = state.ui.G.OVERLAY_MENU
+		state.transport.push({ ok = true, code = "practice_host_start_accepted", ticket = "t1" })
+		controller.update(state.now())
+		eq(state.quits(), 1, "quit attempted once")
+		eq(controller.state(), "failed", "a failed quit is a failure")
+		is_true(type(state.ui.G.OVERLAY_MENU) == "table" and not rawequal(state.ui.G.OVERLAY_MENU, waiting),
+			"the waiting screen was replaced by the error screen (it has a Close button)")
+	end)
+
+	test("a worker that stopped before answering is an error, not a silent wait", function()
+		local made = {}
+		local host = h1_host(made)
+		local id = host.request_start({ mode = "normal", difficulty = "rookie", pacing = "normal" })
+		made[1].worker_stopped = function()
+			return true
+		end
+		local response = host.poll_start(id)
+		is_true(response ~= nil, "answered")
+		eq(response.status, "error", "a stopped worker is an error")
+		eq(made[1].closed, true, "released")
+	end)
+
+	test("rebuilt thread transports never share channels (no replay)", function()
+		local names = {}
+		local channels = {}
+		local function channel(name)
+			if channels[name] == nil then
+				local queue = {}
+				channels[name] = {
+					push = function(_, value)
+						queue[#queue + 1] = value
+					end,
+					pop = function()
+						return table.remove(queue, 1)
+					end,
+					clear = function()
+						for i = #queue, 1, -1 do
+							queue[i] = nil
+						end
+					end,
+					queue = queue,
+				}
+			end
+			return channels[name]
+		end
+		local ports = {
+			love = { thread = { getChannel = channel } },
+			control_thread = { start = function(_, _, to_name, from_name)
+				names[#names + 1] = { to_name, from_name }
+				return {}
+			end },
+			decode = function()
+				return nil
+			end,
+		}
+		local info = { port = 27962, pid = 4242, nonce = "abcdef0123456789abcdef0123456789" }
+		local first = host_module.thread_transport(ports, info)
+		is_true(first ~= nil, "first transport")
+		first.send("OLD-START")
+		first.close()
+		local second = host_module.thread_transport(ports, info)
+		is_true(second ~= nil, "second transport")
+		eq(#names, 2, "two workers started")
+		is_true(names[1][1] ~= names[2][1] and names[1][2] ~= names[2][2], "distinct channel pairs")
+		eq(#channels[names[2][1]].queue, 0, "the new worker's inbox holds no old request")
 	end)
 end

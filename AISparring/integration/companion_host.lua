@@ -666,6 +666,12 @@ end
 -- Build the default bounded nonblocking LÖVE-thread transport. The relay worker
 -- is the reviewed control_thread.lua worker (protocol-agnostic newline frames,
 -- 127.0.0.1 only, 2 MiB outbound / 64 KiB inbound); this wraps its channels.
+--
+-- Every transport gets its OWN channel pair (a per-process serial in the name).
+-- LÖVE channels are process-global by name: with fixed names a rebuilt worker
+-- would inherit a dead worker's unsent queue and replay an old request to the
+-- launcher (live review H1).
+local transport_serial = 0
 function CompanionHost.thread_transport(ports, info)
 	local love = ports.love
 	local love_thread = rget(love, "thread")
@@ -682,13 +688,19 @@ function CompanionHost.thread_transport(ports, info)
 	if nonce == nil then
 		nonce = "p" .. tostring(info.pid)
 	end
-	local to_worker_name = "aisp_host_" .. nonce .. "_tw"
-	local from_worker_name = "aisp_host_" .. nonce .. "_fw"
+	transport_serial = transport_serial + 1
+	local base_name = "aisp_host_" .. nonce .. "_" .. tostring(transport_serial)
+	local to_worker_name = base_name .. "_tw"
+	local from_worker_name = base_name .. "_fw"
 	local ok_a, to_worker = pcall(get_channel, to_worker_name)
 	local ok_b, from_worker = pcall(get_channel, from_worker_name)
 	if not ok_a or not ok_b or to_worker == nil or from_worker == nil then
 		return nil, CODE.TRANSPORT_UNAVAILABLE
 	end
+	pcall(function()
+		to_worker:clear()
+		from_worker:clear()
+	end)
 	local ok_thread, thread = pcall(control_thread.start, love_thread, info.port, to_worker_name, from_worker_name)
 	if not ok_thread or thread == nil then
 		return nil, CODE.TRANSPORT_UNAVAILABLE
@@ -696,7 +708,9 @@ function CompanionHost.thread_transport(ports, info)
 
 	local state = { connected = false, last_error = nil, worker_stopped = false }
 
-	local transport = {}
+	-- Keep the worker Thread referenced for the transport's lifetime, as the
+	-- engine and Multiplayer do for theirs.
+	local transport = { _thread = thread }
 	function transport.send(text)
 		if type(text) ~= "string" or #text == 0 or #text > LIMITS.max_send then
 			return nil, CODE.TRANSPORT_ERROR
@@ -973,19 +987,27 @@ function CompanionHost.live_host(ports)
 
 	local host = {}
 
+	-- Availability is the validated, fresh launcher marker only. No connection is
+	-- held open while the player browses the menu: the launcher closes a
+	-- connection after 10 s without traffic (live review H1), so a connection
+	-- is opened per start request instead.
 	function host.available()
 		local ok, value = pcall(function()
 			local info, code = refresh()
 			if info == nil then
 				return false, code
 			end
-			local built, build_code = ensure_transport(info)
-			if built == nil then
-				return false, build_code
-			end
 			return true, CODE.OK
 		end)
 		return ok == true and value == true
+	end
+
+	local function drop_transport()
+		if transport ~= nil and type(rawget(transport, "close")) == "function" then
+			pcall(transport.close)
+		end
+		transport = nil
+		transport_port = nil
 	end
 
 	function host.request_start(payload)
@@ -1000,10 +1022,6 @@ function CompanionHost.live_host(ports)
 			local info, info_code = refresh()
 			if info == nil then
 				return nil, info_code or CODE.NOT_AVAILABLE
-			end
-			local built, build_code = ensure_transport(info)
-			if built == nil then
-				return nil, build_code or CODE.TRANSPORT_UNAVAILABLE
 			end
 			if type(identity) ~= "table" or type(rawget(identity, "current")) ~= "function" then
 				return nil, CODE.IDENTITY_UNAVAILABLE
@@ -1042,6 +1060,14 @@ function CompanionHost.live_host(ports)
 			if text == nil then
 				return nil, encode_code
 			end
+			-- A fresh connection per start, opened only once the request is ready:
+			-- connect and send in one go, so the launcher's idle timeout can never
+			-- have closed it first and no connection is wasted on a refusal.
+			drop_transport()
+			local built, build_code = ensure_transport(info)
+			if built == nil then
+				return nil, build_code or CODE.TRANSPORT_UNAVAILABLE
+			end
 			local sent, send_code = built.send(text)
 			if sent ~= true then
 				return nil, send_code or CODE.TRANSPORT_ERROR
@@ -1056,6 +1082,17 @@ function CompanionHost.live_host(ports)
 			return nil, CODE.INTERNAL
 		end
 		return request_id, code
+	end
+
+	-- The menu gave up on this request (timeout or failure): forget it and
+	-- release its connection so a later Start is not refused as busy.
+	function host.abandon(request_id)
+		if pending ~= nil and (request_id == nil or pending.id == request_id) then
+			pending = nil
+			state = "abandoned"
+		end
+		drop_transport()
+		return true
 	end
 
 	function host.poll_start(request_id)
@@ -1074,13 +1111,22 @@ function CompanionHost.live_host(ports)
 					last_error = value
 				end
 			end
+			if last_error == nil and type(rawget(transport, "worker_stopped")) == "function" then
+				local ok_stopped, stopped = pcall(transport.worker_stopped)
+				if ok_stopped and stopped == true then
+					last_error = CODE.TRANSPORT_ERROR
+				end
+			end
 			if last_error ~= nil then
 				pending = nil
 				state = "transport_error"
+				drop_transport()
 				return { status = "error", code = last_error }
 			end
 			return nil
 		end
+		-- One request, one answer: release the connection either way.
+		drop_transport()
 		if type(response) ~= "table" then
 			pending = nil
 			state = "error"
@@ -1137,13 +1183,44 @@ function CompanionHost.build_ui(ports)
 	if type(G) ~= "table" or type(funcs) ~= "table" then
 		return nil
 	end
+	if type(rget(funcs, "overlay_menu")) ~= "function" then
+		return nil
+	end
+	-- The menu modules hand over a bare UI definition; the real
+	-- `G.FUNCS.overlay_menu` takes an ARGS table `{ definition = ... }`
+	-- (functions/button_callbacks.lua ~1350-1383). It also sets the transient
+	-- `G.OVERLAY_MENU = true` before building the UIBox, so a build that throws
+	-- would leave that boolean for the next `Game:draw` to index and crash on:
+	-- clear it and re-raise so the caller still sees the failure. The callback
+	-- is resolved at call time so a later wrapper by another mod is honoured.
+	local function overlay_menu(definition, config)
+		local real = rget(funcs, "overlay_menu")
+		local args = { definition = definition }
+		if type(config) == "table" and rawget(config, "no_esc") == true then
+			args.config = { no_esc = true }
+		end
+		local ok, err = pcall(real, args)
+		if not ok then
+			if rawget(G, "OVERLAY_MENU") == true then
+				G.OVERLAY_MENU = nil
+			end
+			error(err, 0)
+		end
+		return true
+	end
+	local function exit_overlay_menu()
+		local real = rget(funcs, "exit_overlay_menu")
+		if type(real) == "function" then
+			return real()
+		end
+	end
 	return {
 		G = G,
 		funcs = funcs,
 		UIBox_button = ports.UIBox_button,
 		create_UIBox_generic_options = ports.create_UIBox_generic_options,
-		overlay_menu = rget(funcs, "overlay_menu"),
-		exit_overlay_menu = rget(funcs, "exit_overlay_menu"),
+		overlay_menu = overlay_menu,
+		exit_overlay_menu = exit_overlay_menu,
 		notify = ports.notify,
 	}
 end

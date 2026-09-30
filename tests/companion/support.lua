@@ -59,11 +59,25 @@ function Support.fake_ui()
 	end
 	local funcs = {}
 	local G = { UIT = UIT, C = C, UIDEF = {}, FUNCS = funcs, STAGES = { MAIN_MENU = 1, RUN = 2 }, STAGE = 1 }
-	funcs.overlay_menu = function(definition)
-		ustate.overlays[#ustate.overlays + 1] = definition
+	-- Real engine shape (functions/button_callbacks.lua ~1350-1383): the caller
+	-- passes an ARGS table `{ definition = ..., config = ... }`; the engine sets
+	-- the transient `G.OVERLAY_MENU = true` and then builds a UIBox from
+	-- `args.definition`, which throws on a missing definition and leaves the
+	-- boolean behind (the next Game:draw indexes it and crashes).
+	funcs.overlay_menu = function(args)
+		if not args then
+			return
+		end
+		G.OVERLAY_MENU = true
+		if type(args.definition) ~= "table" then
+			error("attempt to index local 'definition' (a nil value)")
+		end
+		ustate.overlays[#ustate.overlays + 1] = args.definition
+		G.OVERLAY_MENU = { definition = args.definition, config = args.config }
 	end
 	funcs.exit_overlay_menu = function()
 		ustate.exits = ustate.exits + 1
+		G.OVERLAY_MENU = nil
 	end
 	-- Mirrors the real generic-options node nesting the menu controller walks:
 	-- root -> outer -> column -> contents row. The AI Sparring button is appended
@@ -101,7 +115,10 @@ function Support.fake_ui()
 		funcs = funcs,
 		UIBox_button = button,
 		create_UIBox_generic_options = options,
-		overlay_menu = funcs.overlay_menu,
+		-- Port contract used by the menu modules directly: a definition.
+		overlay_menu = function(definition)
+			return funcs.overlay_menu({ definition = definition })
+		end,
 		exit_overlay_menu = funcs.exit_overlay_menu,
 		notify = function(level, message)
 			ustate.notifications[#ustate.notifications + 1] = { level = level, message = message }

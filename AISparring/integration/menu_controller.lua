@@ -56,6 +56,10 @@ local MESSAGES = {
 	[CODE.REJECTED] = "The practice launcher rejected the start request.",
 }
 
+-- Screens that must not be dismissed with Esc (the engine reads `no_esc` only
+-- from the overlay config, not from create_UIBox_generic_options).
+local MODAL = { no_esc = true }
+
 local LIMITS = {
 	max_selection_copy_depth = 4,
 	max_path = 240,
@@ -64,7 +68,11 @@ local LIMITS = {
 local ERROR_MESSAGE = "AI Sparring encountered an error. The match has been stopped. Diagnostics were written to the log."
 local BUILDER_KEY = "override_main_menu_play_button"
 local BUTTON_ID = "aisparring_play_button"
-local ACK_TIMEOUT = 10
+-- The launcher acknowledges only after its runtime preflight and start gate,
+-- which re-hash the staged runtimes (about 40 s measured on the real staging
+-- root). The menu must wait strictly longer, or it would always give up while
+-- the launcher later accepts and waits for a live exit that never comes.
+local ACK_TIMEOUT = 120
 local GAUNTLET_COUNT = 5
 local DEFAULT_SELECTION = { mode = "normal", difficulty = "competitive", pacing = "normal" }
 
@@ -319,18 +327,33 @@ function MenuController.factory(ports)
 		return value
 	end
 
-	local function show(definition)
-		if type(definition) ~= "table" then
-			return false
-		end
-		local ok = pcall(ui.overlay_menu, definition)
-		return ok == true
-	end
-
 	local function notify(level, message)
 		if type(ui.notify) == "function" then
 			pcall(ui.notify, level, message)
 		end
+	end
+
+	-- The overlay object this controller opened last (engine UIBox, when the
+	-- port exposes it), so uninstall can close only its own screen.
+	local own_overlay = nil
+
+	local function show(definition, config)
+		if type(definition) ~= "table" then
+			return false
+		end
+		local ok = pcall(ui.overlay_menu, definition, config)
+		if ok ~= true then
+			-- A failed build leaves no screen: never leave the game paused
+			-- behind nothing, and tell the player.
+			local settings = rawget(ui.G, "SETTINGS")
+			if type(settings) == "table" then
+				settings.paused = false
+			end
+			notify("error", MESSAGES[CODE.BAD_UI])
+			return false
+		end
+		own_overlay = rawget(ui.G, "OVERLAY_MENU")
+		return true
 	end
 
 	local function diagnostics_path()
@@ -352,7 +375,7 @@ function MenuController.factory(ports)
 	local function refuse(code)
 		local message = MESSAGES[code] or "AI Sparring cannot start practice right now."
 		local definition = menu.diagnostic_definition(message, diagnostics_path())
-		show(definition)
+		show(definition, MODAL)
 		notify("warn", message)
 		return nil, code
 	end
@@ -360,10 +383,15 @@ function MenuController.factory(ports)
 	local function fail(code)
 		state = "failed"
 		failure_code = code
+		-- Release the host side too (L4): otherwise every later Start in this
+		-- game session is refused as busy by a request nobody will poll again.
+		if pending_request ~= nil and type(rawget(host, "abandon")) == "function" then
+			pcall(host.abandon, pending_request)
+		end
 		pending_request = nil
 		pending_selection = nil
 		local definition = menu.error_definition(ERROR_MESSAGE, diagnostics_path())
-		show(definition)
+		show(definition, MODAL)
 		notify("error", ERROR_MESSAGE)
 		return nil, code
 	end
@@ -552,6 +580,12 @@ function MenuController.factory(ports)
 	end
 
 	function instance.uninstall()
+		-- Close our own screen first: its buttons name callbacks that are about
+		-- to be unregistered, and the engine calls G.FUNCS[button] unchecked.
+		if own_overlay ~= nil and rawequal(rawget(ui.G, "OVERLAY_MENU"), own_overlay) then
+			pcall(ui.exit_overlay_menu)
+		end
+		own_overlay = nil
 		if wrapped_builder ~= nil and ui.G.UIDEF[BUILDER_KEY] == wrapped_builder then
 			ui.G.UIDEF[BUILDER_KEY] = original_builder
 		end
@@ -588,7 +622,7 @@ function MenuController.factory(ports)
 		if allowed ~= true then
 			if code == CODE.LAUNCHER_UNAVAILABLE then
 				local definition = menu.diagnostic_definition(MESSAGES[code], diagnostics_path())
-				show(definition)
+				show(definition, MODAL)
 				notify("warn", MESSAGES[code])
 				return nil, code
 			end
@@ -653,7 +687,7 @@ function MenuController.factory(ports)
 		if definition == nil then
 			return refuse(CODE.BAD_UI)
 		end
-		show(definition)
+		show(definition, MODAL)
 		return true, CODE.OK
 	end
 
@@ -677,7 +711,7 @@ function MenuController.factory(ports)
 		end
 		if not launcher_available() then
 			local definition = menu.diagnostic_definition(MESSAGES[CODE.LAUNCHER_UNAVAILABLE], diagnostics_path())
-			show(definition)
+			show(definition, MODAL)
 			notify("warn", MESSAGES[CODE.LAUNCHER_UNAVAILABLE])
 			return nil, CODE.LAUNCHER_UNAVAILABLE
 		end
@@ -694,7 +728,14 @@ function MenuController.factory(ports)
 		pending_request = request_id
 		started_at = now
 		state = "awaiting_ack"
-		pcall(ui.exit_overlay_menu)
+		-- Keep a modal "starting" screen up while the launcher runs its gates, so
+		-- no run can be started underneath. It is never closed before the quit,
+		-- so no settings save is queued that the quit could race.
+		local waiting = type(rawget(menu, "waiting_definition")) == "function"
+			and menu.waiting_definition(view_state()) or nil
+		if waiting == nil or not show(waiting, MODAL) then
+			pcall(ui.exit_overlay_menu)
+		end
 		return true, CODE.OK
 	end
 
@@ -703,12 +744,14 @@ function MenuController.factory(ports)
 			return true
 		end
 		quit_invoked = true
-		local ok = pcall(host.quit)
-		if not ok then
+		-- The host adapter reports `false` when the real quit did not run; the
+		-- modal waiting screen must then be replaced by a closable error screen.
+		local ok, done = pcall(host.quit)
+		if not ok or done ~= true then
 			state = "failed"
 			failure_code = CODE.QUIT_FAILED
 			local definition = menu.error_definition(ERROR_MESSAGE, diagnostics_path())
-			show(definition)
+			show(definition, MODAL)
 			notify("error", ERROR_MESSAGE)
 			return false
 		end
@@ -748,6 +791,15 @@ function MenuController.factory(ports)
 		end
 		if outcome == "ok" then
 			pending_request = nil
+			-- The launcher accepted after its gates; the game must still be on the
+			-- main menu with no run, or quitting would lose the player's progress.
+			local still_ok, reason = instance.start_preconditions()
+			if still_ok ~= true then
+				state = "failed"
+				failure_code = reason
+				refuse(reason)
+				return "failed", reason
+			end
 			state = "quitting"
 			if not instance.quit_once() then
 				return "failed", CODE.QUIT_FAILED

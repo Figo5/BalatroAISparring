@@ -553,6 +553,12 @@ local function boot_companion(modules, companion)
 			})
 			if handle ~= nil then
 				detail.update = handle
+			elseif detail.role == "live" then
+				-- Without the update hook nothing would ever poll the launcher
+				-- acknowledgement, so a start would leave the player on a modal
+				-- waiting screen: remove the live menu instead (live review L3).
+				pcall(detail.instance.uninstall)
+				detail.code = "companion_update_unavailable"
 			end
 		end
 	end

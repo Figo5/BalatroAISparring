@@ -220,6 +220,17 @@ function PracticeMenu.factory(ui)
 		return options_builder({ no_back = true, no_esc = true, contents = rows })
 	end
 
+	function instance.waiting_definition(view)
+		view = is_plain_table(view) and view or {}
+		local rows = {
+			row({ text("Starting AI practice", 0.5) }, 0.1),
+			row({ text("The launcher is checking its safety gates (up to two minutes).", 0.32) }, 0.04),
+			row({ text("Balatro will close by itself when practice is ready.", 0.32) }, 0.04),
+			row({ text(summary_line(view.options, view.selection), 0.3) }, 0.1),
+		}
+		return options_builder({ no_back = true, contents = rows })
+	end
+
 	function instance.diagnostic_definition(message, path)
 		local rows = {
 			row({ text("AI Sparring setup", 0.5) }, 0.1),
