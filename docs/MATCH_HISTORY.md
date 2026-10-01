@@ -80,6 +80,12 @@ Each row has:
 | `broker_accepted` / `broker_code` | the matching result receipt's `accepted` / `code`, or `null` |
 | `receipt_status` | `matched`, `absent`, `ambiguous` or `invalid` |
 
+For an intended Death pair, `card_refs` keeps the logged order: the lower-position
+card is listed first as the left target and the higher-position card second as the
+right-hand copy source. Rows therefore retain the order the service logged. This
+offline tool does not validate that a pair is distinct, complete or otherwise well
+formed, and it does not establish engine effects.
+
 ### Correlation and what the receipt proves
 
 - The join key is the decision sequence: `decision.tick` = `result.sequence`.
@@ -96,8 +102,12 @@ Each row has:
   - `invalid` - the decision has no usable sequence, or its single result row's
     payload cannot be read (e.g. `accepted` is not a boolean). This is
     explicitly unknown, not acceptance.
-- Result rows are counted per sequence *before* payload validation, so a
-  malformed row cannot make a duplicated sequence look unique.
+- Rows that declare a valid canonical integer sequence are counted per sequence
+  *before* their payload contents are validated, so a row with a valid sequence
+  and malformed payload contents still makes a duplicated sequence ambiguous.
+  Only canonical integer sequences participate: a noncanonical float or string
+  sequence is dropped before the joins and counts. Such corrupt or hand-edited
+  duplicates can be omitted from collision detection on an otherwise matched row.
 - **`broker_accepted` / `broker_code` are broker acceptance/commit receipts
   only.** They do **not** prove that the engine applied the Tarot effect or that
   the highlight was cleaned up. That proof is in the separate native/runtime
@@ -117,9 +127,11 @@ Each row has:
   dropped. At most two ordered targets are shown; `targets` is bounded to 2 and
   `targets_truncated` says whether more valid targets existed. No target is
   invented from a malformed extra ref.
-- Timestamps must be numeric, finite and in `[0, 1e11]`. Range and type are
-  checked before any float conversion, so a huge JSON integer cannot raise;
-  bools, non-numbers, `NaN` and infinities are `null`. Phases are bounded text;
+- Timestamps must be an accepted numeric type, finite and in `[0, 1e11]`. The
+  type is checked first, then the value is converted to a float with conversion
+  overflow handled safely, and only then are non-finite and out-of-range numbers
+  rejected; so a huge JSON integer cannot raise, and bools, non-numbers, `NaN`,
+  infinities and out-of-range numbers are `null`. Phases are bounded text;
   a difficulty outside the known set is `null`.
 - Arbitrary action fields (hidden/string/table payloads, `target_refs`,
   `order`, …) are never copied into a row.
