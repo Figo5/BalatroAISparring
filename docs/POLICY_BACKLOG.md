@@ -83,9 +83,11 @@ Constraints on all of it:
   See `LOCAL_H1_VERIFICATION.md` and `LOCAL_REGRESSION_VERIFICATION.md`.
 - **Batch 3 M1:** Psychic minimum applies before every fallback, including all
   five rule-changing Jokers, face-down/Stone/unknown padding and no-five-candidate
-  cases. Both runtimes pass; repository acceptance passed under prior Claude and
-  the current installed build is `da66f0c` (menu diagnostics are a separate,
-  uninstalled candidate). Native/live gates remain.
+  cases. Both runtimes pass; repository acceptance passed under prior Claude. The
+  current installed build is `d1a9a80` (`BalatroAISparring-phase-h`); the
+  authoritative-installed-config candidate is uninstalled and awaits a fresh
+  package and consolidated certification. Accepted policy is unchanged and the
+  live Tarot checks remain pending. Native/live gates remain.
 - **Open (review Lows):**
   - ~~the adapter offers few five-card plays under The Psychic~~: fixed with
     padded rank groups and two pair (Psychic clears 68% → 74–84% on 19

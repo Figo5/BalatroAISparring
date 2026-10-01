@@ -155,18 +155,55 @@ end
 -- companion wiring
 -- ---------------------------------------------------------------------------
 
--- Read the install-time companion descriptor from the mod's own config. Returns
--- nil unless a role was explicitly installed, so the repository default (and any
--- configuration without a companion block) stays on the inert M1 path.
-local function read_companion(smods, mod_id)
-	if type(smods) ~= "table" or type(smods.Mods) ~= "table" then
-		return nil
+-- The AUTHORITATIVE install-time descriptor is THIS mod's own installed
+-- config.lua. It is read through the trusted SMODS loader, NEVER from the merged
+-- `smods.Mods[mod_id].config`: Steamodded's `load_mod_config` overlays a
+-- user-persisted saved config recursively over the installed default, so the
+-- merged table can carry a stale `role`/`discovery_path` from another checkout.
+-- The confirmed live bug was exactly that: a saved live descriptor overrode the
+-- current installed discovery path. Reading the file directly means the
+-- repository default stays inert even when a stale or malicious saved config
+-- supplies live/staged companion fields, and an installed staged role stays
+-- staged even when a saved live descriptor exists.
+--
+-- Loader/chunk failures fail CLOSED (inert M1 scaffold, never a saved
+-- fallback): a missing or throwing loader, an unreadable chunk, a non-function
+-- chunk, a throwing chunk or a non-table return yields `(nil, code)` and the
+-- entrypoint logs one bounded `companion_config_unreadable` line. A readable
+-- config with an UNRECOGNIZED role is inert silently through `read_companion`
+-- (nil, no log); a recognizable role whose live fields are malformed is still
+-- never a saved fallback — it is rejected later by the companion host and
+-- publishes `companion_unavailable`. The enable flag is taken from the same
+-- authoritative table, so a persisted `ai_enabled` cannot arm an inert install
+-- or disarm a certified one.
+--
+-- The stale saved descriptor itself is never deleted or rewritten here:
+-- Steamodded may re-persist the merged settings on exit, which is harmless once
+-- role/discovery_path/enable no longer come from the merged table.
+local AUTHORITATIVE_CONFIG_PATH = "config.lua"
+
+local function read_installed_config(smods, mod_id)
+	if type(smods) ~= "table" or type(rawget(smods, "load_file")) ~= "function" then
+		return nil, "smods_unavailable"
 	end
-	local entry = smods.Mods[mod_id]
-	if type(entry) ~= "table" then
-		return nil
+	local ok_load, chunk = pcall(smods.load_file, AUTHORITATIVE_CONFIG_PATH, mod_id)
+	if not ok_load or type(chunk) ~= "function" then
+		return nil, "companion_config_unreadable"
 	end
-	local config = rawget(entry, "config")
+	local ok_run, value = pcall(chunk)
+	if not ok_run then
+		return nil, "companion_config_exec_error"
+	end
+	if type(value) ~= "table" then
+		return nil, "companion_config_bad_return"
+	end
+	return value, nil
+end
+
+-- Validate the authoritative companion descriptor. Returns nil unless a role was
+-- explicitly installed, so the repository default (and any configuration without
+-- a companion block) stays on the inert M1 path.
+local function read_companion(config)
 	if type(config) ~= "table" then
 		return nil
 	end
@@ -648,8 +685,16 @@ local function run(modules)
 		})
 	end
 
-	local ai = modules.ai_mode.resolve(modules.host.read_ai_flag(SMODS, MOD_ID))
-	local companion = read_companion(SMODS, MOD_ID)
+	-- Authority split: enablement and the companion descriptor both come from
+	-- the authoritative installed config.lua, never from the user-merged
+	-- smods.Mods[mod_id].config. A failed authoritative read logs one bounded,
+	-- secret-free line and leaves the inert scaffold in place.
+	local config, config_code = read_installed_config(SMODS, MOD_ID)
+	if config == nil then
+		logger:log("warn", "companion_config_unreadable", { code = config_code })
+	end
+	local ai = modules.ai_mode.resolve(modules.host.read_enabled_flag(config))
+	local companion = read_companion(config)
 	local boots_companion = companion ~= nil and ai.requested == true
 	-- Log what actually happens next: an inert scaffold, or a companion boot
 	-- (whose own `companion_boot` line follows).

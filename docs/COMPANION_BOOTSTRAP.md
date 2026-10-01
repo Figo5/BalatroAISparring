@@ -43,18 +43,71 @@ attempted when **all** of the following hold:
 
 - the Multiplayer dependency is present, enabled, loadable, structurally
   complete and exactly `0.5.5` (the M1 dependency verdict is `satisfied`);
-- `SMODS.Mods["AISparring"].config` has a strictly boolean `ai_enabled = true`;
-- `config.companion.role` is exactly `"live"` or `"staged"`.
+- the **authoritative installed `config.lua`** (read through the trusted
+  `SMODS.load_file("config.lua", "AISparring")` loader) has a strictly boolean
+  `ai_enabled = true`;
+- that same authoritative table's `companion.role` is exactly `"live"` or
+  `"staged"`.
 
 If the companion cannot arm, the entrypoint reports
 `state = "companion_unavailable"` with a bounded code and the normal game keeps
 working; capability flags are never raised and no partial authority is left
 behind. A throwing boot is contained by `pcall`.
 
+### 2.1 Authority split — installed `config.lua`, never the merged config
+
+Steamodded's `SMODS.load_mod_config` overlays the user-persisted saved config
+(`config/AISparring.jkr` under the LÖVE save directory — not a literal
+`%AISparring.jkr%` environment path) **recursively over** the installed default
+config, so the in-memory `SMODS.Mods["AISparring"].config` can carry a stale
+`role`/`discovery_path` written by an older checkout. The confirmed live bug was
+exactly that: the installed `d1a9a80` package pointed at the current phase-h
+`practice_host.json`, but a saved live descriptor from an earlier checkout
+overrode it in the merged table.
+
+`core.lua` therefore obtains **both** the enable flag and the companion
+descriptor from THIS mod's own installed `config.lua`, loaded directly through
+the trusted `SMODS.load_file` loader, and **never** from
+`smods.Mods[mod_id].config`. Consequences:
+
+- the repository default stays inert even when a stale or malicious saved config
+  supplies a live/staged companion block, and a saved `ai_enabled = true` cannot
+  by itself authorize a companion;
+- an installed `role = "staged"` stays staged even when a saved live descriptor
+  exists (and vice versa);
+- a persisted `ai_enabled = false` does **not** disarm an installed companion:
+  enablement and the descriptor are one install-time authority (the installer
+  writes both together), so consulting persisted enablement would reintroduce
+  saved state into the arming decision — either direction — and could make
+  certification probes misleading;
+- a missing or throwing `load_file`, an unreadable chunk, a non-function chunk, a
+  throwing chunk or a non-table return **fails closed**: the entrypoint logs one
+  bounded `companion_config_unreadable` line and leaves the inert M1 scaffold in
+  place;
+- a readable config with an **unrecognized role** is inert *silently* through
+  `read_companion` (returns nil, no log line);
+- a recognizable role whose live fields are malformed is still never a saved
+  fallback: the companion host rejects it later and publishes
+  `companion_unavailable`.
+
+In none of these cases is the merged config used as a fallback.
+
+Only `config.lua` is ever loaded this way (a fixed literal path with the literal
+`MOD_ID`); the change adds no arbitrary file loading and no policy IO.
+
+The stale saved descriptor itself is **not** deleted or rewritten by this fix.
+Steamodded may re-persist the merged settings when the mods menu closes, so the
+old saved `config/AISparring.jkr` can remain indefinitely; that is harmless once
+role, `discovery_path` and `ai_enabled` no longer come from the merged table, and
+save/settings files are never edited automatically.
+
 ## 3. Install-time configuration (`config.lua`)
 
 The final installer rewrites the installed copy of `config.lua`. The repository
-default may stay disabled.
+default may stay disabled. This installed file is the **authoritative** source
+for the descriptor and the enable flag (§2.1); the user-persisted saved config
+that Steamodded merges on top is never consulted for role, `discovery_path` or
+`ai_enabled`.
 
 ```lua
 return {
@@ -403,6 +456,20 @@ closed, the query-only handle is released on every path, and invalid pids never
 open a handle. The real LuaJIT FFI library/callables are accepted by
 `tests/astra_native_identity.py`, run read-only by the root against this test
 process's own pid and creation time only. It is not the actual engine.
+
+`test_config.lua` pins the authoritative-config boundary (§2.1): the descriptor
+and enable flag are loaded from THIS mod's own `config.lua` through the `MOD_ID`
+loader; a saved stale live path cannot override the current installed live path;
+a saved live descriptor cannot override an installed staged role (and vice
+versa); the repository default stays inert under a stale saved enable/descriptor;
+a persisted `ai_enabled = false` cannot disarm an installed companion; and
+loader/chunk/non-table failures stay inert with no saved-companion fallback (an
+unrecognized role is inert silently; a recognizable role with malformed live
+fields is rejected later by the host). The fixture builds the untrusted merged
+`own.config` with an over-approximate model of the Steamodded recursive merge
+(saved over installed), so each case proves the boundary ignores it; the two
+config-boundary tests that still pass on a pre-fix `core.lua` are the two that
+only assert absent AI policy loads.
 
 ## 10. Remaining integration mismatches (honest)
 

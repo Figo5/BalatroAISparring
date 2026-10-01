@@ -148,6 +148,15 @@ def static_cases() -> list[dict]:
         "core_gates_on_flag_and_companion",
         "read_companion" in core_src and "ai.requested == true" in core_src and "integration/companion_host.lua" in core_src,
     )
+    # The enable flag and the companion descriptor must come from THIS mod's own
+    # installed config.lua (trusted SMODS loader), never the user-merged
+    # smods.Mods[mod_id].config that Steamodded overlays with stale saved settings.
+    add(
+        "core_reads_authoritative_installed_config",
+        "read_installed_config" in core_src
+        and '"config.lua"' in core_src
+        and "read_enabled_flag" in core_src,
+    )
     add(
         "core_loads_policy_modules_for_ai_only",
         "COMPANION_STAGED_AI" in core_src and 'if descriptors.role == "ai" then' in core_src,

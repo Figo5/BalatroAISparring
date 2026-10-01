@@ -33,6 +33,14 @@ Layout and configs:
 | `staged/human/AISparring` | `{ ai_enabled=true, companion={ role='staged' } }` |
 | `staged/ai/AISparring` | bit-identical to the other staged copy |
 
+- The generated `config.lua` is the **authoritative** descriptor at runtime:
+  `AISparring/core.lua` loads it directly through the trusted
+  `SMODS.load_file("config.lua", "AISparring")` loader and ignores the
+  user-persisted saved config Steamodded merges on top. A stale saved
+  live/staged descriptor or `ai_enabled` therefore cannot override or disarm the
+  installed role, and a missing/malformed installed config fails closed to the
+  inert scaffold (`docs/COMPANION_BOOTSTRAP.md` §2.1,
+  `docs/LOCAL_VALIDATION_QUEUE.md` LV-15).
 - Junk is excluded (`.git`, `__pycache__`, `node_modules`, IDE/cache dirs,
   `save`/`saves`/`Mods`/`steamapps`, `.env`, `*.log`, `*.jkr`, `*.sqlite*`,
   `*.pyc`, native Steam DLL names).

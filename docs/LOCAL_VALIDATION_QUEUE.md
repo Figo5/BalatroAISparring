@@ -95,8 +95,11 @@ needs the full re-certification and a companion reinstall, not
   3. Run `reissue-certificate` in both situations: refused while the old daemon
      runs, allowed after it has exited.
 - **Expected:** no manual marker rename is needed after a host update.
-- **Evidence to capture:** the `status` and `serve` JSON output, plus the marker
-  file before and after.
+- **Evidence to capture (secret-free only):** selected fields — the discovery
+  state / schema id, module SHA256, PID, create time, liveness verdict and the
+  `replaced` / `stale_replaced` flag — plus the marker file's SHA256 before and
+  after. Never capture raw `status`/`serve` JSON, the raw marker, or any
+  secret/auth/credential value.
 - **Risk if it fails:** the worst plausible failure is a refusal. That is the
   same as the old behaviour and is fixed by the manual rename. Replacing a
   marker whose daemon is still running would be a defect: the running daemon
@@ -556,7 +559,7 @@ needs the full re-certification and a companion reinstall, not
     difficulties, the hand-off, and the human/AI/lobby/ready/start/actions/HUD
     smoke run only in the actual certified/installed game through its normal UI.
     `tools/practice_host.py::verify_live_target` enforces the exact installed
-    Balatro image path (`practice_live_not_install` otherwise), so identity,
+    Balatro image path (`practice_host_live_not_install` otherwise), so identity,
     source and certificate checks must never be bypassed. A staged copy that the
     host legitimately launches **after** the installed game quits on the normal
     pass is the normal flow, not a substitute for this step. **No full human
@@ -584,3 +587,94 @@ needs the full re-certification and a companion reinstall, not
   `host_available_code`**; if the entry is absent, use the `menu_entry` line (and
   the counterprobe) to name the branch rather than blaming the host. No
   marker/identity/auth/source/certificate gate was weakened.
+
+## LV-15 Persisted Steamodded companion override (authoritative installed config)
+
+- **Source:** this checkout (`feature/ai-sparring-v1`); the installed generation
+  is the frozen `d1a9a80` package
+  `8b18c282708f36dcff22052d8a362485e2db558806bc67bfbf09ddc02981bff3`
+  (certificate `d57f82bed6bba20a89720740ebe2ff3fd9255c993fac7423c8114fe24b33982a`).
+  Runtime Lua changed (`core.lua`, `src/host.lua`), so this needs full
+  re-certification and a reinstall; it does not reuse the old certificate.
+- **CONFIRMED actual cause.** Steamodded 26.829 `SMODS.load_mod_config` merges
+  the user-persisted saved config recursively **over** the installed default, so
+  the in-memory `SMODS.Mods["AISparring"].config` that `core.read_companion`
+  consumed carried a stale `role`/`discovery_path` from the September-27 `main`
+  checkout. The actual game therefore showed the AI Sparring entry and the
+  host-down diagnostic, but the diagnostic pointed at the older checkout's
+  discovery location instead of the installed phase-h
+  `work/aisparring-host/practice_host.json`. Exact evidence copies:
+  `work/local-ownership/observed-installed-config.lua` and
+  `observed-saved-AISparring-config.lua`. This is proven behaviour, not the
+  older unconfirmed NFS/`getInfo` hypothesis (which stays a separate,
+  unconfirmed issue).
+- **Change.** `core.lua` now reads **both** the enable flag and the companion
+  descriptor from THIS mod's own installed `config.lua` through the trusted
+  `SMODS.load_file("config.lua", "AISparring")` loader — never from the merged
+  `smods.Mods[mod_id].config`. Authority split and fail-closed rules are in
+  `docs/COMPANION_BOOTSTRAP.md` §2.1. A missing/throwing/non-function/non-table/
+  malformed authoritative config leaves the inert M1 scaffold and never falls
+  back to a saved role/path. No arbitrary file loading was added; only the fixed
+  literal `config.lua` path with the literal `MOD_ID`.
+- **Decision on persisted `ai_enabled`.** The authoritative installed file
+  governs enablement; a persisted `ai_enabled` is not consulted. Enablement and
+  the descriptor are one install-time switch the installer writes together
+  (`docs/INSTALL_COMPANION.md`), so honoring persisted enablement would re-inject
+  saved state into the arming decision in both directions (a stale `false` could
+  silently disarm a certified install) — the same class of misleading state the
+  fix removes. The repository default therefore stays inert even with a saved
+  `ai_enabled = true` + live descriptor.
+- **Local tests (both Lua 5.1 and LuaJIT 2.1):** new
+  `tests/companion/test_config.lua` (10 cases) at the core/companion boundary,
+  plus the adapted M1/companion fixtures that now model the authoritative loader
+  and an **over-approximate** Steamodded recursive merge (saved over installed; the
+  fixture clones the installed table and overwrites on a type mismatch, whereas
+  real SMODS keeps the installed value on a type mismatch — the load-bearing cases
+  pair compatible types and are confirmed against verbatim SMODS by the reviewer's
+  13-case probe on both runtimes). Coverage: descriptor/enable read from
+  this mod's own `config.lua` via the `MOD_ID` loader; saved stale live path vs
+  current installed live path; saved live overriding staged (and staged
+  overriding live); repository default plus stale saved enable/descriptor;
+  persisted `ai_enabled = false` cannot disarm; missing/throwing/non-function/
+  bad-return/loader-error authoritative config; malformed role; no AI
+  policy/executor loads in the live or inert role. Suites: `run.py` 51/51 per
+  runtime, `run_companion.py` 108/108 per runtime (static 23/23),
+  `run_menu.py` 51/51 per runtime, `run_boundary.py` 59/59 per runtime + 78
+  worker, `run_runtime.py` 123/123 per runtime; installer 48/48, staging 52/52,
+  upgrade-reviewed-companion 20/20, prepare-server 8/8.
+- **Negative control (isolated scratch).** A scratch copy of the pre-fix `HEAD`
+  `core.lua` run against the new boundary tests fails 8/10 — including the exact
+  inversion `expected C:/current/work/aisparring-host, got C:/stale/work/...`
+  and the repo-default-armed-by-stale-saved case. Evidence:
+  `work/local-ownership/scratch-config-boundary/pre-fix-negative-control.txt`. No
+  source file was altered during the run.
+- **Isolated native counterprobe (already executed; source diagnostic, not
+  certification and not actual installed UI smoke).** Three cases ran on the
+  current source over a private role sandbox containing only `settings.jkr` and
+  the exact stale saved `AISparring.jkr` at
+  `<role save directory>/config/AISparring.jkr` — no profile, run or deck data
+  copied, owned processes closed, live byte maps unchanged, and
+  `not_certification`/`not_actual_installed_ui_smoke` are both true. Evidence:
+  `work/local-ownership/native-config-authority-probe/proof.json` (live →
+  `companion_ready`, authoritative path, diagnostic matches it, entry/callback
+  visible; inert → `scaffold_ready`, no entry/callback; staged →
+  `companion_unavailable` refused with no descriptors, no entry). This proves the
+  boundary, not the game.
+- **Exact native test (actual installed game; after re-certification, reinstall
+  and a fresh matching host).** Do **not** copy or edit any saved config: the
+  installed live save directory already holds the stale saved descriptor
+  (`config/AISparring.jkr`), which is the real regression. Prove the game is
+  closed first, then record the SHA256 of `<live save directory>/config/
+  AISparring.jkr` before and after the run and show it is unchanged. Start the
+  actual installed game normally and open Play with a **fresh host whose discovery
+  marker matches the newly installed `config.lua` discovery path** (the path from
+  the next installed generation, not a hard-coded phase-h path); the real
+  executable's PID/create-time handoff must succeed. The host-up entry must use
+  that newly installed path (not the saved September-27 path) and reach the
+  four-difficulty settings. All four settings and the live smoke remain
+  **pending**.
+- **Remaining actual UI gates (unchanged, not claimed):** host-up four
+  difficulties, setup, hand-off, human/AI lobby, ready/start, actions and HUD
+  remain pending; only the host-down entry → bounded diagnostic is observed for
+  `d1a9a80`. The exact live cause of any *missing* entry is still outside host
+  readiness and is not claimed fixed here. No smoke or V1 pass is claimed.

@@ -25,6 +25,42 @@ local function guard(record, name)
 	end
 end
 
+local function copy_table(value, depth)
+	depth = depth or 0
+	if type(value) ~= "table" then
+		return value
+	end
+	if depth > 8 then
+		return {}
+	end
+	local out = {}
+	for key, item in pairs(value) do
+		out[key] = copy_table(item, depth + 1)
+	end
+	return out
+end
+
+-- Model Steamodded's saved-over-installed recursive merge (the reason
+-- `smods.Mods[mod_id].config` is untrustworthy for a role/discovery_path). It is
+-- an OVER-APPROXIMATION of the real `insert_saved_config`, not a verbatim copy:
+-- the saved value wins on same-shaped keys and on a type mismatch, whereas real
+-- SMODS keeps the installed value on a type mismatch; the installed table is
+-- cloned, not mutated. The load-bearing cases pair compatible types.
+local function smods_merge(installed, saved)
+	local out = copy_table(installed)
+	if type(saved) ~= "table" then
+		return out
+	end
+	for key, value in pairs(saved) do
+		if type(value) == "table" and type(out[key]) == "table" then
+			out[key] = smods_merge(out[key], value)
+		else
+			out[key] = copy_table(value)
+		end
+	end
+	return out
+end
+
 function Fixture.new(opts)
 	opts = opts or {}
 	local repo = opts.repo_root
@@ -36,6 +72,7 @@ function Fixture.new(opts)
 		calls = {},
 		logs = {},
 		loads = {},
+		config_loads = {},
 		mp_reads = {},
 		mp_writes = {},
 		g_reads = {},
@@ -101,16 +138,21 @@ function Fixture.new(opts)
 		end,
 	})
 
+	-- `own.config` is the AUTHORITATIVE installed config.lua body; core.lua reads
+	-- it through the trusted loader. `opts.saved_config` models the user-persisted
+	-- overlay so the merged table (saved over installed) can be checked to be
+	-- ignored for the descriptor/enable gate.
+	local installed_config = { ai_enabled = opts.ai_enabled == true }
+	if type(opts.own_config) == "table" then
+		installed_config = opts.own_config
+	end
 	local own = {
 		id = "AISparring",
 		version = "0.1.0",
 		can_load = true,
 		disabled = false,
-		config = { ai_enabled = opts.ai_enabled == true },
+		config = smods_merge(installed_config, opts.saved_config),
 	}
-	if type(opts.own_config) == "table" then
-		own.config = opts.own_config
-	end
 	if opts.own_readonly == true then
 		setmetatable(own, {
 			__newindex = function()
@@ -181,6 +223,37 @@ function Fixture.new(opts)
 	smods.load_file = function(path, id)
 		if type(path) ~= "string" or path == "" then
 			return nil, "no_path"
+		end
+		if path == "config.lua" then
+			-- The authoritative install-time config, read through the trusted
+			-- loader (never the merged mod config). `opts.authoritative_config`
+			-- injects a bounded failure mode.
+			local config_loads = record.config_loads
+			config_loads[#config_loads + 1] = id
+			local mode = opts.authoritative_config
+			if mode == "absent" then
+				return nil, "synthetic_absent"
+			end
+			if mode == "loader_error" then
+				error("synthetic config loader failure")
+			end
+			if mode == "not_function" then
+				return "not a function"
+			end
+			if mode == "exec_error" then
+				return function()
+					error("synthetic config exec failure")
+				end
+			end
+			if mode == "bad_return" then
+				return function()
+					return 42
+				end
+			end
+			local snapshot = copy_table(installed_config)
+			return function()
+				return copy_table(snapshot)
+			end
 		end
 		local loads = record.loads
 		loads[#loads + 1] = path

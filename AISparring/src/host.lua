@@ -91,6 +91,22 @@ function Host.inspect(smods, mp)
 	}
 end
 
+-- Strict boolean enable flag over an already-resolved config table. The
+-- entrypoint calls this on the AUTHORITATIVE installed config (loaded from the
+-- mod's own config.lua), not on the user-merged smods.Mods[mod_id].config.
+function Host.read_enabled_flag(config)
+	if type(config) ~= "table" then
+		return false
+	end
+	return config.ai_enabled == true
+end
+
+-- DEPRECATED / UNTRUSTED SOURCE. Not used by production arming: the entrypoint
+-- reads the enable flag through `read_enabled_flag` on the AUTHORITATIVE
+-- resolved config (loaded from the mod's own config.lua). This helper is kept
+-- only for historical M1 test compatibility and reads the user-merged
+-- `smods.Mods[mod_id].config`, which Steamodded overlays with persisted saved
+-- settings; do not reuse it for any new arming or authority decision.
 function Host.read_ai_flag(smods, mod_id)
 	if type(smods) ~= "table" or type(smods.Mods) ~= "table" then
 		return false
@@ -99,11 +115,7 @@ function Host.read_ai_flag(smods, mod_id)
 	if type(entry) ~= "table" then
 		return false
 	end
-	local config = entry.config
-	if type(config) ~= "table" then
-		return false
-	end
-	return config.ai_enabled == true
+	return Host.read_enabled_flag(entry.config)
 end
 
 return Host

@@ -1,24 +1,52 @@
 # Local progress — October 1, 2026
 
-## Current status (live-menu investigation, phase-h checkout)
+## Current status (authoritative-config candidate)
 
-The installed `da66f0c` generation (`exact27` files, after the real
-`install_companion` caller fix) is genuinely reviewed, certified through all
-seven native phases on its exact package
-`96ebad3787381324d9685a55b262268d019e8a68ec7c44c6f40d2038537b0614` (certificate
-`694392aa14891518293635185478ff1dcbe8dd280d7f32c546023c93b9a15c98`), package-bound
-reviewed by Claude Opus 5.5 High and accepted, and the `full62` supported
-entrypoints plus the immutable 3,600-decision H1 sweep accepted on identical
-runtime inputs. Its companion does boot (`companion_ready`/`bootstrap_ready`, no
-`update_error`). **The actual UI smoke is only partial and has NOT passed: normal
-startup, profile `gio`, single-player setup and the mod set (MP 0.5.5, Handy
-2.0.6, JokerDisplay 2.0.4, AISparring 0.1.0-dev) all loaded, but the real
-Multiplayer Play menu showed no AI Sparring entry on three checks with a matching
-practice host running, so no live menu, match, policy or playability is
-claimed.** The frozen root is the sibling `BalatroAISparring-runtime-v1`; the
-source branch now lives in this checkout. Sanitized observation:
-`work/local-ownership/live-smoke-observations-da66.json`. The exact live cause of
-the missing entry remains **unconfirmed**.
+Checkout: **`BalatroAISparring-development`** (branch `feature/ai-sparring-v1`),
+HEAD `d1a9a80` plus an **uncommitted dirty working tree** (the authoritative
+installed-config candidate). Two frozen installed generations are kept separate
+and untouched:
+
+- **d1 = `BalatroAISparring-phase-h`**, commit
+  `d1a9a802e9348e497717a7014e5663cb3a440988`, package
+  `8b18c282708f36dcff22052d8a362485e2db558806bc67bfbf09ddc02981bff3`, certificate
+  `d57f82bed6bba20a89720740ebe2ff3fd9255c993fac7423c8114fe24b33982a` — the
+  currently installed build. Its companion boots and the real game shows the AI
+  Sparring entry and the host-down diagnostic (`current-release-state.json`:
+  `host_down_entry_visible=true`, `host_down_diagnostic_passed=true`,
+  `installed_ui_smoke_passed=false`). The **host-up settings, hand-off, lobby,
+  start, actions, HUD and full smoke remain pending; no smoke or V1 pass is
+  claimed.**
+- **da66 = `BalatroAISparring-runtime-v1`**, commit `da66f0c`, package
+  `96ebad3787381324d9685a55b262268d019e8a68ec7c44c6f40d2038537b0614`, certificate
+  `694392aa14891518293635185478ff1dcbe8dd280d7f32c546023c93b9a15c98` — the earlier
+  `exact27` install whose companion booted but whose Play menu showed no entry. It
+  was reviewed/certified on its exact package and accepted; it is historical, not
+  the current install.
+
+### Current diff
+
+Uncommitted versus `d1a9a80`: `AISparring/core.lua`, `AISparring/src/host.lua`,
+`tests/companion/support.lua`, `tests/lua/fixture.lua`,
+`tests/run_companion.py`, new `tests/companion/test_config.lua`, and four docs.
+Runtime Lua changed, so the d1 and da66 packages/certificates do **not** cover it
+and must not be reused.
+
+### Confirmed cause and fix
+
+Steamodded 26.829 `SMODS.load_mod_config` merges the user-persisted saved config
+(`config/AISparring.jkr` under the save directory) recursively **over** the
+installed default, so the merged `SMODS.Mods["AISparring"].config` that
+`core.read_companion` consumed carried the stale `role`/`discovery_path` from the
+September-27 `main` checkout. `core.lua` now reads both the enable flag and the
+companion descriptor from THIS mod's own installed `config.lua` via the trusted
+`SMODS.load_file` loader, never the merged table: loader/chunk/non-table failures
+fail closed to the inert scaffold with one bounded warn; an unrecognized role is
+inert silently; a recognizable role with malformed live fields is rejected later
+by the host (`companion_unavailable`). The stale saved descriptor is not deleted
+or rewritten (Steamodded may re-persist it; harmless after the fix). See
+`docs/COMPANION_BOOTSTRAP.md` §2.1 and LV-15. The older NFS/`getInfo` hypothesis
+stays a separate, **unconfirmed** issue.
 
 Development batch (filesystem resilience + bounded availability reason +
 reachable host diagnostics; the exact live root cause stays **unconfirmed**). A
@@ -62,39 +90,53 @@ fix report is `work/local-ownership/deepseek-menu-review-fixes-report.md`.
   overwritten). Only allowlisted primitive fields are sent; a throwing/malformed
   logger is ignored and cannot change menu or gameplay. This is diagnostic only.
 
-Local evidence (both Lua runtimes): `tests/run_companion.py` 98/98 per runtime,
+Local evidence (both Lua runtimes): `tests/run_companion.py` 108/108 per runtime
+(98/98 before the LV-15 authoritative-config tests were added),
 `tests/run_menu.py` 51/51 per runtime (`tests/menu/test_diagnostic.lua` fails the
 pre-fix wrap and pins the connected-lobby+host-down diagnostic case),
-`tests/run.py` 51/51, `tests/run_runtime.py` 123/123.
+`tests/run.py` 51/51, `tests/run_runtime.py` 123/123. The LV-15 config-boundary
+`tests/companion/test_config.lua` (10 cases) also fails 8/10 against the pre-fix
+`HEAD` core in isolated scratch.
 
-Latest review/full status: the diagnostic-hours candidate was accepted at
-repository level by Claude Opus 5.5 High (`work/local-ownership/
-claude-diagnostic-rereview.md`) **conditioned on the full62 run finishing
-unchanged**. That run is now complete on this exact candidate:
-`work/local-ownership/diagnostic-batch-astra-verification.json` records the
-verified dirty candidate, 62/62 supported entrypoints passing, four
-cross-runtime benchmark pairs identical, and the fresh H1 sweep (1,800 decisions
-per runtime, action digest `6920e8b4…`, peaks 1,256,000 / 1,263,000 under the
-unchanged 2M budget, zero budget failures), with H1's 10 actual loaded source
-files byte-identical. The verified source tip is the honest parent
-`4641c10` plus the pending diagnostics commit (not yet created); no resulting
-commit is claimed. After the documentation/comment changes in this batch, the
-final source is **not** blanket-claimable as the earlier 315-file byte-identical
-snapshot — those changes must be bound and reviewed as their own delta.
+### Testing / review state
 
-Still required before any pass is claimed, in order: (1) Astra binds the
-doc/comment delta and a short Claude final closure; (2) build the exact new
-package and run the consolidated seven-phase native certification on it;
-(3) package-bound pre-install review, fresh verified backups and the scoped
-upgrade; (4) an actual installed-game UI smoke covering **both** branches — host
-up (four difficulties, setup, hand-off, human/AI lobby, ready/start, actions,
-HUD) and host down (entry → bounded diagnostic only, no settings, start, request
-or quit), with the `companion_boot` and `menu_entry` lines — **not a full human
-run**. An isolated counterprobe may inspect builder/overlay outcomes only and is
-never an authorized live executable; identity/source/certificate checks must not
-be bypassed. No live Mods/save/host/Game change and no install were made; the
-installed `da66` build and the frozen sibling/original main stay untouched. The
-sections below are historical and predate this investigation.
+- Claude Opus 5.5 High reviewed the dirty snapshot (diff from `d1a9a80`) and
+  **accepted the runtime Lua + tests conditionally** — Critical/High none, Medium
+  M1 (documentation/procedure only), Lows L1–L8
+  (`work/local-ownership/claude-installed-config-review.md`). The condition is
+  that Astra's full regression finishes green with `source_unchanged=true`, which
+  completed before the doc/comment edit release was granted.
+- This batch closes M1/L1/L2/L4/L7 as **documentation/comment only**; L3/L5/L6/L8
+  are deferred with explicit reasons (see
+  `work/local-ownership/deepseek-config-doc-closure-report.md`). No runtime or
+  test execution changed.
+- Reviewer real-SMODS probe (verbatim `load_mod_config`/`load_file`): 13/13 per
+  runtime post-fix, 2/13 pre-fix. Isolated native config-authority counterprobe: 3
+  cases, `work/local-ownership/native-config-authority-probe/proof.json` — a source
+  diagnostic, not certification and not actual installed UI smoke.
+
+### Exact next gates
+
+1. Astra binds the doc/comment-only delta to the completed full suite and native
+   counterprobe; Claude re-review; then a clean commit/push byte-identical to the
+   reviewed runtime/test hashes (comments/docs differ, so no blanket source
+   identity claim).
+2. Build the fresh exact package and run the consolidated seven-phase native
+   certification on it; package-bound pre-install review, fresh verified backups
+   and the scoped upgrade. The old `d1a9a80` and `da66f0c` packages/certificates
+   do not cover the changed mod and must not be reused.
+3. Actual installed-game UI smoke **after** that reinstall: host down (entry →
+   bounded diagnostic only, no settings/start/request/quit) and host up (four
+   difficulties, setup, hand-off, human/AI lobby, ready/start, actions, HUD) with
+   the `companion_boot` and `menu_entry` lines — **not a full human run**. The
+   persisted-config regression is the LV-15 actual-installed step: no saved-config
+   copy; hash the existing stale `config/AISparring.jkr` before and after; a fresh
+   host matching the newly installed discovery path. No marker/identity/auth/
+   source/certificate gate may be weakened and no old certificate may be reused.
+
+No live Mods/save/host/Game change was made by this repository work; the installed
+`d1` build in `BalatroAISparring-phase-h` and the frozen main stay untouched. The
+sections below are historical and predate this candidate.
 
 ## Recovered state
 

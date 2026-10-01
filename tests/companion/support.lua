@@ -524,10 +524,51 @@ function Support.staged_ports(repo_root, opts)
 	return ports, { channels = channels, engine = engine, descriptors = descriptors, json = json, runtime = runtime, window = window, window_state = window_state }
 end
 
+local function copy_table(value, depth)
+	depth = depth or 0
+	if type(value) ~= "table" then
+		return value
+	end
+	if depth > 8 then
+		return {}
+	end
+	local out = {}
+	for key, item in pairs(value) do
+		out[key] = copy_table(item, depth + 1)
+	end
+	return out
+end
+
+-- Model of Steamodded's saved-over-installed recursive merge, which is why
+-- `smods.Mods[mod_id].config` cannot be trusted for the descriptor. This is an
+-- OVER-APPROXIMATION of the real `insert_saved_config`, not a verbatim copy: it
+-- forces the saved value on same-shaped keys and overwrites on a type mismatch,
+-- whereas real SMODS keeps the installed value on a type mismatch; and it clones
+-- the installed table instead of mutating it in place, so the authoritative
+-- loader's returned table stays independent of `own.config`. Every load-bearing
+-- case here pairs compatible types and is confirmed against verbatim SMODS by the
+-- reviewer's independent 13-case probe on both runtimes.
+local function smods_merge(installed, saved)
+	local out = copy_table(installed)
+	if type(saved) ~= "table" then
+		return out
+	end
+	for key, value in pairs(saved) do
+		if type(value) == "table" and type(out[key]) == "table" then
+			out[key] = smods_merge(out[key], value)
+		else
+			out[key] = copy_table(value)
+		end
+	end
+	return out
+end
+
+Support.smods_merge = smods_merge
+
 -- Full core.lua fixture: real entrypoint + real modules over synthetic globals.
 function Support.core_env(repo_root, opts)
 	opts = opts or {}
-	local record = { loads = {}, logs = {}, quits = 0, updates = 0, publish_writes = 0 }
+	local record = { loads = {}, config_loads = {}, logs = {}, quits = 0, updates = 0, publish_writes = 0 }
 	record.window = { titles = {}, minimizes = 0, calls = {} }
 	local env = setmetatable({}, { __index = _G })
 	env._G = env
@@ -551,12 +592,20 @@ function Support.core_env(repo_root, opts)
 		}
 	end
 
+	-- `installed_config` is the AUTHORITATIVE installed config.lua body that
+	-- core.lua reads through the trusted SMODS loader; `saved_config` models the
+	-- user-persisted overlay, so `own.config` is the Steamodded merged table
+	-- (saved over installed) that must NOT be trusted for role/discovery_path.
+	local installed_config = opts.installed_config
+	if installed_config == nil then
+		installed_config = { ai_enabled = opts.ai_enabled == true, companion = opts.companion }
+	end
 	local own = {
 		id = "AISparring",
 		version = "0.1.0-dev",
 		can_load = true,
 		disabled = false,
-		config = { ai_enabled = opts.ai_enabled == true, companion = opts.companion },
+		config = smods_merge(installed_config, opts.saved_config),
 	}
 
 	local smods = { Mods = {}, current_mod = own }
@@ -569,6 +618,36 @@ function Support.core_env(repo_root, opts)
 	env.SMODS = smods
 	env.MP = mp
 	smods.load_file = function(path, id)
+		if path == "config.lua" then
+			-- Authoritative install-time config via the trusted loader. The path
+			-- and MOD_ID are recorded so a test can pin the loader contract;
+			-- `opts.authoritative_config` injects a bounded failure mode.
+			record.config_loads[#record.config_loads + 1] = { path = path, id = id }
+			local mode = opts.authoritative_config
+			if mode == "absent" then
+				return nil, "synthetic_absent"
+			end
+			if mode == "loader_error" then
+				error("synthetic config loader failure")
+			end
+			if mode == "not_function" then
+				return "not a function"
+			end
+			if mode == "exec_error" then
+				return function()
+					error("synthetic config exec failure")
+				end
+			end
+			if mode == "bad_return" then
+				return function()
+					return "not a table"
+				end
+			end
+			local snapshot = copy_table(installed_config)
+			return function()
+				return copy_table(snapshot)
+			end
+		end
 		record.loads[#record.loads + 1] = path
 		local chunk, err = loadfile(repo_root .. "/AISparring/" .. path)
 		if chunk == nil then
