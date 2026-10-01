@@ -149,9 +149,13 @@ def main():
         no_game();second=require(lp.create_live_backup(execute=True,label=timestamp+'-post-archive'))
         write(out/'backup-after-archive.json',second)
         write(out/'backup-after-archive-manifest.json',staging.read_json(staging.DEFAULT_BACKUP_ROOT/lp.BACKUP_MANIFEST_NAME))
-        no_game();dry=installer.install_companion(acceptance_path=args.acceptance,execute=False)
+        # Forward the already verified resolved live Mods root, owned target and
+        # live mapping, using the installer's real keyword names. The installer
+        # refuses a missing live_mods_root (mods_root_required): omitting these
+        # made the actual upgrade fail safely after archiving the old companion.
+        no_game();dry=installer.install_companion(acceptance_path=args.acceptance,live_mods_root=mods,target_dir=target,live=live,execute=False)
         write(out/'installer-dry-run.json',dry);require(dry)
-        no_game();executed=installer.install_companion(acceptance_path=args.acceptance,execute=True)
+        no_game();executed=installer.install_companion(acceptance_path=args.acceptance,live_mods_root=mods,target_dir=target,live=live,execute=True)
         require(executed)
         # The install is committed now; later diagnostics failures must never
         # roll back over the installed target.

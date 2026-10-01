@@ -4,6 +4,7 @@
 
 - Remote and feature worktree recovered to `9498cfa` (targeted Tarot WIP `0f48623`, followed by Batch 3 review).
 - Durable feature worktree (moved by Git, preserving changes): `C:\Users\ginom\Documents\Codex\2026-09-30\files-pasted-by-the-user-take\outputs\BalatroAISparring`. Original `main` checkout stays in its September 27 location.
+- Current release candidate worktree: `...\outputs\BalatroAISparring-runtime-v1`, started from `193e231` with the helper-only caller fix recorded below. The sibling `BalatroAISparring` checkout is frozen at `193e231` with its prior certification and failed upgrade evidence.
 - Separate local `main` remains at `5d15bb0` with four pre-existing staged files. Do not alter its index or work. Initial staged-diff SHA256: `c7e11dec4d35d26e3e09d1bbf814f0f52825348a344ae6a7e78946e56bf94875`.
 - Verified installed mod: all 27 files exactly match the `9f7a8e1` package, SHA256 `1f6e2a6b6dc7b921a6b22975163129df7189187c1ec8cf6fe4f9f66c2d607c8b`.
 - Install receipt: original checkout `work/install-receipts/aisparring-install-20260930T011952Z-47f5e144.json`.
@@ -39,17 +40,26 @@ on LuaJIT. All benchmark gates pass and their non-timing/non-instruction metrics
 agree across runtimes. Current evidence is in `LOCAL_REGRESSION_VERIFICATION.md`
 and `LOCAL_H1_VERIFICATION.md`; earlier evidence remains preserved separately.
 
-Current task: Claude's focused actual-diff re-review, then the seven native
-phases, exact-package pre-install review, backed-up scoped upgrade and actual
-UI smoke. Documentation-only recording after the tested code checkpoint is
-distinguished from the unchanged executable inputs.
+Current task: this checkout (`outputs/BalatroAISparring-runtime-v1`) is the
+current pointer generation. Its `193e231` source was reviewed and certified
+through all seven native phases, but the actual scoped upgrade then failed
+*safely*: both installer calls omitted the required `install_companion`
+`live_mods_root`, the real installer refused with `mods_root_required`, and the
+rollback restored the exact 27 old files, so the installed old `9f7a8e1` package
+is still live. The helper-only caller fix here is fixture-verified only; it
+awaits a fresh final review, consolidated seven-phase native certification with
+the exact new package, exact-package pre-install review, fresh verified backups,
+a scoped upgrade and actual UI smoke. Documentation-only recording after the
+tested code checkpoint is distinguished from the unchanged executable inputs.
 
-No new native certification, package, installation or actual UI smoke has
-been performed. The live 27-file `9f7a8e1` package and unrelated main staged
-diff remain unchanged. After certification/install/smoke, preserve the
-installed source generation and move future development to a separate
-worktree so playtest workers continue reading stable accepted source. The
-separately accepted match-history candidate remains unintegrated until then.
+No new native certification, package, installation or actual UI smoke has been
+performed for this pending new generation; the preserved `193e231` seven-phase
+certificate/package and its failed-safe upgrade attempt are the latest native
+evidence, not a claim about the fixed helper. The live 27-file `9f7a8e1` package
+and unrelated main staged diff remain unchanged. After certification/install/
+smoke, preserve the installed source generation and move future development to a
+separate worktree so playtest workers continue reading stable accepted source.
+The separately accepted match-history candidate remains unintegrated until then.
 
 ## Remaining sequence
 
@@ -276,3 +286,43 @@ both orders, LEAVE_SHOP-first and all three strong tiers. Evidence:
 `astra-negative-slot-deepseek-fixed-after.json` and the pre-fix run log. No
 native launch, install, certification, upgrade, save or Mods mutation was
 performed; LV-12 in `LOCAL_VALIDATION_QUEUE.md` is queued for the live test.
+
+## Upgrade caller-contract fix (fixture-only, native acceptance pending)
+
+The `193e231` source generation was reviewed and genuinely certified through all
+seven native phases, and its accepted package/certificate were recorded
+(package
+`fce9da0e7811d119902462571e1fef0f79a7cff3823d46e859bb1e9684a90b19`, certificate
+`b122532d89bc12e4d6b857d59714cc74d1bcf050b7abfaa075614e3fe83a49f3`). Its actual
+upgrade then failed *safely*: both `tools/upgrade_reviewed_companion.py`
+installer calls omitted the required `install_companion` API `live_mods_root`, so
+the real installer refused with `mods_root_required`. The archive rollback
+restored exactly the 27 old files and every live map outside the companion was
+unchanged (`work/local-ownership/upgrade-failure-rollback-astra-proof.json`), so
+the installed old `9f7a8e1` build remains in place. The prior Claude pre-install
+review and the 19 portable mocked tests missed this caller contract because the
+fault fixture's installer double accepted arbitrary `**kw`.
+
+This helper-only fix forwards the already verified resolved paths under the
+installer's real keyword names — `live_mods_root=mods`, `target_dir=target` and
+the obtained `live` mapping — on both the dry-run and execute calls. No installer
+gate, default, rollback, game-closure, target/backup check or source/native
+binding changed, and no Lua/runtime byte changed. A permanent regression in
+`tests/test_upgrade_reviewed_companion.py` now constrains the fixture to the
+production installer signature (missing/wrong root, target or live mapping is
+rejected), mirrors the production `resolve_install_target` resolver, and proves
+the pre-fix call shape fails while the fixed shape passes. It fails the pre-fix
+helper (`installer missing/wrong live_mods_root`) and passes the fixed helper;
+the 19 prior cases stay green (now 20/20). Evidence:
+`work/local-ownership/deepseek-installer-caller-report.md`.
+
+This was a helper-only change on identical runtime inputs, so the previously
+recorded 62 supported suites and H1 results still name the same runtime bytes.
+No new native certification, package, installation or UI smoke has been
+performed; the new release generation still needs a fresh final review, native
+certification, exact-package pre-install review, backed-up scoped upgrade and
+actual UI smoke before any new pass is claimed. The prior `fce9da0e` package
+and `b122532d` certificate are retained under the sibling old generation and must not
+be reused for a newly generated discovery path. The current pointer generation is
+this checkout. The original `main` checkout keeps its unrelated staged changes
+and stash and is never modified.

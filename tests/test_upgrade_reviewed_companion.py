@@ -20,6 +20,7 @@ from pathlib import Path
 import contextlib
 import hashlib
 import importlib.util
+import inspect
 import json
 import pathlib
 import sys
@@ -164,11 +165,24 @@ def scenario(fault):
                 raise OSError("injected backup failure after archive change")
             return {"ok": True}
 
-        def install_companion(**kw):
-            calls.append("installer-execute" if kw["execute"] else "installer-dry")
+        def install_companion(acceptance_path=None, live_mods_root=None, target_dir=None,
+                              live=None, execute=False):
+            # Mirror the production installer's real keyword contract so a missing
+            # or wrong root/target can never silently pass. The upgrade must forward
+            # the exact verified paths on BOTH the dry and execute calls; the
+            # pre-fix caller omitted them and is rejected here.
+            calls.append("installer-execute" if execute else "installer-dry")
+            if Path(live_mods_root or "") != mods:
+                raise AssertionError("installer missing/wrong live_mods_root: %r" % (live_mods_root,))
+            if Path(target_dir or "") != target:
+                raise AssertionError("installer missing/wrong target_dir: %r" % (target_dir,))
+            if not isinstance(live, dict) or Path(str(live.get("appdata", ""))) != app:
+                raise AssertionError("installer missing/wrong live mapping: %r" % (live,))
+            if acceptance_path is None:
+                raise AssertionError("installer missing acceptance_path")
             if fault == "installer":
                 return {"ok": False, "code": "injected"}
-            if kw["execute"]:
+            if execute:
                 target.mkdir()
                 if fault == "interrupt-partial-install":
                     (target / "partial-new.lua").write_text("PARTIAL")
@@ -309,6 +323,94 @@ def real_checker_pin_proof():
     }
 
 
+def installer_caller_contract_proof():
+    """Prove the upgrade's forwarded call kwargs are judged by the real installer.
+
+    Permanent regression for the caller-contract bug: the upgrade previously
+    called ``install_companion(acceptance_path=..., execute=...)`` without
+    ``live_mods_root``/``target_dir`` and the real installer refused it with
+    ``mods_root_required``. The supplied call kwargs are bound to the production
+    ``install_companion.install_companion`` signature (``bind``/``apply_defaults``)
+    and the resulting root/target are judged by the production
+    ``resolve_install_target`` resolver inside an owned TemporaryDirectory. The
+    constrained scenario fixture separately checks that BOTH the actual dry and
+    execute upgrade calls forward the exact checked paths; this standalone proof
+    judges the real installer API instead of a handwritten contract. The
+    production resolver legitimately defaults ``target_dir`` when omitted, so the
+    upgrade's explicit target forwarding is asserted separately from the API.
+    """
+    with tempfile.TemporaryDirectory(prefix="aisparring-caller-contract-") as tmp:
+        root = Path(tmp)
+        app = root / "fake-live/appdata"
+        mods = app / "Mods"
+        mods.mkdir(parents=True)
+        target = mods / REAL_INSTALLER.TARGET_NAME
+        install = root / "fake-live/install"
+        install.mkdir(parents=True)
+        live = {"appdata": str(app), "install": str(install)}
+
+        sig = inspect.signature(REAL_INSTALLER.install_companion)
+        assert "live_mods_root" in sig.parameters and "target_dir" in sig.parameters, sorted(sig.parameters)
+
+        def judge(**call_kwargs):
+            """Bind supplied call kwargs to the real signature, then judge the
+            bound root/target with the real resolver (no handwritten contract)."""
+            bound = sig.bind(**call_kwargs)
+            bound.apply_defaults()
+            args = bound.arguments
+            try:
+                REAL_INSTALLER.resolve_install_target(
+                    args["live_mods_root"], args["target_dir"], live=args.get("live") or live)
+            except REAL_INSTALLER.InstallError as exc:
+                return exc.code
+            return "ok"
+
+        pre_fix_dry = judge(acceptance_path="a", execute=False)
+        pre_fix_exec = judge(acceptance_path="a", execute=True)
+        wrong_target = judge(acceptance_path="a", live_mods_root=mods,
+                             target_dir=root / "elsewhere/AISparring", live=live, execute=False)
+        fixed_dry = judge(acceptance_path="a", live_mods_root=mods, target_dir=target,
+                          live=live, execute=False)
+        fixed_exec = judge(acceptance_path="a", live_mods_root=mods, target_dir=target,
+                           live=live, execute=True)
+
+        # The upgrade contract explicitly forwards the checked target; the
+        # installer API also defaults target_dir when it is omitted.
+        bound_fixed = sig.bind(acceptance_path="a", live_mods_root=mods, target_dir=target,
+                               live=live, execute=False)
+        bound_fixed.apply_defaults()
+        forwards_target = Path(bound_fixed.arguments["target_dir"]) == target
+        try:
+            api_default = REAL_INSTALLER.resolve_install_target(mods, None, live=live)
+        except REAL_INSTALLER.InstallError as exc:  # pragma: no cover - unexpected
+            api_default = exc.code
+        try:
+            sig.bind(acceptance_path="a", live_mods_root=mods, target_dir=target,
+                     live=live, execute=False, mods_root=mods)
+            unsupported = "no-error"
+        except TypeError:
+            unsupported = "TypeError"
+
+    assert pre_fix_dry == "mods_root_required" and pre_fix_exec == "mods_root_required", (pre_fix_dry, pre_fix_exec)
+    assert wrong_target == "target_not_owned", wrong_target
+    assert fixed_dry == "ok" and fixed_exec == "ok", (fixed_dry, fixed_exec)
+    assert forwards_target, forwards_target
+    assert api_default == (mods, target), api_default
+    assert unsupported == "TypeError", unsupported
+    return {
+        "installer_keywords": ["live_mods_root", "target_dir"],
+        "missing_root_code": pre_fix_dry,
+        "wrong_target_code": wrong_target,
+        "unsupported_keyword_error": unsupported,
+        "fixed_dry_code": fixed_dry,
+        "fixed_execute_code": fixed_exec,
+        "upgrade_forwards_target": forwards_target,
+        "api_default_resolves_target": str(api_default[1]),
+        "resolved_target": str(target),
+        "fixture_only": True,
+    }
+
+
 FAULTS = [
     "none",                     # successful installation
     "archive-log",              # archive evidence write failure
@@ -442,6 +544,10 @@ def test_recovered_package_pin_binding():
     real_checker_pin_proof()
 
 
+def test_installer_caller_contract():
+    installer_caller_contract_proof()
+
+
 def main():
     total = 0
     failed = []
@@ -462,6 +568,14 @@ def main():
         print("FAIL old-package-pin-proof: " + type(error).__name__ + ": " + str(error))
     else:
         print("ok   old-package-pin-proof")
+    total += 1
+    try:
+        installer_caller_contract_proof()
+    except BaseException as error:  # noqa: BLE001
+        failed.append("installer-caller-contract")
+        print("FAIL installer-caller-contract: " + type(error).__name__ + ": " + str(error))
+    else:
+        print("ok   installer-caller-contract")
     print(str(total - len(failed)) + "/" + str(total) + " cases passed")
     return 1 if failed else 0
 

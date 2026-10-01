@@ -465,3 +465,28 @@ needs the full re-certification and a companion reinstall, not
 - **Risk if it fails:** choice quality and a lost Negative, not a stall; every
   action stays certified. If the game refuses the `SELL_CONSUMABLE`, record the
   card's edition and the result code.
+
+## LV-13 Reviewed companion upgrade caller contract (tooling, native install pending)
+
+- **Commit:** `193e231` source generation plus the helper-only caller fix in
+  `tools/upgrade_reviewed_companion.py` (this checkout).
+- **Change:** the `193e231` source was reviewed and certified through all seven
+  native phases, but the actual upgrade failed *safely*: both installer calls
+  omitted the required `install_companion` API `live_mods_root`, so the real
+  installer refused with `mods_root_required`. The rollback restored the exact 27
+  old files and all live maps stayed unchanged, so the installed old `9f7a8e1`
+  build is still present. The fix forwards the verified `live_mods_root=mods`,
+  `target_dir=target` and the obtained `live` mapping on both the dry-run and
+  execute calls; no installer gate, default, rollback, closure or
+  target/backup/certificate check changed. No Lua/runtime byte changed.
+- **Local test:** this changes no mod bytes, so it needs no re-certification of
+  the current installed `9f7a8e1` package. Before any new install: fresh final
+  review, consolidated seven-phase native certification with the exact new
+  package, exact-package pre-install review, fresh verified backups, scoped
+  upgrade and actual UI smoke. Do not reuse the prior `fce9da0e` package or
+  `b122532d` certificate for a newly generated discovery path.
+- **Evidence:** `tests/test_upgrade_reviewed_companion.py` (20/20 with the new
+  caller-contract regression; the pre-fix helper fails it),
+  `work/local-ownership/deepseek-installer-caller-report.md` and
+  `upgrade-failure-rollback-astra-proof.json`. No native launch, install,
+  certification, upgrade, save or Mods mutation was performed.
