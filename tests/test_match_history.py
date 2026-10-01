@@ -2,6 +2,7 @@
 """Synthetic-session tests for tools/match_history.py (read-only aggregator)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -31,6 +32,33 @@ def write_session(root: Path, name: str, *, difficulty, result, ante, errors=0, 
     if host is not None:
         (session / "host.json").write_text(json.dumps(host), encoding="utf-8")
     return session
+
+
+def decision_row(tick, *, action=None, phase="PLAY_HAND", difficulty="major_league", session="s-tarot",
+                 timestamp=1.0, reason="practice_ok", latency=0.01, errors=None):
+    """One row shaped like practice_service's LocalLogger.log_decision output."""
+    return {
+        "timestamp": timestamp, "tick": tick, "session": session, "ruleset": "practice",
+        "difficulty": difficulty, "phase": phase, "hash": "0" * 16, "legalcount": 12,
+        "action": action, "reason": reason, "latency": latency, "version": "1",
+        "errors": errors, "seed": None, "ui": None,
+    }
+
+
+def result_row(sequence, *, accepted, code, tick=0, session="s-tarot", timestamp=1.0, difficulty="major_league"):
+    """One row shaped like practice_service's LocalLogger.log_result output."""
+    return {
+        "timestamp": timestamp, "session": session, "ruleset": "practice", "difficulty": difficulty,
+        "sequence": sequence, "accepted": accepted, "code": code, "version_id": None,
+        "tick": tick, "reason": None, "seed": None, "version": "1",
+    }
+
+
+def tarot_action(center="c_death", source_ref="consumable:1", refs=("hand:4", "hand:2")):
+    return {
+        "type": "USE_CONSUMABLE_ON_HAND", "cards": len(refs), "card_refs": list(refs),
+        "source_ref": source_ref, "tarot": center,
+    }
 
 
 def test_history_aggregates_by_difficulty():
@@ -174,6 +202,247 @@ def test_oversized_files_are_skipped():
             assert match_history.read_jsonl(session / "logs" / "summary.jsonl") == ([], 0)
         finally:
             match_history.MAX_FILE_BYTES = old
+
+
+def test_tarot_selection_joins_by_decision_tick_not_result_tick():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        decisions = [decision_row(5, action=tarot_action("c_death", "consumable:1", ("hand:4", "hand:2")))]
+        results = [
+            result_row(5, accepted=True, code="broker_ok", tick=999),
+            result_row(999, accepted=False, code="broker_stale_epoch", tick=5),
+        ]
+        write_session(root, "s-tarot", difficulty="major_league", result="ai_win", ante=6,
+                      decisions=decisions, results=results)
+        selection = match_history.review(root / "s-tarot")["tarot_selection"]
+        assert selection["uses"] == 1 and selection["centers"] == {"c_death": 1}
+        assert selection["rows_truncated"] is False
+        row = selection["rows"][0]
+        assert row["sequence"] == 5
+        assert row["center"] == "c_death"
+        assert row["source_ref"] == "consumable:1"
+        assert row["card_refs"] == ["hand:4", "hand:2"], "Death targets stay in the logged order"
+        assert row["targets"] == 2 and row["targets_truncated"] is False
+        assert row["phase"] == "PLAY_HAND" and row["difficulty"] == "major_league" and row["timestamp"] == 1.0
+        assert row["receipt_status"] == "matched"
+        assert row["broker_accepted"] is True and row["broker_code"] == "broker_ok"
+        assert selection["receipts"] == {"matched": 1, "absent": 0, "ambiguous": 0, "invalid": 0}
+
+
+def test_tarot_selection_reports_declined_receipt_but_never_infers_effect():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        decisions = [decision_row(2, action=tarot_action("c_strength", "consumable:2", ("hand:1",)))]
+        results = [result_row(2, accepted=False, code="broker_stale_epoch")]
+        write_session(root, "s-tarot", difficulty="expert", result="human_win", ante=2,
+                      decisions=decisions, results=results)
+        row = match_history.review(root / "s-tarot")["tarot_selection"]["rows"][0]
+        assert row["receipt_status"] == "matched"
+        assert row["broker_accepted"] is False and row["broker_code"] == "broker_stale_epoch"
+        assert "effect" not in row and "highlight" not in row
+
+
+def test_tarot_selection_missing_duplicate_and_conflicting_receipts_are_not_guessed():
+    decisions = [
+        decision_row(1, action=tarot_action("c_sun", "consumable:1", ("hand:1",))),
+        decision_row(2, action=tarot_action("c_moon", "consumable:1", ("hand:2",))),
+        decision_row(3, action=tarot_action("c_star", "consumable:1", ("hand:3",))),
+        decision_row(4, action=tarot_action("c_world", "consumable:1", ("hand:5",))),
+        decision_row(6, action=tarot_action("c_lovers", "consumable:1", ("hand:6",)), session="elsewhere"),
+    ]
+    results = [
+        result_row(2, accepted=True, code="broker_ok"),
+        result_row(2, accepted=True, code="broker_ok"),
+        result_row(3, accepted=True, code="broker_ok"),
+        result_row(3, accepted=False, code="broker_declined"),
+        result_row(4, accepted=True, code="broker_ok", session="elsewhere"),
+        result_row(6, accepted=True, code="broker_ok", session="elsewhere"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="competitive", result="ai_win", ante=4,
+                      decisions=decisions, results=results)
+        selection = match_history.review(root / "s-tarot")["tarot_selection"]
+        assert selection["uses"] == 4, "a row declaring another session is not this session's evidence"
+        statuses = {row["sequence"]: row["receipt_status"] for row in selection["rows"]}
+        assert statuses == {1: "absent", 2: "ambiguous", 3: "ambiguous", 4: "absent"}
+        assert selection["receipts"] == {"matched": 0, "absent": 2, "ambiguous": 2, "invalid": 0}
+        assert all(row["broker_accepted"] is None for row in selection["rows"])
+
+
+def test_tarot_selection_rows_are_bounded_and_truncation_is_truthful():
+    total = match_history.TAROT_ROWS + 1
+    decisions = [decision_row(index + 1, action=tarot_action("c_sun", "consumable:1", ("hand:1",)))
+                 for index in range(total)]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=9, decisions=decisions)
+        selection = match_history.review(root / "s-tarot")["tarot_selection"]
+        assert selection["uses"] == total
+        assert selection["centers"] == {"c_sun": total}
+        assert len(selection["rows"]) == match_history.TAROT_ROWS == 200
+        assert selection["rows_truncated"] is True
+
+
+def test_tarot_selection_drops_malformed_and_nonprimitive_refs_and_extra_fields():
+    action = {
+        "type": "USE_CONSUMABLE_ON_HAND", "tarot": "c_sun", "source_ref": "not-a-ref",
+        "card_refs": ["hand:2", 7, {"id": "hand:3"}, "hand:", "hand:xx", "consumable:1", "hand:1", "h" * 40],
+        "secret": "leak", "table": {"a": 1}, "target_refs": ["nope"], "order": [1, 2],
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=3,
+                      decisions=[decision_row(1, action=action)])
+        row = match_history.review(root / "s-tarot")["tarot_selection"]["rows"][0]
+        assert row["card_refs"] == ["hand:2", "hand:1"]
+        assert row["targets"] == 2 and row["targets_truncated"] is False
+        assert row["source_ref"] is None
+        for leaked in ("secret", "table", "target_refs", "order", "cards"):
+            assert leaked not in row, leaked
+    oversized = tarot_action("c_sun", "consumable:" + "9" * 40, ("hand:1",))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=3,
+                      decisions=[decision_row(1, action=oversized)])
+        row = match_history.review(root / "s-tarot")["tarot_selection"]["rows"][0]
+        assert row["source_ref"] is None
+
+
+def test_tarot_selection_ignores_unsupported_centers_and_tolerates_legacy_rows():
+    legacy_action = {"type": "USE_CONSUMABLE_ON_HAND", "source_ref": "consumable:1", "card_refs": ["hand:1"]}
+    decisions = [
+        decision_row(1, action=tarot_action("c_hanged_man")),
+        decision_row(2, action=tarot_action(None)),
+        decision_row(3, action=tarot_action("c_mystery")),
+        decision_row(4, action=legacy_action),
+        decision_row(5, action=tarot_action("c_justice", "consumable:1", ("hand:1",))),
+        {"timestamp": 1.0, "tick": 6, "action": "not-a-dict", "phase": "SHOP"},
+        {"timestamp": 1.0, "tick": 7},
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="major_league", result="ai_win", ante=5,
+                      decisions=decisions)
+        review = match_history.review(root / "s-tarot")
+        selection = review["tarot_selection"]
+        assert selection["uses"] == 1 and selection["centers"] == {"c_justice": 1}
+        assert len(selection["rows"]) == 1 and selection["rows"][0]["receipt_status"] == "absent"
+        assert review["actions"]["USE_CONSUMABLE_ON_HAND"] == 5, "existing action counts are unchanged"
+
+
+def test_review_is_read_only_for_session_files():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        session = write_session(root, "s-ro", difficulty="rookie", result="ai_win", ante=2,
+                                decisions=[decision_row(1, session="s-ro", action=tarot_action("c_death", "consumable:1", ("hand:1", "hand:2")))],
+                                results=[result_row(1, accepted=True, code="broker_ok", tick=4, session="s-ro")])
+        paths = sorted((session / "logs").glob("*.jsonl"))
+        before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+        review = match_history.review(session)
+        assert review["tarot_selection"]["uses"] == 1
+        assert match_history.main(["--root", str(root), "--json"]) == 0
+        assert match_history.main(["--root", str(root), "review", "s-ro"]) == 0
+        after = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+        assert before == after and len(before) == 4
+
+
+def _selection(root, name="s-tarot"):
+    return match_history.review(root / name)["tarot_selection"]
+
+
+def test_tarot_selection_tolerates_malformed_timestamps_without_raising():
+    stamps = [10 ** 400, -5.0, float("nan"), float("inf"), float("-inf"), True, None, "1.0", 1.25]
+    decisions = []
+    for index, stamp in enumerate(stamps, start=1):
+        row = decision_row(index, action=tarot_action("c_sun", "consumable:1", ("hand:1",)))
+        row["timestamp"] = stamp
+        decisions.append(row)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=3, decisions=decisions)
+        selection = _selection(root)
+        assert selection["uses"] == len(stamps)
+        assert [row["timestamp"] for row in selection["rows"]] == [None] * (len(stamps) - 1) + [1.25]
+
+
+def test_tarot_selection_refuses_correlation_when_a_decision_sequence_repeats():
+    decisions = [
+        decision_row(7, action=tarot_action("c_death", "consumable:1", ("hand:4", "hand:2"))),
+        decision_row(7, action=tarot_action("c_death", "consumable:1", ("hand:4", "hand:2"))),
+        decision_row(8, action={"type": "PLAY_CARDS", "card_refs": ["hand:1"]}),
+        decision_row(8, action=tarot_action("c_star", "consumable:3", ("hand:2",))),
+    ]
+    results = [result_row(7, accepted=True, code="broker_ok"),
+               result_row(8, accepted=True, code="broker_ok")]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=5,
+                      decisions=decisions, results=results)
+        selection = _selection(root)
+        assert [row["receipt_status"] for row in selection["rows"]] == ["ambiguous"] * 3
+        assert all(row["broker_accepted"] is None and row["broker_code"] is None for row in selection["rows"])
+        assert selection["receipts"] == {"matched": 0, "absent": 0, "ambiguous": 3, "invalid": 0}
+
+
+def test_tarot_selection_keeps_malformed_receipts_from_becoming_matched():
+    decisions = [
+        decision_row(1, action=tarot_action("c_sun", "consumable:1", ("hand:1",))),
+        decision_row(2, action=tarot_action("c_moon", "consumable:2", ("hand:2",))),
+    ]
+    results = [
+        result_row(1, accepted=True, code="broker_ok"),
+        {"session": "s-tarot", "sequence": 1, "accepted": "not-a-bool", "code": "broker_ok"},
+        {"session": "s-tarot", "sequence": 2, "accepted": "not-a-bool", "code": "broker_ok"},
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=5,
+                      decisions=decisions, results=results)
+        selection = _selection(root)
+        statuses = {row["sequence"]: row["receipt_status"] for row in selection["rows"]}
+        assert statuses == {1: "ambiguous", 2: "invalid"}
+        assert all(row["broker_accepted"] is None and row["broker_code"] is None for row in selection["rows"])
+        assert selection["receipts"] == {"matched": 0, "absent": 0, "ambiguous": 1, "invalid": 1}
+
+
+def test_tarot_selection_accepts_only_canonical_positive_positional_refs():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        good = tarot_action("c_sun", "consumable:999", ("hand:1", "hand:999"))
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=3,
+                      decisions=[decision_row(1, action=good)])
+        row = _selection(root)["rows"][0]
+        assert row["source_ref"] == "consumable:999"
+        assert row["card_refs"] == ["hand:1", "hand:999"]
+        assert row["targets"] == 2 and row["targets_truncated"] is False
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bad = tarot_action("c_death", "consumable:0", ("hand:0", "hand:01", "hand:1000", "hand:12345678901", "hand:007"))
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=3,
+                      decisions=[decision_row(1, action=bad)])
+        row = _selection(root)["rows"][0]
+        assert row["source_ref"] is None
+        assert row["card_refs"] == [] and row["targets"] == 0 and row["targets_truncated"] is False
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        three = tarot_action("c_sun", "consumable:1", ("hand:1", "hand:2", "hand:3"))
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=3,
+                      decisions=[decision_row(1, action=three)])
+        row = _selection(root)["rows"][0]
+        assert row["card_refs"] == ["hand:1", "hand:2"] and row["targets"] == 2
+        assert row["targets_truncated"] is True
+
+
+def test_tarot_selection_requires_positive_integer_sequences():
+    ticks = [0, -1, True, 1.5, 10 ** 30, None, "3", 4]
+    decisions = [decision_row(tick, action=tarot_action("c_world", "consumable:1", ("hand:1",))) for tick in ticks]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session(root, "s-tarot", difficulty="expert", result="ai_win", ante=3, decisions=decisions)
+        rows = _selection(root)["rows"]
+        assert [row["sequence"] for row in rows] == [None] * 7 + [4]
+        assert [row["receipt_status"] for row in rows] == ["invalid"] * 7 + ["absent"]
 
 
 def main() -> int:

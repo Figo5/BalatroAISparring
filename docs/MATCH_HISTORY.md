@@ -51,3 +51,82 @@ logs:
 
 These are the LV-7 checks: UI values, large hands, zero budget errors.
 
+## Tarot selection evidence (`review` → `tarot_selection`)
+
+The practice service already logs, for a hand-targeted use, the allowlisted
+`action.tarot` center, the `action.source_ref` and the ordered
+`action.card_refs`. `review` now surfaces that evidence (it previously only
+counted `USE_CONSUMABLE_ON_HAND` actions):
+
+| Field | Meaning |
+|---|---|
+| `centers` | count of hand-targeted uses per allowlisted center, over every matching row (not just the surfaced list) |
+| `uses` | total hand-targeted uses with an allowlisted center |
+| `rows` | the detail list, at most 200, in log order |
+| `rows_truncated` | `true` when more uses exist than are shown (i.e. `uses` > `len(rows)`) |
+| `receipts` | how many rows correlated to a broker receipt: `matched` / `absent` / `ambiguous` / `invalid` |
+
+Each row has:
+
+| Field | Meaning |
+|---|---|
+| `sequence` | the decision row's `tick`, which the service sets to the decision sequence; `null` unless it is a valid positive integer (no `0`, bool, float, negative or oversized value) |
+| `timestamp` / `phase` / `difficulty` | the decision's own values when safely available and bounded; `phase`/`difficulty` are `null` otherwise |
+| `center` | one of the ten allowlisted Tarot centers |
+| `source_ref` | `consumable:n` positional ref, or `null` |
+| `card_refs` | the ordered `hand:n` targets, at most two |
+| `targets` | number of targets shown, always 0-2; never inflated by malformed refs |
+| `targets_truncated` | `true` only when the action carried more than two valid targets (explicit bounded indicator) |
+| `broker_accepted` / `broker_code` | the matching result receipt's `accepted` / `code`, or `null` |
+| `receipt_status` | `matched`, `absent`, `ambiguous` or `invalid` |
+
+### Correlation and what the receipt proves
+
+- The join key is the decision sequence: `decision.tick` = `result.sequence`.
+  `result.tick` is the runtime tick and is **never** used to join.
+- A unique receipt is only a unique correspondence when the decision sequence
+  itself is unique. `receipt_status` is:
+  - `matched` - the sequence is used by exactly one decision (of any action
+    type) and exactly one in-session result row declares it, with a readable
+    `accepted`/`code` payload;
+  - `absent` - no in-session result row declares the sequence;
+  - `ambiguous` - the sequence is used by more than one decision, or more than
+    one in-session result row declares it (identical, conflicting, or one
+    malformed). One broker receipt is never counted as proof for two uses;
+  - `invalid` - the decision has no usable sequence, or its single result row's
+    payload cannot be read (e.g. `accepted` is not a boolean). This is
+    explicitly unknown, not acceptance.
+- Result rows are counted per sequence *before* payload validation, so a
+  malformed row cannot make a duplicated sequence look unique.
+- **`broker_accepted` / `broker_code` are broker acceptance/commit receipts
+  only.** They do **not** prove that the engine applied the Tarot effect or that
+  the highlight was cleaned up. That proof is in the separate native/runtime
+  event log and in human validation (`docs/HAND_TARGETS_DESIGN.md`,
+  `docs/LOCAL_VALIDATION_QUEUE.md`).
+- A decision or result row that declares a different `session` than the
+  directory is not correlated into this session.
+
+### Sanitisation and limits
+
+- Only the ten hand-targeted centers are surfaced (`c_strength`, `c_death`,
+  `c_lovers`, `c_chariot`, `c_justice`, `c_devil`, `c_star`, `c_moon`,
+  `c_sun`, `c_world`). Any other or missing `action.tarot` value is dropped.
+- Refs are canonical positive positional strings: `consumable:n` / `hand:n`
+  with `n` in 1..999, ASCII digits, no leading zero, at most three digits.
+  Zero, leading-zero, oversized, wrong-prefix or non-primitive values are
+  dropped. At most two ordered targets are shown; `targets` is bounded to 2 and
+  `targets_truncated` says whether more valid targets existed. No target is
+  invented from a malformed extra ref.
+- Timestamps must be numeric, finite and in `[0, 1e11]`. Range and type are
+  checked before any float conversion, so a huge JSON integer cannot raise;
+  bools, non-numbers, `NaN` and infinities are `null`. Phases are bounded text;
+  a difficulty outside the known set is `null`.
+- Arbitrary action fields (hidden/string/table payloads, `target_refs`,
+  `order`, …) are never copied into a row.
+- Rows without an allowlisted center - including legacy logs written before
+  `action.tarot` existed - are tolerated and produce no row, so old logs keep
+  working and `centers`/`uses` stay truthful.
+
+This view reports only what the service logged. Buy/sell identities, wait
+durations, economy or build progression and turning points are not logged and
+are **not** derived here; they remain unavailable.

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import sys
 from collections import Counter
@@ -33,6 +34,19 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_ROOT = REPO / "work" / "aisparring-host" / "sessions"
 MAX_FILE_BYTES = 64 * 1024 * 1024
 DIFFICULTY_ORDER = ("rookie", "competitive", "major_league", "expert")
+
+# Tarot review bounds. Only the ten hand-targeted Tarots the service logs about
+# are surfaced; refs stay primitive positional strings; the detail list is
+# capped so a review output cannot grow without limit.
+TAROT_CENTERS = (
+    "c_strength", "c_death", "c_lovers", "c_chariot", "c_justice",
+    "c_devil", "c_star", "c_moon", "c_sun", "c_world",
+)
+TAROT_ROWS = 200
+TAROT_MAX_TARGETS = 2
+TEXT_MAX_CHARS = 64
+SEQUENCE_MAX = 2147483647
+TIMESTAMP_MAX = 1e11
 
 
 PARSE_ERRORS = (ValueError, RecursionError)
@@ -191,6 +205,155 @@ def history(root: Path) -> dict:
     return {"root": str(root), "matches": matches, "by_difficulty": totals}
 
 
+def _bounded_text(value, limit: int) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.replace("\r", " ").replace("\n", " ")
+    return cleaned[:limit] or None
+
+
+def _bounded_number(value, high: float) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return None
+    if not math.isfinite(number) or number < 0 or number > high:
+        return None
+    return number
+
+
+def _sequence(value) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 1 or value > SEQUENCE_MAX:
+        return None
+    return value
+
+
+def _positional_ref(value, prefix: str) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    head, sep, tail = value.partition(":")
+    if sep != ":" or head != prefix:
+        return None
+    if not (1 <= len(tail) <= 3) or not tail.isascii() or not tail.isdigit():
+        return None
+    if tail.startswith("0"):
+        return None
+    return value
+
+
+def _foreign_session(row: dict, session_name: str) -> bool:
+    declared = row.get("session")
+    return declared is not None and declared != session_name
+
+
+def _receipt_index(results: Iterable[dict], session_name: str) -> tuple[Counter, dict]:
+    """In-session result rows by sequence, counted before payload validation.
+
+    ``occurrences`` counts every row that declares a valid sequence, even one
+    whose ``accepted``/``code`` payload is malformed, so a bad row cannot make a
+    duplicated sequence look unique. ``receipts`` holds only structurally valid
+    payloads.
+    """
+    occurrences: Counter = Counter()
+    receipts: dict = {}
+    for row in results:
+        if not isinstance(row, dict) or _foreign_session(row, session_name):
+            continue
+        sequence = _sequence(row.get("sequence"))
+        if sequence is None:
+            continue
+        occurrences[sequence] += 1
+        code = _bounded_text(row.get("code"), TEXT_MAX_CHARS)
+        accepted = row.get("accepted")
+        if isinstance(accepted, bool) and code is not None:
+            receipts.setdefault(sequence, []).append({"accepted": accepted, "code": code})
+    return occurrences, receipts
+
+
+def tarot_selection(decisions: Iterable[dict], results: Iterable[dict], session_name: str = "") -> dict:
+    """Bounded, allowlisted evidence for hand-targeted Tarot uses.
+
+    Only reads what the service already logged: a decision's ``action``
+    (``tarot``, ``source_ref``, ordered ``card_refs``) and the broker receipt
+    whose ``result.sequence`` equals the decision's ``tick`` (the decision
+    sequence). ``result.tick`` is the runtime tick and is never a join key.
+
+    A receipt is broker acceptance/commit only. It is not proof of an engine
+    effect or of highlight cleanup - that evidence lives in the native/runtime
+    event log and in human validation.
+
+    ``receipt_status`` is ``matched`` only for a decision sequence used exactly
+    once and a single structurally valid receipt at that sequence. A sequence
+    used by more than one decision, or with more than one result row (even one
+    of them malformed), is ``ambiguous``. No result row is ``absent``. A single
+    result row whose payload cannot be read is ``invalid``. A decision row with
+    no usable sequence is ``invalid``. None of these is guessed.
+    """
+    in_session = [row for row in decisions if isinstance(row, dict) and not _foreign_session(row, session_name)]
+    occurrences, receipts = _receipt_index(results, session_name)
+    sequence_uses: Counter = Counter(
+        sequence for sequence in (_sequence(row.get("tick")) for row in in_session) if sequence is not None
+    )
+
+    centers: Counter = Counter()
+    tally: Counter = Counter()
+    rows: list = []
+    uses = 0
+    for row in in_session:
+        action = row.get("action")
+        if not isinstance(action, dict) or action.get("type") != "USE_CONSUMABLE_ON_HAND":
+            continue
+        center = action.get("tarot")
+        if not isinstance(center, str) or center not in TAROT_CENTERS:
+            continue
+        uses += 1
+        centers[center] += 1
+        sequence = _sequence(row.get("tick"))
+        if sequence is None or sequence_uses[sequence] > 1:
+            status, receipt = ("invalid" if sequence is None else "ambiguous"), None
+        elif occurrences.get(sequence, 0) == 0:
+            status, receipt = "absent", None
+        elif occurrences[sequence] > 1:
+            status, receipt = "ambiguous", None
+        else:
+            unique = receipts.get(sequence)
+            status, receipt = ("matched", unique[0]) if unique else ("invalid", None)
+        tally[status] += 1
+        if len(rows) >= TAROT_ROWS:
+            continue
+        valid_refs = []
+        refs = action.get("card_refs")
+        if isinstance(refs, list):
+            valid_refs = [ref for ref in (_positional_ref(value, "hand") for value in refs) if ref]
+        targets = valid_refs[:TAROT_MAX_TARGETS]
+        difficulty = row.get("difficulty")
+        rows.append({
+            "sequence": sequence,
+            "timestamp": _bounded_number(row.get("timestamp"), TIMESTAMP_MAX),
+            "phase": _bounded_text(row.get("phase"), TEXT_MAX_CHARS),
+            "difficulty": difficulty if difficulty in DIFFICULTY_ORDER else None,
+            "center": center,
+            "source_ref": _positional_ref(action.get("source_ref"), "consumable"),
+            "card_refs": targets,
+            "targets": len(targets),
+            "targets_truncated": len(valid_refs) > TAROT_MAX_TARGETS,
+            "broker_accepted": receipt["accepted"] if receipt else None,
+            "broker_code": receipt["code"] if receipt else None,
+            "receipt_status": status,
+        })
+    return {
+        "centers": dict(centers.most_common()),
+        "uses": uses,
+        "rows": rows,
+        "rows_truncated": uses > len(rows),
+        "receipts": {key: tally.get(key, 0) for key in ("matched", "absent", "ambiguous", "invalid")},
+    }
+
+
 def review(session_dir: Path) -> dict:
     """Post-match review foundations for one session."""
     logs = session_dir / "logs"
@@ -241,6 +404,7 @@ def review(session_dir: Path) -> dict:
         "handoff_slowest": [{"stage": e.get("stage"), "seconds": e.get("seconds")} for e in slowest],
         "malformed_lines": bad + bad_results,
         "ui_check": ui_check(decisions),
+        "tarot_selection": tarot_selection(decisions, results, session_dir.name),
     }
     return return_value
 
