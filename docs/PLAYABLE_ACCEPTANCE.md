@@ -1,89 +1,74 @@
-# Playable build acceptance evidence
+# Playable build and V1 acceptance
 
-Status: **dev build 0.1.0-dev installed in live Mods (September 29, commit c33bab6, certificate e9bc994a…); live boot smoke passed; first human playtest pending**. Fixture and local-server evidence do not satisfy the user's actual Balatro acceptance criteria.
+## Current evidence — September 30, 2026
 
-| Requirement | Evidence and remaining gate |
-|---|---|
-| Actual mod load; normal Balatro, single-player, Multiplayer, Handy and JokerDisplay | Packaged companion loads in both staged runtimes and detects Multiplayer; full gameplay/compatibility pending; live copies untouched |
-| Menu, Major League, three difficulties, five Gauntlets, pacing and match start | UI/controller, runtime/service fixtures pass; actual menu/start pending |
-| Human control and independent AI run | Reviewed two-runtime architecture retained; native Balatro isolation proof pending |
-| Blinds, hands, discards, shops, purchases, rerolls, round progression | Baseline and production adapter implemented; fixtures pass; actual action traces pending |
-| Observation, legal validation, stale state, hidden information | M1/M2 and production regression checks pass; runtime/engine/policy repairs reviewed |
-| Public opponent HUD | Original Multiplayer presentation/privacy retained; rendering pending |
-| Lives, PvP/Nemesis, both result orientations, completion | Original server handlers and real local TCP lifecycle pass; complete engine lifecycle pending |
-| Failure recovery, local decisions and match summaries | Service/runtime fixtures pass; controlled engine failure check pending |
-| Claude safety/playability verdict | Cache correction accepted and native-verified; exact P2 launch-role correction under implementation/review; gameplay verdict pending |
-| Installed build ready for user | Installed after verified backup `20260930T001526Z`; live boot smoke passed (see NATIVE_TEST_PROGRESS.md). Menu click-through, live-to-staged hand-off and a human-played PvP/result pass remain for the user's first playtest |
+The project is playable. The user completed a real match in session
+`s-f6805722616c9375446bb20a` and described it as "pretty good". The host recorded
+`phase=completed`, `code=practice_host_ok`, `session_passed` and
+`changed_roots=[]`. The reported missing enemy Jokers on the end screen has a
+repository fix, but that fix is not yet live-validated.
 
-## Current review status — September 28
+The installed companion remains **`9f7a8e1`, version `0.1.0-dev`**, with package
+digest `1f6e2a6b6dc7b921a6b22975163129df7189187c1ec8cf6fe4f9f66c2d607c8b`.
+Its original seven-phase certificate is `b48b5a0b…`; the host/launcher exit fix
+later reissued it as `c19c6dfc…`. Recovery in this local session independently
+compared all 27 installed files with the package manifest and install receipt:
+every file matched. `NATIVE_TEST_PROGRESS.md` retains the chronological receipts,
+earlier failures, corrections and full-match evidence.
 
-Runtime/engine/policy repairs are approved for controlled staged testing (`CLAUDE_RUNTIME_ENGINE_REREVIEW.md`). Installer repairs are approved in scope (`CLAUDE_INSTALLER_SECOND_REREVIEW.md`). Neither verdict establishes native gameplay or installation readiness by itself.
+The newer feature branch contains additional policy, runtime and targeted Tarot
+changes. **Installed evidence does not certify the newer feature branch.** Phase A
+implementation checkpoint `93147b7` closes the reported Psychic, empty-shop Tarot
+sale and whitespace-test cases; targeted Tarot finalization and final review are
+in progress. See `LOCAL_PROGRESS.md` for the current checkpoint and test results.
 
-Host/service repair `4516e60` is accepted by Claude (`CLAUDE_HOST_FIFTH_REREVIEW.md`) and Astra after independent 87/87 host tests plus the retained-ownership negative. Service tests (55/55), independent service contracts (5/5) and Lua-to-service checks (6/6) remain unchanged passing results. The theoretical non-blocking Low is recorded in the review and does not delay this gate.
+## Acceptance matrix
 
-Isolation commit `fddea7e` corrects the reviewed F1–F4 and adjacent F5–F11 findings: source-faithful expiry EOF, separate connect/sleep timing, copied listener evidence validation and post-exit dead-port proof. Astra's independent checks pass, including certificate 50/50, launcher 61/61, shared host 87/87 and installer 48/48. Real non-game Windows socket checks also pass. See `ISOLATION_SOURCE_CORRECTIONS_VERIFICATION.md`. Claude closed F1–F4 and confirmed all seven phases may proceed under the existing conditions (`CLAUDE_ISOLATION_SOURCE_REREVIEW.md`). Astra accepts this code scope for controlled staged testing. The earlier single-session P2 proposal is superseded by `P2_MEASUREMENT_PROPOSAL.md`.
+| Requirement | Established evidence | Current-build remaining gate |
+|---|---|---|
+| Mod load, profile and normal single-player entry | Installed build booted; full human practice match completed | Fresh live smoke after reviewed installation; verify profile and normal entry |
+| Multiplayer 0.5.5, Handy and JokerDisplay | Present in established live environment; runtime integration and pinned-source contracts exist | Current-build boot and practice compatibility; ordinary human Multiplayer remains a human acceptance check |
+| AI Sparring, handoff, lobby and ready/start | User exercised live menu, live exit and both staged roles | Current-build UI smoke, all four difficulty labels, timings and clean handoff |
+| Independent AI actions and public opponent HUD | Full user match and unchanged-live session verdict | Current-build narrowly scoped native smoke; later user playtest |
+| Lives, PvP and match completion | Full user match completed; real local-server protocol tests cover result orientations | Current-build PvP wait/timer and end-screen enemy Jokers (LV-1, LV-2, LV-6) |
+| Fair observation, legal validation and stale-action handling | Reviewed architecture; boundary, property, broker and runtime suites | Fresh final review and complete supported regression run for the actual final diff |
+| Strong-tier Psychic behavior and useful Tarot retention | Independent pre-fix failures; Phase A corrected reproduction and immutable-snapshot checks on both runtimes | Expanded engine-shaped regressions, full suite and Claude acceptance |
+| Targeted Tarots | WIP adapter/broker/executor pipeline and fixture coverage | Finalization, actual final-diff review, then ten-center live validation and cleanup checks |
+| Determinism, bounded search and source size | Both runtimes and prior H1 evidence; original 2M limit retained | Final 8–12 card, 5/8 Joker, held-Tarot stress, source-byte measurement and benchmarks |
+| Recovery, disconnects and shutdown | Reviewed host/launcher safety and native ownership contracts | Current native certification, smoke cleanup, and exact open local-queue checks |
+| No save/live-install mutation during isolated practice | Prior seven phases and full-match `changed_roots=[]` verdict | Fresh seven phases for changed companion bytes; no old-certificate reuse |
+| Safe install, uninstall and rollback | Existing reviewed installer and original installation receipts | Fresh verified backups, current accepted package/certificate binding, exact upgrade receipt and independent live hashes |
 
-The review records three non-blocking Low limitations: overlapping marker-name substring checks, possible cross-clock skew on the CLOSE ordering check, and post-exit proof freshness guaranteed by call placement rather than an explicit timestamp comparison. These remain documented without expanding the infrastructure scope. Coverage still fails closed. If a real phase exposes a limitation, preserve its evidence and make a focused repair through the established review cycle; do not bypass the gate.
+## Required release sequence
 
-After the user closed Balatro, verified backups and separate staged copies were created. The generated `game-dump` cache correction passed Claude review and was confirmed in a fresh native build with the packaged companion. P1A, P1B, FULL_P1 and CRASH passed with zero live-file changes. P2_INITIAL returned success but Astra rejected phase compliance because the launcher spawned both roles despite the reviewed AI-only requirement; the stored receipt likewise contains both PID roles. The exact launch/receipt-role correction is in progress, and listener tests are paused for verification and review. No live installation or live-file changes have occurred. See `NATIVE_TEST_PROGRESS.md` for receipts, rejected evidence and rerun requirements. Gameplay and user playability remain unproven.
+1. Finish a coherent feature batch through DeepSeek implementation, Astra
+   verification, Claude Opus 5.5 High review, fixes and relevant re-review.
+2. Pass every locally supported suite on Windows and both Lua runtimes. Preserve
+   source guard and 2M budget; record independent performance evidence.
+3. With the user's game closed, run one fresh consolidated seven-phase native
+   certification against the exact reviewed package. Preserve failed evidence;
+   never weaken the gates or mutate already-measured staged files.
+4. Perform final pre-install review, fresh verified backups and the exact scoped
+   companion upgrade described in `LOCAL_RELEASE_PROCESS.md`. Other Mods and saves
+   remain intact. Record and independently check installation evidence.
+5. Run the actual local UI smoke, leave the certified build ready for the user,
+   and maintain exact human/native checks in `LOCAL_VALIDATION_QUEUE.md`.
+6. Continue independent development on the feature branch while that installed
+   build remains stable. Later changes require their own meaningful review and
+   certification batch before installation.
 
-Read-only normal-Multiplayer compatibility inspection: the pinned `networking/action_handlers.lua` lobby-info path sets readiness from guest presence/readiness; `ui/lobby/start_ready_button.lua` does not impose a blanket equality check on all mod hashes. The live companion remains visible in the ordinary mod list, with no suppression or bypass. Actual normal-human compatibility is still an in-game acceptance gate.
+## V1 release candidate standard
 
-## Independent repository verification
+V1 requires the current reviewed/certified/installed build to pass normal startup,
+normal single-player, real human Multiplayer compatibility, Handy/JokerDisplay
+compatibility, all four difficulties, reasonable handoff, complete matches,
+correct PvP/lives/results, targeted Tarots, reliable boss behavior and recovery.
+No unresolved Critical/High or relevant Medium finding may remain. Both Lua
+runtimes, determinism, performance and native isolation must pass. Documentation
+must describe the actual implementation and scoped uninstall/rollback.
 
-Latest integrated regression batch uses repository-local Python 3.12.14 with pinned lupa 2.8, without transient PYTHONPATH. Both Lua 5.1 and LuaJIT remain covered.
-
-| Suite | Cases / executions or result |
-|---|---|
-| M1 | 66 / 117 |
-| M2 pure | 96 / 188, plus 1,040 property iterations |
-| State reader | 61 / 122 |
-| Privacy/process boundary | 123 / 219 |
-| Baseline policy | 79 / 149 |
-| Decision loop/broker | 94 / 164 |
-| Engine adapter/executor | 111 / 207 |
-| Menu/controller | 50 / 86 |
-| Runtime coordinator | 112 / 190 |
-| Companion root | 104 / 178 |
-| Real runtime bootstrap to practice service | 3 contracts on each runtime / 6 |
-
-The repaired integrated batch totals **1,626 executions**, plus 1,040 property iterations. Additional independent checks pass: M2 attacks 18/36, mutation 3/6, production adapter attacks 14/28 and runtime contracts 11/22. These counts describe repository tests, not real-engine acceptance.
-
-Latest independently rerun infrastructure suites: launcher 59/59, measured lifecycle 11/11, staging 48/48, reusable certificate 46/46, installer 48/48, backup binding 3/3 and Python-to-Lua attestation 8/8. Ten independent measurement negatives reject missing ownership, failed FIN, missing/early connection hold, reversed peer endpoint, unreadable process handles and unsupported coverage claims. Source-observer tests pass on both Lua runtimes (six reported cases). Host 87/87 now passes for the accepted `4516e60` repair. Isolation counts above describe `9c698ae`; verification of the subsequent F1–F4 correction is still pending. Server packaging 8/8 and ruleset parser 8/8 remain unchanged passing captured results.
-
-Cross-module adapter-to-real-policy-worker checks passed for all three difficulties on both runtimes (six checks, 88 legal hand candidates). Choices passed executor validation; observed process-inclusive latency was 0.17–0.22 seconds. These are engine-shaped fixtures, not actual Balatro play.
-
-## Native and actual-source checks
-
-- The actual measurement listener passed a Windows test with a separate owned hidden Python peer: both-family inventory, exact client-side peer PID, graceful FIN, zero sent bytes and cleanup. This is OS plumbing evidence only.
-
-- Actual Windows PID/creation-time query via LuaJIT FFI agrees with native Python verification for the test's own process. Invalid PID refused.
-- One harmless owned Python helper was created suspended, assigned to a Windows Job, resumed and cleaned up through its retained identity. No Balatro process was involved.
-- Actual pinned engine Object/UIBox source lookup, Channel userdata contract, callback return preservation, wire sequence, original timer protocol and guest option guards passed six independent contracts on both runtimes (12 executions).
-- Native IPv4/IPv6 listener inventory exposed a Windows scalar conversion defect. DeepSeek repaired it; both native loopback checks now pass with exact owning PID and wrong-owner refusal. Partial-family inventory is rejected by strict host checks. The native PowerShell enumerator also resolves the checking process to its actual base interpreter, distinguishing the venv redirector.
-- Actual locally held Major League Lua source was evaluated in restricted fixtures on both runtimes. Forced options agree with the strict Python parser and Lua/Python digest `72d9e157`.
-
-## Real local-server evidence
-
-Pinned upstream: `d664c29523b827d53dfa1a181e5b2baf1aefac4f`. The prepared server changes only the match listener bind to 127.0.0.1 and disables the unused admin listener. Original GPL license and patched source stay with the ignored build. The corrected preparation tool successfully compiled 11 build files, bound 816 runtime files and one native binary; the host's adaptation verifier accepted this manifest.
-
-`tests/astra_server_contracts.mjs` imports the original compiled Client, Lobby and action handlers: 13 contracts pass, including seed paths, host-only start, ready order, life/result orientations, ties and score suppression. `tests/astra_server_tcp.py` starts that server and two synthetic TCP peers and passes create/join/start/shared-seed/ready/PvP/AI-win/human-loss through actual wire messages. OS inventory confirms only the selected loopback listener and no admin listener. The owned Node process exits during cleanup.
-
-The TCP test intentionally uses a shortened one-life lifecycle. It does not prove Major League engine parity, rendering, AI autonomy in Balatro, or a full match played by a user.
-
-## Remaining acceptance gates
-
-1. Repository host/native-listener verification and window-identification fixtures are complete. Eight additional checks prove the actual Python attestation writer and Lua companion reader agree for both roles on both runtimes and reject changed nonces; all certificate files in this check are synthetic.
-2. Finish and verify isolation F1–F4 corrections, then pass Claude re-review. Runtime/engine/policy, host/service and installer scope reviews are complete. No unresolved safety/playability Critical or High finding may remain.
-3. Once reviews pass, check whether the user's Balatro is closed. If open, request closure only then; never terminate it.
-4. Fresh verified backups, staged-only P1A/P1B/FULL_P1/CRASH/P2_INITIAL/P2_CLOSE/P2_SILENT measurements and zero live/save/Steam changes. No actual runtime staging, backups or launches have been performed yet.
-5. Controlled actual-engine actions, timer continuity, minimized AI progress, public HUD, results/failure recovery, followed by safe companion installation and normal-mod compatibility checks. Do not play an entire human run.
-6. Record exact installed path, commit, launcher and log directory and leave the user able to start playtesting. Only then declare playable and stop development.
-
-The earlier session-limit response was superseded by the completed after-reset reviews above. No acceptance or installation is inferred from quota availability.
-
-Raw logs, sources, dependencies, proprietary runtime files and staging remain ignored. No live Balatro files have been modified.
-
-Review availability at 9:02 a.m. Eastern: Claude returned a session-limit response during the final isolation re-review, with a reported noon Eastern reset on September 28. That run supplies no verdict. The final isolation and host repair reviews remain required; implementation and independent verification can finish without native Balatro actions.
-
-September 28 evening: host/service repair `4516e60` is accepted by Claude (`CLAUDE_HOST_FIFTH_REREVIEW.md`) and Astra after independent 87/87 host tests plus the failed-close negative. The one theoretical non-blocking Low is recorded, not expanded into more scope. Runtime/engine/policy, installer and host/service code-review gates have passed. Isolation F1–F4 source-measurement corrections remain in implementation and require verification/re-review before P2. No actual Balatro operation has occurred.
+Repository fixtures, socket tests and isolation certification each prove their
+own contracts. They do not substitute for on-screen Tarot effects, ordinary human
+Multiplayer compatibility or a current-build full match. Pending human checks do
+not halt unrelated safe repository development. No merge to `main` occurs until
+the project meets the V1 standard.
