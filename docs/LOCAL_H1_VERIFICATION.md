@@ -1,6 +1,6 @@
 # Local H1 performance and determinism verification
 
-Fresh independent Astra sweep after the Claude findings fixes. Tested code checkpoint: `eb39c6262a2a8dbbee9a2982c68cf9e23aa5e8d2`. Repository fixture evidence; no native gameplay, visual Tarot-effect or AI-strength claim.
+Fresh independent Astra sweep after the held-Negative slot-sale fix. Tested code checkpoint: `a385826b420f720248e59396841b1a18156652e0`. Repository fixture evidence; no native gameplay, visual Tarot-effect or AI-strength claim.
 
 ## Method
 
@@ -12,7 +12,7 @@ Park-Miller fixture randomness keeps integer products exact in doubles. The olde
 
 | Runtime | Decisions | Budget failures | Peak instructions | Max candidates | Max Lua latency (ms) |
 |---|---:|---:|---:|---:|---:|
-| lupa.lua51 | 1,800 | 0 | 1,256,000 | 120 | 83.000 |
+| lupa.lua51 | 1,800 | 0 | 1,256,000 | 120 | 77.000 |
 | lupa.luajit21 | 1,800 | 0 | 1,263,000 | 120 | 38.000 |
 
 Both runtimes select identical actions: SHA256 `6920e8b4c8b82aa47364d3732ec347d98423edbbdd450b509cb03ed1d58136ed`. No real-budget failures, over-budget measurements or nondeterministic repeats. The peak leaves 36.9% of the 2M allowance unused. Legal catalogues stay at or below 120, with targeted Tarots and meaningful reorders retained.
@@ -23,15 +23,15 @@ Lua latency includes fixture sandbox work and excludes Python launch, transport,
 
 | Difficulty | UTF-8 bytes (both runtimes) |
 |---|---:|
-| rookie | 56,389 |
-| competitive | 56,390 |
-| major_league | 56,392 |
-| expert | 56,385 |
+| rookie | 56,678 |
+| competitive | 56,679 |
+| major_league | 56,681 |
+| expert | 56,674 |
 
-Largest source leaves **952 bytes** below the unchanged 57,344 repository guard and **9,144 bytes** below the 65,536 hard cap. Compaction and permanent squeezed/unsqueezed checks remain enabled.
+Largest source leaves **663 bytes** below the unchanged 57,344 repository guard and **8,855 bytes** below the 65,536 hard cap. Compaction and permanent squeezed/unsqueezed checks remain enabled.
 
 ## Exact binding
 
-Executed immutable snapshot: `work/local-ownership/claude-fixes-h1-snapshot`. Its `work/local-ownership/h1-summary.json` and per-runtime text retain raw counts/latencies/digests. All current companion, Lua sandbox and relevant fixture inputs were independently byte-compared with the snapshot. Exact hashes and measured sizes are in `claude-fixes-h1-verified-summary.json`; copied-source hashes are in `claude-fixes-h1-source-hashes.json`.
+Executed immutable snapshot: `work/local-ownership/negative-fix-h1-snapshot`. Its `work/local-ownership/h1-summary.json` and per-runtime text retain raw counts/latencies/digests. All current companion, Lua sandbox and relevant fixture inputs were independently byte-compared with the snapshot. Exact hashes and measured sizes are in `negative-fix-h1-verified-summary.json`; copied-source hashes are in `negative-fix-h1-source-binding.json`.
 
-Any later change to those inputs requires fresh measurement. Claude source acceptance, actual native certification, installation and UI smoke remain separate gates. Prior sweep evidence is preserved in `phase-ab-h1-snapshot`.
+Any later change to those inputs requires fresh measurement. Claude source acceptance, actual native certification, installation and UI smoke remain separate gates. Prior sweep evidence is preserved in `phase-ab-h1-snapshot` and `claude-fixes-h1-snapshot`.

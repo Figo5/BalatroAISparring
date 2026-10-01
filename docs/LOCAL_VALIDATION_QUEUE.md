@@ -428,9 +428,9 @@ needs the full re-certification and a companion reinstall, not
   `can_use_consumeable` re-check is the authority, and any refusal clears the
   highlight, so the worst case is a missed use, not a stuck UI.
 
-## LV-12 Negative consumable is never sold to free a slot
+## LV-12 Useful Negative consumable retained during a slot upgrade
 
-- **Commit:** the Negative-consumable slot fix (Astra negative-slot finding);
+- **Commit:** `a385826`, the Negative-consumable slot fix (Astra negative-slot finding);
   policy-only, so it needs re-certification and a reinstall.
 - **Change:** a full consumable row that includes a `negative` owned card
   (`ability.card_limit = 1`) no longer sells that Negative to make room: its
@@ -441,18 +441,27 @@ needs the full re-certification and a companion reinstall, not
   regular card a real upgrade needs. An edition the observation cannot classify
   is never sold as a slot release. Negative purchases and the harmful/unusable
   safety-floor sales are unchanged.
-- **Local test:** reach a shop with every consumable slot full and a Negative
-  consumable held (a Negative Tarot from an Ouija or a debug seed), with both a
-  weaker and a stronger consumable on offer (for example Star $3 and Saturn $3).
+- **Local test:** on Competitive, Major League or Expert, reach a shop with every
+  consumable slot full, a useful Negative consumable and a regular consumable
+  held. Perkeo can create a legitimate Negative copy at the end of a prior shop.
+  Observe a stronger affordable offer above the difficulty reserve; the precise
+  regression is Death + Strength + Negative Sun, base 2/effective 3 slots, $36,
+  Star $3 and Saturn $3. Record the actual offers and cash when that exact setup
+  is unavailable. Do not alter a live run, deck or RNG to construct the case.
 - **Expected:**
-  - The AI sells a regular held consumable, never the Negative, then buys the
-    stronger offer; the Negative stays in the row.
+  - For the precise regression, the AI sells Strength once, retains Negative
+    Sun, then buys Saturn. No useful Negative is sold to free a slot. A different
+    offer set may conservatively hold the row when no modeled upgrade is proven.
   - The consumed count stays within what the shop shows after the sale, and no
     second sale follows the purchase (no sell → buy → sell cycle).
   - Both shop orders behave the same; the chosen actions are accepted.
-- **Evidence to capture:** `decisions.jsonl` rows for `SELL_CONSUMABLE` and
-  `BUY_ITEM` (refs and the held-card editions) with the on-screen slot count,
-  plus `results.jsonl` accepted flags.
+- **Evidence to capture:** timestamp/session and `decisions.jsonl` action-type
+  rows for `SELL_CONSUMABLE` and `BUY_ITEM`, correlated `results.jsonl` accepted
+  flags, plus on-screen held centers/editions, sold/bought identities and slot
+  counts. The current service log omits general sell/buy item refs and held-card
+  editions; capture those visible facts separately instead of inferring them.
+  Harmful/unusable safety-floor sales remain eligible, including Negative cards,
+  and are separate from this useful-slot-upgrade test.
 - **Risk if it fails:** choice quality and a lost Negative, not a stall; every
   action stays certified. If the game refuses the `SELL_CONSUMABLE`, record the
   card's edition and the result code.

@@ -1,4 +1,4 @@
-# Local progress — September 30, 2026
+# Local progress — October 1, 2026
 
 ## Recovered state
 
@@ -31,10 +31,18 @@ hashes. The new rendered policy is at most 56,681 bytes: 663 bytes below the
 unchanged repository guard, 8,855 below the hard cap. Documentation now matches
 the SHOP-only sale behavior and accurately separates historical size figures.
 
-Current task: freeze this coherent fix, rerun the full supported suite and
-immutable H1 sweep on the new bytes, record current evidence, then obtain
-Claude's focused re-review before the seven native phases. Prior 62/62 suite
-and H1 evidence remain preserved and do not cover the new policy bytes.
+Current implementation checkpoint: `a385826` (pushed). Fresh Astra verification
+passed all **62 supported entrypoints**, with all 313 recorded files unchanged
+through execution. The immutable H1 sweep passed 3,600 decisions, identical
+actions and zero budget failures; peaks remain 1,256,000 on Lua 5.1 and 1,263,000
+on LuaJIT. All benchmark gates pass and their non-timing/non-instruction metrics
+agree across runtimes. Current evidence is in `LOCAL_REGRESSION_VERIFICATION.md`
+and `LOCAL_H1_VERIFICATION.md`; earlier evidence remains preserved separately.
+
+Current task: Claude's focused actual-diff re-review, then the seven native
+phases, exact-package pre-install review, backed-up scoped upgrade and actual
+UI smoke. Documentation-only recording after the tested code checkpoint is
+distinguished from the unchanged executable inputs.
 
 No new native certification, package, installation or actual UI smoke has
 been performed. The live 27-file `9f7a8e1` package and unrelated main staged
