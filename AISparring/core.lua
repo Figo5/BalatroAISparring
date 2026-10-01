@@ -354,6 +354,7 @@ local function boot_live(host_module, base)
 		instance = instance,
 		diagnostic_path = status and status.diagnostic_path or nil,
 		host_available = status and status.host_available == true or false,
+		host_available_code = status and status.host_available_code or nil,
 		booted = true,
 	}
 end
@@ -610,6 +611,7 @@ local function apply_companion(result, detail)
 		code = detail.code,
 		instance_state = instance_state,
 		host_available = detail.host_available == true,
+		host_available_code = detail.host_available_code,
 		handling = detail.update ~= nil,
 		diagnostic_path = detail.diagnostic_path,
 		module_error = detail.detail,
@@ -668,9 +670,13 @@ local function run(modules)
 			detail = { code = "companion_internal_error", fatal = true }
 		end
 		result = apply_companion(result, detail)
+		-- Bounded, secret-free BOOT-TIME host readiness (marker/identity/ok
+		-- codes only). It says whether the Play entry would open settings or the
+		-- unavailable diagnostic; it does NOT explain a missing entry.
 		logger:log(result.code == "ok" and "info" or "warn", "companion_boot", {
 			code = result.code,
 			status = result.state,
+			host_available_code = result.companion and result.companion.host_available_code or nil,
 		})
 	end
 

@@ -469,17 +469,41 @@ end
 
 -- Trusted read adapter over the Lovely native filesystem. Returns a decoded
 -- table or nil. Never raises.
+--
+-- Resilience note (not a proven cause of the live missing entry): the installed
+-- Steamodded nativefs implements `getInfo` with a PHYSFS temporary mount of the
+-- containing directory while `read` opens the file directly through the C
+-- runtime. They are independent failure domains, so `getInfo` is treated as a
+-- presence hint only, never as a precondition for `read`. A native isolated
+-- probe of the exact installed build with a fresh matching marker showed both
+-- operations succeeding (`getinfo_ok`, `read_ok`, `production_reader_decoded`
+-- and `production_host_available` all true), so the live cause stays
+-- unconfirmed; this change removes a redundant coupling as hardening.
+--
+-- `read` is the single source of truth and already fails closed on an absent,
+-- unreadable, empty or throwing read. `getInfo` can only refuse a definite
+-- non-file (for example a directory); a nil, false, non-table or throwing
+-- `getInfo` cannot turn a readable file into a refusal. Every marker field
+-- (schema, version, identity, enums, secret, ops) is still validated afterwards
+-- by `inspect_marker`, so this is not a relaxation of the trust boundary.
 function CompanionHost.nfs_reader(nfs, decode)
 	if type(nfs) ~= "table" or type(decode) ~= "function" then
 		return nil
 	end
-	if type(rawget(nfs, "getInfo")) ~= "function" or type(rawget(nfs, "read")) ~= "function" then
+	if type(rawget(nfs, "read")) ~= "function" then
 		return nil
 	end
+	local get_info = rawget(nfs, "getInfo")
 	return function(path)
-		local ok_info, info = pcall(nfs.getInfo, path)
-		if not ok_info or info == nil then
-			return nil
+		if type(get_info) == "function" then
+			local ok_info, info = pcall(get_info, path)
+			-- A getInfo that definitely reports a non-file is an honest refusal;
+			-- a nil result only means the presence check itself was unavailable,
+			-- in which case the direct read below is authoritative.
+			local info_type = type(info) == "table" and rawget(info, "type") or nil
+			if ok_info and info_type ~= nil and info_type ~= "file" then
+				return nil
+			end
 		end
 		local ok_read, content = pcall(nfs.read, path)
 		if not ok_read or type(content) ~= "string" or #content == 0 then
@@ -991,15 +1015,34 @@ function CompanionHost.live_host(ports)
 	-- held open while the player browses the menu: the launcher closes a
 	-- connection after 10 s without traffic (live review H1), so a connection
 	-- is opened per start request instead.
-	function host.available()
-		local ok, value = pcall(function()
+	--
+	-- `available_detail` returns `(available, allowlisted_code)` describing
+	-- BOOT-TIME host readiness (marker/identity/ok) from a bounded code, never
+	-- from a raw path, secret or session. It does NOT explain a missing Play
+	-- entry: with the unavailable-host entry, an unavailable host still shows an
+	-- entry that opens the diagnostic, and a truly absent entry is outside host
+	-- readiness whatever this code says. `available` stays a boolean for the
+	-- reviewed menu gate.
+	function host.available_detail()
+		local ok, value, reason = pcall(function()
 			local info, code = refresh()
 			if info == nil then
 				return false, code
 			end
 			return true, CODE.OK
 		end)
-		return ok == true and value == true
+		if ok ~= true then
+			return false, CODE.INTERNAL
+		end
+		if value ~= true then
+			return false, reason or CODE.INTERNAL
+		end
+		return true, CODE.OK
+	end
+
+	function host.available()
+		local available = host.available_detail()
+		return available == true
 	end
 
 	local function drop_transport()
@@ -1259,6 +1302,9 @@ function CompanionHost.live(ports)
 		host = host,
 		status = { probe = CompanionHost.status_probe(ports) },
 		clock = clock,
+		-- Bounded, secret-free Play-menu outcome diagnostics through the trusted
+		-- companion logger bridge (optional; ignored when absent).
+		logger = ports.logger,
 	})
 	if controller == nil then
 		return nil, controller_code or CODE.MENU_FAILED
@@ -1295,11 +1341,13 @@ function CompanionHost.live(ports)
 		return true, CODE.OK
 	end
 	function instance.status()
+		local available, available_code = host.available_detail()
 		return {
 			role = "live",
 			installed = installed,
 			state = controller.state(),
-			host_available = host.available(),
+			host_available = available == true,
+			host_available_code = available_code,
 			diagnostic_path = host.diagnostics_path(),
 		}
 	end

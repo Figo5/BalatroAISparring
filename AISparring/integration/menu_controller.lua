@@ -39,6 +39,12 @@ local CODE = {
 	QUIT_FAILED = "menu_quit_failed",
 	INSTALL_FAILED = "menu_install_failed",
 	INTERNAL = "menu_internal_error",
+	-- Bounded local diagnostic outcomes for the Play-menu build path (LV-14 M2).
+	-- These are logged at most once each through the injected logger port; they
+	-- are not authority and never change menu or gameplay behaviour.
+	DEFINITION_MISSING = "menu_definition_missing",
+	BUTTON_FAILED = "menu_button_failed",
+	WRAPPER_REPLACED = "menu_wrapper_replaced",
 }
 
 local MESSAGES = {
@@ -290,6 +296,13 @@ function MenuController.factory(ports)
 	if not is_port_table(clock) or type(rawget(clock, "now")) ~= "function" then
 		return nil, CODE.BAD_CLOCK
 	end
+	-- Optional bounded diagnostic sink (the trusted companion logger bridge).
+	-- A missing or malformed sink is ignored; every call is pcall'd so a logger
+	-- failure can never alter menu behaviour or gameplay.
+	local logger = rawget(ports, "logger")
+	if type(logger) ~= "table" or type(rawget(logger, "record")) ~= "function" then
+		logger = nil
+	end
 
 	local funcs = ui.funcs
 	local instance = {}
@@ -306,6 +319,21 @@ function MenuController.factory(ports)
 	local started_at = nil
 	local quit_invoked = false
 	local last_payload = nil
+
+	-- Bounded local diagnostics: each allowlisted outcome code is logged at most
+	-- once for the lifetime of this instance, so repeated Play opens or frames
+	-- can never flood. Only primitive, enum-valued fields are sent (event/code),
+	-- and the sink is always pcall'd.
+	local logged_codes = {}
+	local function log_menu_once(outcome)
+		if type(outcome) ~= "string" or logged_codes[outcome] == true then
+			return
+		end
+		logged_codes[outcome] = true
+		if logger ~= nil then
+			pcall(logger.record, { event = "menu_entry", code = outcome })
+		end
+	end
 
 	local function read_probe()
 		local ok, result = pcall(status.probe)
@@ -488,21 +516,34 @@ function MenuController.factory(ports)
 
 	function instance.decorate_play_menu(menu_definition)
 		if type(menu_definition) ~= "table" then
+			log_menu_once(CODE.DEFINITION_MISSING)
 			return menu_definition
 		end
-		local allowed = instance.can_open()
-		if allowed ~= true then
+		local allowed, code = instance.can_open()
+		-- Show the entry when practice can open, and also when the ONLY blocker
+		-- is a missing external launcher host: the button then opens the bounded
+		-- local diagnostic (a reachable explanation) instead of silently hiding
+		-- the feature. Every other refusal — an unreadable status probe, a
+		-- non-main-menu stage, an incompatible Multiplayer install — still hides
+		-- the entry exactly as before. The entry never starts, requests or quits
+		-- anything: its callback is the same `open_settings`, which refuses and
+		-- shows the diagnostic for this code.
+		if allowed ~= true and code ~= CODE.LAUNCHER_UNAVAILABLE then
+			log_menu_once(code)
 			return menu_definition
 		end
 		local contents = contents_of(menu_definition)
 		if contents == nil then
+			log_menu_once(CODE.DEFINITION_MISSING)
 			return menu_definition
 		end
 		local node = instance.play_button_node()
 		if node == nil then
+			log_menu_once(CODE.BUTTON_FAILED)
 			return menu_definition
 		end
 		append_node(contents, node)
+		log_menu_once(allowed == true and CODE.OK or CODE.LAUNCHER_UNAVAILABLE)
 		return menu_definition
 	end
 
@@ -760,6 +801,17 @@ function MenuController.factory(ports)
 	end
 
 	function instance.update(now)
+		-- Wrapper-ownership check: another mod may reassign the shared Play-menu
+		-- builder after our install, which silently bypasses the wrap. Detect it
+		-- from the existing per-frame companion update (no need to call the
+		-- replaced wrapper), record one bounded code, and never rewrap or touch
+		-- Multiplayer. This only ever compares our own pointer identity.
+		if installed and wrapped_builder ~= nil and logged_codes[CODE.WRAPPER_REPLACED] ~= true then
+			local uidf = type(ui.G) == "table" and rawget(ui.G, "UIDEF") or nil
+			if type(uidf) == "table" and rawget(uidf, BUILDER_KEY) ~= wrapped_builder then
+				log_menu_once(CODE.WRAPPER_REPLACED)
+			end
+		end
 		if state ~= "awaiting_ack" then
 			return state, CODE.OK
 		end

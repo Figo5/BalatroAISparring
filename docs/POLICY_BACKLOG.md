@@ -77,12 +77,15 @@ Constraints on all of it:
   - The Psychic: a play of fewer than five cards is estimated at 0 (paired
     A/B +0.7% overall);
   - The Eye and The Mouth (paired A/B +0.7% / +0.4% overall).
-- **Current local source size:** maximum 54,740 UTF-8 bytes after the Phase A/B
-  fixes, 2,604 below `SOURCE_GUARD` and 10,796 below the hard cap. The earlier
-  51.4 KB figure predates targeted Tarots. See `LOCAL_H1_VERIFICATION.md`.
-- **Batch 3 M1 fixed locally:** Psychic minimum applies before every fallback,
-  including all five rule-changing Jokers, face-down/Stone/unknown padding and
-  no-five-candidate cases. Both runtimes pass; final Claude/native gates remain.
+- **Current local source size:** maximum rendered 56,681 UTF-8 bytes, 663 below
+  the unchanged `SOURCE_GUARD` (57,344) and 8,855 below the hard cap (65,536).
+  The earlier 54,740 / 51.4 KB figures predate the Negative-slot and shop fixes.
+  See `LOCAL_H1_VERIFICATION.md` and `LOCAL_REGRESSION_VERIFICATION.md`.
+- **Batch 3 M1:** Psychic minimum applies before every fallback, including all
+  five rule-changing Jokers, face-down/Stone/unknown padding and no-five-candidate
+  cases. Both runtimes pass; repository acceptance passed under prior Claude and
+  the current installed build is `da66f0c` (menu diagnostics are a separate,
+  uninstalled candidate). Native/live gates remain.
 - **Open (review Lows):**
   - ~~the adapter offers few five-card plays under The Psychic~~: fixed with
     padded rank groups and two pair (Psychic clears 68% → 74–84% on 19
@@ -100,7 +103,7 @@ Constraints on all of it:
     position (a test checks that a face-down card's hidden rank does not
     change the offer).
 
-## Consumable reasoning (v1 implemented, final local acceptance pending)
+## Consumable reasoning (v1 implemented, repository acceptance passed; live checks pending)
 
 - **Done:**
   - the ten allowlisted Tarots (Strength, Death, Lovers, Chariot, Justice,

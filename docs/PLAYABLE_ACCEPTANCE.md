@@ -2,47 +2,43 @@
 
 ## Current evidence — October 1, 2026
 
-The project is playable. The user completed a real match in session
-`s-f6805722616c9375446bb20a` and described it as "pretty good". The host recorded
-`phase=completed`, `code=practice_host_ok`, `session_passed` and
-`changed_roots=[]`. The reported missing enemy Jokers on the end screen has a
-repository fix, but that fix is not yet live-validated.
+The installed companion is **`da66f0c`, `exact27` files**, package digest
+`96ebad3787381324d9685a55b262268d019e8a68ec7c44c6f40d2038537b0614`, certificate
+`694392aa14891518293635185478ff1dcbe8dd280d7f32c546023c93b9a15c98`, preserved in
+the frozen root `BalatroAISparring-runtime-v1`. The reviewed/certified/backed-up
+scoped upgrade succeeded. Its actual live UI smoke is **partial**: normal
+startup, profile `gio`, single-player setup and the mod set (Multiplayer 0.5.5,
+Handy 2.0.6, JokerDisplay 2.0.4, AISparring 0.1.0-dev) passed, but **the AI
+Sparring Play entry was absent on three checks with a matching host; the cause is
+unconfirmed and Phase G is not passed.**
 
-The installed companion remains **`9f7a8e1`, version `0.1.0-dev`**, with package
-digest `1f6e2a6b6dc7b921a6b22975163129df7189187c1ec8cf6fe4f9f66c2d607c8b`.
-Its original seven-phase certificate is `b48b5a0b…`; the host/launcher exit fix
-later reissued it as `c19c6dfc…`. Recovery in this local session independently
-compared all 27 installed files with the package manifest and install receipt:
-every file matched. `NATIVE_TEST_PROGRESS.md` retains the chronological receipts,
-earlier failures, corrections and full-match evidence.
-
-The newer feature branch contains additional policy, runtime and targeted Tarot
-changes. **Installed evidence does not certify the newer feature branch.** Code
-checkpoint `a385826` includes the Phase A/Tarot work, exhausted Psychic terminal,
-price/interest churn, shutdown intent, portable release-tool fixes and the
-independently reproduced held-Negative slot-sale fix. Claude accepted `9c31d2f`
-before that additional fix. Fresh independent verification of `a385826` passed
-all 62 supported entrypoints with 313 files unchanged and the separate H1 sweep
-on both runtimes. Focused Claude source re-review, certification, installation and actual smoke remain
-separate required gates. See
-`LOCAL_PROGRESS.md` for the current checkpoint and exact evidence.
+The earlier full human match (session `s-f6805722616c9375446bb20a`,
+`phase=completed`, `changed_roots=[]`) belongs **only to the earlier `9f7a8e1`
+build**; it does not certify the current candidate. The current menu-diagnostic
+source candidate was accepted at repository level by Claude Opus 5.5 High
+(`2eda7…`) subject to the now-complete full62 run; the fresh H1 sweep's 10 actual
+loaded source files are byte-identical. There is **no current-candidate native
+certification, package, install, live UI pass or readiness**. Human checks still
+pending: the ten Tarots on screen (effects and highlight cleanup), ordinary human
+Multiplayer compatibility, end-screen enemy Jokers, and a full new match. See
+`LOCAL_PROGRESS.md` and `LOCAL_VALIDATION_QUEUE.md` for exact evidence.
 
 ## Acceptance matrix
 
 | Requirement | Established evidence | Current-build remaining gate |
 |---|---|---|
-| Mod load, profile and normal single-player entry | Installed build booted; full human practice match completed | Fresh live smoke after reviewed installation; verify profile and normal entry |
-| Multiplayer 0.5.5, Handy and JokerDisplay | Present in established live environment; runtime integration and pinned-source contracts exist | Current-build boot and practice compatibility; ordinary human Multiplayer remains a human acceptance check |
-| AI Sparring, handoff, lobby and ready/start | User exercised live menu, live exit and both staged roles | Current-build UI smoke, all four difficulty labels, timings and clean handoff |
-| Independent AI actions and public opponent HUD | Full user match and unchanged-live session verdict | Current-build narrowly scoped native smoke; later user playtest |
-| Lives, PvP and match completion | Full user match completed; real local-server protocol tests cover result orientations | Current-build PvP wait/timer and end-screen enemy Jokers (LV-1, LV-2, LV-6) |
+| Mod load, profile and normal single-player entry | Current installed `da66f0c` booted through normal startup, profile `gio` and single-player setup | AI Play entry present; fresh live smoke after the reviewed installation |
+| Multiplayer 0.5.5, Handy and JokerDisplay | Present and loaded in the current live environment; runtime integration and pinned-source contracts exist | Ordinary human Multiplayer remains a pending human acceptance check |
+| AI Sparring, handoff, lobby and ready/start | Current source candidate repository-accepted; read-only isolated builder/overlay counterprobe only | Actual installed-game UI smoke: entry (host up/down), all four difficulties, timings and clean handoff |
+| Independent AI actions and public opponent HUD | Earlier `9f7a8e1` full user match and unchanged-live session verdict | Current-build narrowly scoped native smoke; later user playtest |
+| Lives, PvP and match completion | Real local-server protocol tests cover result orientations | Current-build PvP wait/timer and end-screen enemy Jokers (LV-1, LV-2, LV-6) |
 | Fair observation, legal validation and stale-action handling | Reviewed architecture; current boundary, property, broker and runtime suites pass | Fresh final-diff review; actual smoke after installation |
 | Strong-tier Psychic behavior and useful Tarot retention | Pre-fix failures and expanded engine-shaped regressions pass on both runtimes, including the real adapter sale/buy cycle | Claude acceptance and relevant live boss/Tarot checks |
-| Targeted Tarots | Finalized adapter/broker/executor and real production logger fixture path pass | Actual final-diff review, then ten-center live validation and cleanup checks |
-| Determinism, bounded search and source size | Fresh H1: 3,600 decisions, peak 1.263M under unchanged 2M, identical runtime actions; maximum source 56,681 bytes; full benchmarks pass | Current-build native large-hand observation; no fixture claim of AI strength |
+| Targeted Tarots | Adapter/broker/executor and real production logger fixture path pass; repository acceptance under prior Claude | Ten-center on-screen effects and highlight-cleanup still pending |
+| Determinism, bounded search and source size | Full62 now complete on this candidate, four cross-runtime benchmark pairs identical; fresh H1 1,800/1,800 per runtime, digest `6920e8b4…`, peaks 1.256M/1.263M under unchanged 2M; maximum source 56,681 bytes / guard 57,344 / hard 65,536 | Current-build native large-hand observation; no fixture claim of AI strength |
 | Recovery, disconnects and shutdown | Reviewed host/launcher safety and native ownership contracts | Current native certification, smoke cleanup, and exact open local-queue checks |
-| No save/live-install mutation during isolated practice | Prior seven phases and full-match `changed_roots=[]` verdict | Fresh seven phases for changed companion bytes; no old-certificate reuse |
-| Safe install, uninstall and rollback | Existing reviewed installer and original installation receipts | Fresh verified backups, current accepted package/certificate binding, exact upgrade receipt and independent live hashes |
+| No save/live-install mutation during isolated practice | Prior seven phases and earlier full-match `changed_roots=[]` verdict | Fresh seven phases for changed companion bytes; no old-certificate reuse |
+| Safe install, uninstall and rollback | Reviewed installer and current upgrade receipts | Fresh verified backups, current accepted package/certificate binding, exact upgrade receipt and independent live hashes |
 
 ## Required release sequence
 

@@ -10,17 +10,27 @@ Status: implementation contract for the functional entry/settings UI and the tru
 | `AISparring/integration/menu_controller.lua` | Play-menu entry wrap, selection state, confirmation flow, bounded ack handling, injected quit | Touch Multiplayer transport, gameplay hooks, the live save, `os`/`io`/`love` directly, or a seed |
 
 Both modules take every side effect as an injected port. The UI layer only builds widgets and calls back into the controller; the controller only validates a selection and calls injected host functions. No gameplay decision is made here.
-
 ## Enable conditions
 
-The AI Sparring button is appended to the existing Play menu only when all hold:
+The AI Sparring button is appended to the existing Play menu when:
 
 - the trusted status probe reports `main_menu == true` (menu is main-menu only);
 - the probe reports `mp_compatible == true` (compatible Multiplayer install);
-- the trusted host reports the external launcher is available.
+- and the trusted host reports the external launcher is available **or** the only
+  blocker is `menu_launcher_unavailable`.
 
-Otherwise the wrap returns the original menu untouched, so normal single-player, human Multiplayer and other mods are unaffected. Install registers only `aisp_*` callbacks and restores any previous callback value on uninstall.
-
+In the second case the button opens the bounded local diagnostic screen
+(`diagnostic_definition`, the same screen `open_settings` refuses with) instead of
+the settings flow, so a missing external host is explained rather than silently
+hidden. It never opens settings, sends a start request, performs hand-off or
+quits. Every other refusal — an unreadable status probe (`menu_bad_status`), a
+non-main-menu stage (`menu_not_main_menu`), an incompatible Multiplayer install
+(`menu_incompatible_mp`) — still returns the original menu untouched, so normal
+single-player, human Multiplayer and other mods are unaffected. Install registers
+only `aisp_*` callbacks and restores any previous callback value on uninstall.
+The unavailable-host condition is still enforced again at `confirm_start`
+(`start_preconditions` plus the launcher check), so nothing can start without a
+live host even if the entry is visible.
 ## Selection contract
 
 Fixed for this build:
@@ -58,6 +68,21 @@ On a match error the UI shows exactly:
 > AI Sparring encountered an error. The match has been stopped. Diagnostics were written to the log.
 
 along with a sanitized local diagnostic path supplied by the host (no state dumps). A staged human menu may offer return/end practice through the trusted controller; human controls never become AI controls.
+
+### Bounded Play-menu outcome diagnostics
+
+The controller takes an optional injected `logger` port (the trusted companion
+logger bridge). At each Play-menu build it records **at most one** bounded line
+per outcome code, `event = "menu_entry"`, using only the allowlisted primitive
+`event`/`code` fields: `menu_ok` (entry added, host ready),
+`menu_launcher_unavailable` (entry added, opens the diagnostic),
+`menu_bad_status` / `menu_not_main_menu` / `menu_incompatible_mp` (entry withheld
+by that refusal), `menu_definition_missing`, `menu_button_failed`, and
+`menu_wrapper_replaced` (another mod reassigned the shared builder after install;
+detected from the per-frame `update`, never rewrapped or overwritten). A missing
+or throwing logger is ignored; logging never changes menu or gameplay behaviour
+and never floods. The code is sampled/maintained only from the controller's own
+trusted pointer and bounded enum values, never from arbitrary engine state.
 
 ## Wiring API for the root bootstrap worker
 
@@ -98,4 +123,4 @@ The host adapter owns provenance: it must be constructed only by the trusted boo
 
 ## Tests
 
-`python tests/run_menu.py --require-all` runs the real modules under Lua 5.1 and LuaJIT 2.1 against the honest fake UI tree in `tests/menu/fakeui.lua`. It checks: every base Play-menu button is retained; install/in-normal-run has no effect; repeated install/uninstall is clean; only an explicit confirmed ack quits; cancel/unavailable/rejection/timeout never quit; selection bounds and payload immutability; an actual Object-shaped (metatable) `G` is accepted; and that the UI layer contains no engine mutators, RNG or process IO. The fixture is not the actual engine.
+`python tests/run_menu.py --require-all` runs the real modules under Lua 5.1 and LuaJIT 2.1 against the honest fake UI tree in `tests/menu/fakeui.lua`. It checks: every base Play-menu button is retained; install/in-normal-run has no effect; repeated install/uninstall is clean; only an explicit confirmed ack quits; cancel/unavailable/rejection/timeout never quit; selection bounds and payload immutability; an actual Object-shaped (metatable) `G` is accepted; that the UI layer contains no engine mutators, RNG or process IO; and (LV-14) that an unavailable host shows a reachable diagnostic entry that opens only `diagnostic_definition` with zero start/quit, while an unreadable probe, off-main-menu, incompatible Multiplayer or connected lobby still hide or refuse. The fixture is not the actual engine.

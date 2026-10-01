@@ -1,5 +1,101 @@
 # Local progress — October 1, 2026
 
+## Current status (live-menu investigation, phase-h checkout)
+
+The installed `da66f0c` generation (`exact27` files, after the real
+`install_companion` caller fix) is genuinely reviewed, certified through all
+seven native phases on its exact package
+`96ebad3787381324d9685a55b262268d019e8a68ec7c44c6f40d2038537b0614` (certificate
+`694392aa14891518293635185478ff1dcbe8dd280d7f32c546023c93b9a15c98`), package-bound
+reviewed by Claude Opus 5.5 High and accepted, and the `full62` supported
+entrypoints plus the immutable 3,600-decision H1 sweep accepted on identical
+runtime inputs. Its companion does boot (`companion_ready`/`bootstrap_ready`, no
+`update_error`). **The actual UI smoke is only partial and has NOT passed: normal
+startup, profile `gio`, single-player setup and the mod set (MP 0.5.5, Handy
+2.0.6, JokerDisplay 2.0.4, AISparring 0.1.0-dev) all loaded, but the real
+Multiplayer Play menu showed no AI Sparring entry on three checks with a matching
+practice host running, so no live menu, match, policy or playability is
+claimed.** The frozen root is the sibling `BalatroAISparring-runtime-v1`; the
+source branch now lives in this checkout. Sanitized observation:
+`work/local-ownership/live-smoke-observations-da66.json`. The exact live cause of
+the missing entry remains **unconfirmed**.
+
+Development batch (filesystem resilience + bounded availability reason +
+reachable host diagnostics; the exact live root cause stays **unconfirmed**). A
+follow-up closed Claude Opus 5.5's diagnostic-batch review findings M1/M2 and
+L1/L2/L3 (`work/local-ownership/claude-diagnostic-batch-review.md`); the final
+fix report is `work/local-ownership/deepseek-menu-review-fixes-report.md`.
+
+- **Resilience, not a proven cause.** `host.available()` is the availability gate
+  and its production discovery read (`CompanionHost.nfs_reader`) was never
+  exercised by tests (they inject `read_discovery`). The installed nativefs uses
+  a direct C open for `read` but a PHYSFS temporary mount for `getInfo`; the old
+  adapter required both, so a `getInfo` miss could hide a readable marker. The
+  fix makes `read` authoritative (`getInfo` can only refuse a definite
+  non-file); every marker/identity/secret/auth check is unchanged. **Astra's
+  independent native isolated probe of the exact pre-fix installed build with a
+  fresh matching marker showed `getinfo_ok`, `read_ok`,
+  `production_reader_decoded`, `production_host_available` and
+  `ai_button_present` all true** (`work/local-ownership/live-menu-native-short/
+  pre-fix-native-result.json`); that isolated copy does **not** prove the live
+  cause is excluded, it only shows the read path works there.
+- **Bounded availability reason (M1 corrected).** `host.available_detail()`
+  returns an allowlisted boot-time host readiness code (`companion_ok` /
+  `companion_marker_absent` / `companion_identity_*`), surfaced in the live
+  status and sampled once on the `companion_boot` line. Because an unavailable
+  host still shows the diagnostic entry, this code **cannot explain a missing
+  entry, whatever it says**; it only says whether the entry would open settings or
+  the diagnostic.
+- **Reachable host diagnostics (UX).** `decorate_play_menu` also appends the AI
+  Sparring entry when the only blocker is `menu_launcher_unavailable`; the entry
+  opens the bounded `diagnostic_definition` (not settings, no start, request,
+  hand-off or quit). Unreadable probe, non-main-menu, incompatible MP and
+  connected-lobby conditions still hide/refuse, and
+  `confirm_start`/`start_preconditions` re-check everything.
+- **Bounded Play-menu outcome diagnostics (M2).** The controller takes an
+  optional injected logger port and records at most one bounded
+  `event="menu_entry"` line per outcome code (`menu_ok`,
+  `menu_launcher_unavailable`, `menu_bad_status`/`menu_not_main_menu`/
+  `menu_incompatible_mp`, `menu_definition_missing`, `menu_button_failed`,
+  `menu_wrapper_replaced`). Wrapper replacement is detected from the existing
+  per-frame `update` by comparing our own builder pointer (never rewrapped, never
+  overwritten). Only allowlisted primitive fields are sent; a throwing/malformed
+  logger is ignored and cannot change menu or gameplay. This is diagnostic only.
+
+Local evidence (both Lua runtimes): `tests/run_companion.py` 98/98 per runtime,
+`tests/run_menu.py` 51/51 per runtime (`tests/menu/test_diagnostic.lua` fails the
+pre-fix wrap and pins the connected-lobby+host-down diagnostic case),
+`tests/run.py` 51/51, `tests/run_runtime.py` 123/123.
+
+Latest review/full status: the diagnostic-hours candidate was accepted at
+repository level by Claude Opus 5.5 High (`work/local-ownership/
+claude-diagnostic-rereview.md`) **conditioned on the full62 run finishing
+unchanged**. That run is now complete on this exact candidate:
+`work/local-ownership/diagnostic-batch-astra-verification.json` records the
+verified dirty candidate, 62/62 supported entrypoints passing, four
+cross-runtime benchmark pairs identical, and the fresh H1 sweep (1,800 decisions
+per runtime, action digest `6920e8b4…`, peaks 1,256,000 / 1,263,000 under the
+unchanged 2M budget, zero budget failures), with H1's 10 actual loaded source
+files byte-identical. The verified source tip is the honest parent
+`4641c10` plus the pending diagnostics commit (not yet created); no resulting
+commit is claimed. After the documentation/comment changes in this batch, the
+final source is **not** blanket-claimable as the earlier 315-file byte-identical
+snapshot — those changes must be bound and reviewed as their own delta.
+
+Still required before any pass is claimed, in order: (1) Astra binds the
+doc/comment delta and a short Claude final closure; (2) build the exact new
+package and run the consolidated seven-phase native certification on it;
+(3) package-bound pre-install review, fresh verified backups and the scoped
+upgrade; (4) an actual installed-game UI smoke covering **both** branches — host
+up (four difficulties, setup, hand-off, human/AI lobby, ready/start, actions,
+HUD) and host down (entry → bounded diagnostic only, no settings, start, request
+or quit), with the `companion_boot` and `menu_entry` lines — **not a full human
+run**. An isolated counterprobe may inspect builder/overlay outcomes only and is
+never an authorized live executable; identity/source/certificate checks must not
+be bypassed. No live Mods/save/host/Game change and no install were made; the
+installed `da66` build and the frozen sibling/original main stay untouched. The
+sections below are historical and predate this investigation.
+
 ## Recovered state
 
 - Remote and feature worktree recovered to `9498cfa` (targeted Tarot WIP `0f48623`, followed by Batch 3 review).
@@ -326,3 +422,12 @@ and `b122532d` certificate are retained under the sibling old generation and mus
 be reused for a newly generated discovery path. The current pointer generation is
 this checkout. The original `main` checkout keeps its unrelated staged changes
 and stash and is never modified.
+
+
+## Astra integration and native counterchecks (2026-10-01)
+
+The development branch now includes the previously independently reviewed read-only match-history work as `5f3bb5b` and its documentation correction as `4641c10`. All three integrated Git blobs equal the accepted `48cd0a4` candidate exactly, all unrelated working files were preserved, and the aggregator passes 19/19 cases. These Python/report changes do not alter the installed companion or policy. The current menu/host diagnostic batch remains uncommitted pending fresh independent verification and Claude review.
+
+Astra ran additional bounded native diagnostics over the exact installed `da66f0c` modules in isolated human copies: a short-path copy, a copy with only the existing menu settings/profile (no saved run or deck), and a copy invoking the real Multiplayer Play callback and scanning the created overlay. All three report a valid actual marker and Windows identity, readable discovery, `host_available=true`, and an AI button in the returned definition; the last also reports the AI button in the created overlay while paused. Each owned process closed and complete live byte maps remained identical. The first overlong staging path failed in Handy before the menu check and is preserved separately; its owned process closed and live maps stayed identical. These are diagnostic counterexamples, not certification, installed UI or match acceptance.
+
+The unchanged installed live game was checked again after a fresh idle host start and still omitted the AI entry. The exact live cause remains unconfirmed. The pending change makes the existing host-unavailable diagnostic reachable and reports a bounded boot-time availability code; it must not be represented as a proven live repair or ready-for-playtest build. Installed `da66f0c` package/certificate/upgrade evidence remains frozen in the sibling runtime checkout. Full supported verification and a fresh adversarial review precede the next meaningful native package batch.

@@ -71,8 +71,15 @@ return function(ctx)
 	end)
 
 	test("live companion boots the reviewed menu over a validated marker", function()
+		-- Drive the whole live chain (core.lua -> companion_host -> nfs_reader ->
+		-- real default_identity over the injected LuaJIT ffi) so availability is
+		-- genuinely true, not just the install. The fake ffi reports the exact
+		-- FILETIME the marker carries.
 		local fixture = support.core_env(repo, {
 			ai_enabled = true,
+			-- FILETIME ticks that decode to exactly the marker's create_time
+			-- (100000.0) on both runtimes.
+			ffi = support.fake_ffi({ ticks = 116445736000000000 }),
 			discovery_marker = support.marker(),
 			companion = { role = "live", discovery_path = "C:/repo/work/aisparring-host/practice_host.json" },
 		})
@@ -83,6 +90,47 @@ return function(ctx)
 		eq(result.companion.role, "live", "role")
 		eq(result.companion.booted, true, "booted")
 		eq(result.companion.handling, true, "handling")
+		-- Boot-time host readiness: whether the Play entry would open settings or
+		-- the unavailable diagnostic. It cannot explain a missing entry.
+		eq(result.companion.host_available, true, "host available")
+		eq(result.companion.host_available_code, "companion_ok", "availability code")
+		local saw_code = false
+		for _, line in ipairs(fixture.record.logs) do
+			if string.find(line, "host_available_code=", 1, true) then
+				saw_code = true
+			end
+		end
+		is_true(saw_code, "availability code is logged (allowlisted)")
+		-- With a readable, valid marker and a fresh identity, the reviewed
+		-- can_open gate appends the AI Sparring entry to the real wrap.
+		local menu = fixture.ui.G.UIDEF.override_main_menu_play_button()
+		local found = false
+		local function walk(node)
+			if type(node) ~= "table" then
+				return
+			end
+			if type(node.config) == "table" and node.config.button == "aisp_open_menu" then
+				found = true
+			end
+			if type(node.nodes) == "table" then
+				for i = 1, #node.nodes do
+					walk(node.nodes[i])
+				end
+			end
+		end
+		walk(menu)
+		eq(found, true, "AI entry appended when the host is available")
+		-- The real injected companion logger bridge records exactly one bounded,
+		-- primitive Play-menu outcome line (event/code only, no path/token).
+		local entry_logs = 0
+		for _, line in ipairs(fixture.record.logs) do
+			if string.find(line, 'event="menu_entry"', 1, true) then
+				entry_logs = entry_logs + 1
+				is_true(string.find(line, 'code="menu_ok"', 1, true) ~= nil, "valid-entry code")
+				is_true(string.find(line, "detail=", 1, true) == nil, "no extra fields")
+			end
+		end
+		eq(entry_logs, 1, "one menu_entry outcome line")
 		is_true(has_load(fixture.record, "integration/companion_host.lua"), "companion host loaded")
 		is_true(has_load(fixture.record, "ui/practice_menu.lua"), "menu loaded")
 		is_true(has_load(fixture.record, "integration/menu_controller.lua"), "controller loaded")
@@ -106,6 +154,64 @@ return function(ctx)
 			end
 		end
 		is_true(resolved ~= nil and string.find(resolved, "ai_companion_configured", 1, true) ~= nil, tostring(resolved))
+	end)
+
+	test("an unreadable marker keeps the companion armed and shows a reachable diagnostic entry", function()
+		-- A missing host is now explained, not hidden: the entry appears and its
+		-- callback opens the bounded diagnostic. Nothing starts, requests or
+		-- quits. The status still carries the bounded reason.
+		local fixture = support.core_env(repo, {
+			ai_enabled = true,
+			files = {},
+			companion = { role = "live", discovery_path = "C:/repo/work/aisparring-host/practice_host.json" },
+		})
+		local ok, result = fixture:run()
+		eq(ok, true, "entrypoint ok")
+		eq(result.state, "companion_ready", "installed")
+		eq(result.companion.host_available, false, "host unavailable")
+		eq(result.companion.host_available_code, "companion_marker_absent", "bounded reason")
+		local wrapped = fixture.ui.G.UIDEF.override_main_menu_play_button
+		is_true(type(wrapped) == "function", "builder wrapped")
+		local menu = wrapped()
+		local found = false
+		local function walk(node)
+			if type(node) ~= "table" then
+				return
+			end
+			if type(node.config) == "table" and node.config.button == "aisp_open_menu" then
+				found = true
+			end
+			if type(node.nodes) == "table" then
+				for i = 1, #node.nodes do
+					walk(node.nodes[i])
+				end
+			end
+		end
+		walk(menu)
+		eq(found, true, "diagnostic entry shown without a readable marker")
+		-- Clicking it opens the bounded diagnostic and never touches start/quit.
+		local funcs = fixture.ui.funcs
+		is_true(type(funcs.aisp_open_menu) == "function", "owned callback registered")
+		funcs.aisp_open_menu()
+		local overlay = fixture.ui.G.OVERLAY_MENU
+		is_true(type(overlay) == "table", "an overlay was opened")
+		local diagnostic = false
+		local function walk_overlay(node)
+			if type(node) ~= "table" then
+				return
+			end
+			if type(node.config) == "table" and node.config.id == "aisp:diagnostic:back" then
+				diagnostic = true
+			end
+			if type(node.nodes) == "table" then
+				for i = 1, #node.nodes do
+					walk_overlay(node.nodes[i])
+				end
+			end
+		end
+		walk_overlay(overlay.definition)
+		eq(diagnostic, true, "the diagnostic definition was opened, not settings")
+		eq(fixture.record.quits, 0, "never quits")
 	end)
 
 	test("staged AI companion reads the strict launcher environment", function()

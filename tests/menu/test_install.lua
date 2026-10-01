@@ -78,12 +78,14 @@ return function()
 		ids = collect_ids(wrapped(fx)())
 		eq(#ids, #base_ids(fx), "no added button when MP incompatible")
 		fx.probe_result.mp_compatible = true
+		-- A missing launcher host still shows the entry so its diagnostic is
+		-- reachable; the entry never starts anything (see test_diagnostic.lua).
 		fx.available = false
 		ids = collect_ids(wrapped(fx)())
-		eq(#ids, #base_ids(fx), "no added button when launcher unavailable")
+		eq(#ids, #base_ids(fx) + 1, "diagnostic entry shown when launcher unavailable")
 		fx.available = true
 		ids = collect_ids(wrapped(fx)())
-		eq(#ids, #base_ids(fx) + 1, "button returns when enabled")
+		eq(#ids, #base_ids(fx) + 1, "button present when enabled")
 	end)
 
 	test("install.uninstall_restores_original", function()

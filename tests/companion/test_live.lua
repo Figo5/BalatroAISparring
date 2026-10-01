@@ -186,6 +186,7 @@ return function(ctx)
 			clock = { now = function()
 				return now
 			end },
+			logger = overrides.logger,
 			quit = function()
 				quits = quits + 1
 				if overrides.quit_throws then
@@ -582,5 +583,30 @@ return function(ctx)
 		eq(#names, 2, "two workers started")
 		is_true(names[1][1] ~= names[2][1] and names[1][2] ~= names[2][2], "distinct channel pairs")
 		eq(#channels[names[2][1]].queue, 0, "the new worker's inbox holds no old request")
+	end)
+
+	test("live update detects a replaced builder once through the real logger bridge", function()
+		local records = {}
+		local instance, state = build_live({ logger = { record = function(fields)
+			records[#records + 1] = fields
+		end } })
+		eq(instance.install(), true, "install")
+		local key = support.menu(ctx.repo_root).MenuController.BUILDER_KEY
+		local replacement = function()
+			return instance.controller().describe()
+		end
+		state.ui.G.UIDEF[key] = replacement
+		instance.update(0.016)
+		instance.update(0.016)
+		local replaced = 0
+		for i = 1, #records do
+			if records[i].code == "menu_wrapper_replaced" then
+				replaced = replaced + 1
+				eq(records[i].event, "menu_entry", "menu_entry event")
+			end
+		end
+		eq(replaced, 1, "detected once through the real update path")
+		eq(state.ui.G.UIDEF[key], replacement, "no rewrap, no overwrite")
+		eq(instance.controller().state(), "idle", "update still inert while idle")
 	end)
 end

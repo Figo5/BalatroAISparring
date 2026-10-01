@@ -291,7 +291,8 @@ The published status adds a primitive-only `companion` block:
 state = "companion_ready" | "companion_unavailable" | "fail_closed"
 ai    = { requested = true, enabled = false, implemented = true, status = ... }
 companion = { role, staged_role, booted, pending, code, instance_state,
-              host_available, handling, diagnostic_path, module_error }
+              host_available, host_available_code, handling, diagnostic_path,
+              module_error }
 ```
 
 `companion_ready` means the companion is armed; for the staged path it also
@@ -299,10 +300,48 @@ covers the bounded-pending state, where `pending = true`, `booted = false` and
 `instance_state = "awaiting_attestation"` while the launcher writes the fixed
 attestation file. The companion update step is still installed so it can resolve
 and boot later. `diagnostic_path` is a sanitized local path (no credentials).
+`host_available_code` is a bounded, secret-free marker/identity/ok code
+(`companion_ok`, `companion_marker_absent`, `companion_identity_stale`, ...) for
+**boot-time host readiness**: whether the AI Sparring Play entry would open
+settings (`companion_ok`) or the unavailable diagnostic (anything else). It is
+**sampled at boot** (the `companion_boot` line and the published status) and is
+not re-logged at Play-menu build time. Because an unavailable host still shows a
+reachable diagnostic entry, **the code cannot explain a genuinely missing entry,
+whatever it says**; a missing entry is outside host readiness. The live discovery
+read treats the direct nativefs `read` as authoritative (`getInfo` is only a
+presence hint and can only refuse a definite non-file), while `inspect_marker`
+still validates every field. This read-coupling removal is resilience hardening,
+not a proven cause of the live missing entry: an isolated native probe of the
+exact installed build with a fresh matching marker showed `getinfo_ok`,
+`read_ok`, `production_reader_decoded` and `production_host_available` all true.
+
 Capability flags stay `false` deliberately: instance state and module presence
 are facts, not authority, and the broker capability is never exposed here. A
 mutating caller cannot change the stored snapshot (`get_status()` returns fresh
 copies).
+
+### 7.1 Bounded Play-menu outcome diagnostics (LV-14)
+
+Because every remaining way the entry can be absent is otherwise silent, the menu
+controller now records at most one bounded line per outcome code through the
+injected logger bridge (`event = "menu_entry"`):
+
+| `code` | Meaning |
+|---|---|
+| `menu_ok` | the entry was appended for a ready host (opens settings) |
+| `menu_launcher_unavailable` | the entry was appended for the unavailable-host diagnostic |
+| `menu_bad_status`, `menu_not_main_menu`, `menu_incompatible_mp` | the entry was withheld by that `can_open` refusal |
+| `menu_definition_missing` | the Play definition/contents shape was not recognized |
+| `menu_button_failed` | the button builder returned no node |
+| `menu_wrapper_replaced` | another mod reassigned `G.UIDEF.override_main_menu_play_button` after install (detected from the per-frame update; never rewrapped, never overwritten) |
+
+Each code is logged at most once per session (no per-frame flood). Only the
+allowlisted primitive `event`/`code` fields are sent; a throwing or malformed
+logger is ignored and can never change menu or gameplay behavior. This is
+diagnostic only — it is not authority and it does not establish the live cause.
+The bounded repeated-update-error disable is the separate, already-recorded
+`companion_update_disabled` event (section 6); the menu outcome lines are not a
+second disable pipeline.
 
 ## 8. Wire encoding (`integration/wire_json.lua`)
 

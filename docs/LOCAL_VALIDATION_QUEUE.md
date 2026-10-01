@@ -490,3 +490,97 @@ needs the full re-certification and a companion reinstall, not
   `work/local-ownership/deepseek-installer-caller-report.md` and
   `upgrade-failure-rollback-astra-proof.json`. No native launch, install,
   certification, upgrade, save or Mods mutation was performed.
+
+## LV-14 Live Play entry: filesystem resilience, bounded availability reason, reachable host diagnostics (UI not passed)
+
+- **Source:** this checkout (`feature/ai-sparring-v1`); frozen root
+  `BalatroAISparring-runtime-v1`. Runtime Lua changed, so this needs full
+  re-certification and a reinstall.
+- **ACTUAL installed state (unchanged):** `da66f0c` `exact27` files after the
+  real `install_companion` caller fix; package
+  `96ebad3787381324d9685a55b262268d019e8a68ec7c44c6f40d2038537b0614`, certificate
+  `694392aa14891518293635185478ff1dcbe8dd280d7f32c546023c93b9a15c98`; `full62` and
+  H1 accepted on identical inputs; Claude Opus 5.5 High accepted the exact
+  package. Live smoke partially passes (startup, profile `gio`, single-player
+  setup, mods) and fails the missing AI Play entry. The exact live cause is
+  **unconfirmed**.
+- **Change (this batch):**
+  1. **Resilience (not a proven cause):** `CompanionHost.nfs_reader` treats the
+     direct nativefs `read` as authoritative; `getInfo` is a presence hint that
+     can only refuse a definite non-file. Markers are still validated in full.
+  2. **Bounded boot-time availability reason (M1):** `host.available_detail()`
+     returns an allowlisted code; `host_available_code` is in the live status and
+     sampled once on the `companion_boot` line. It is boot-time readiness only:
+     an unavailable host still shows the diagnostic entry, so the code **cannot
+     explain a missing entry, whatever it says**.
+  3. **Reachable diagnostics (UX):** `decorate_play_menu` now also appends the AI
+     Sparring entry when the only blocker is `menu_launcher_unavailable`; the
+     entry opens the bounded diagnostic, never settings/start/request/hand-off/
+     quit. Unreadable probe, non-main-menu, incompatible MP and connected-lobby
+     still hide/refuse, and `confirm_start` re-checks everything.
+  4. **Bounded Play-menu outcome diagnostics (M2):** an optional injected logger
+     port records at most one `event="menu_entry"` line per outcome code
+     (`menu_ok`, `menu_launcher_unavailable`, `menu_bad_status`,
+     `menu_not_main_menu`, `menu_incompatible_mp`, `menu_definition_missing`,
+     `menu_button_failed`, `menu_wrapper_replaced`). Wrapper replacement is
+     detected from the existing per-frame `update` by comparing our own builder
+     pointer (never rewrapped or overwritten). Only allowlisted primitive fields
+     are sent; a throwing/malformed logger never changes menu or gameplay.
+- **Independent native facts (Astra, isolated, diagnostic only):**
+  `work/local-ownership/live-menu-native-short/pre-fix-native-result.json` — on
+  the exact installed pre-fix build with a fresh matching marker, `getinfo_ok`,
+  `getinfo_present`, `read_ok`, `decode_ok`, `direct_marker_valid`,
+  `production_reader_decoded`, `production_host_available`,
+  `boot_host_available`, `main_menu`, `builder_call_ok` and `ai_button_present`
+  were all `true`, all owned exited normally and live bytes were unchanged. This
+  is not a certificate or a UI pass. It shows the read path works **in that
+  isolated copy**; it does **not** establish the read path as the live cause nor
+  exclude it there.
+- **Reading `menu_wrapper_replaced` (R4).** The code means the shared builder key
+  no longer points at our wrapper. A mod that *chains* (wraps our wrapper and
+  still calls it) also triggers it while the entry keeps working, so the code
+  alone does not prove a bypass. Because each code is logged at most once, the
+  only discriminator is a `menu_ok` or `menu_launcher_unavailable` line logged
+  **after** `menu_wrapper_replaced` (chained). If either success code was already
+  logged before the replacement it will not repeat, so the **absence of a later
+  success line does not by itself prove a bypass**; correlate the actual new Play
+  screenshot and the game's own visible behavior before concluding.
+- **Two separate native steps (Astra; do not conflate).**
+  - **(a) Optional isolated counterprobe (no start/request).** A fresh isolated
+    staged copy (never live install/saves) may run the read-only builder/overlay
+    probe under `work/local-ownership/native-live-menu-probe/` to inspect only
+    availability/builder/overlay outcomes. **It is not an authorized live
+    executable and must never be used to confirm host hand-off or start an
+    installed-companion flow.**
+  - **(b) Actual installed-game UI smoke.** The host-up/host-down menu, the four
+    difficulties, the hand-off, and the human/AI/lobby/ready/start/actions/HUD
+    smoke run only in the actual certified/installed game through its normal UI.
+    `tools/practice_host.py::verify_live_target` enforces the exact installed
+    Balatro image path (`practice_live_not_install` otherwise), so identity,
+    source and certificate checks must never be bypassed. A staged copy that the
+    host legitimately launches **after** the installed game quits on the normal
+    pass is the normal flow, not a substitute for this step. **No full human
+    run.**
+  1. With the installed game on the main menu, open Play. Host up: the AI
+     Sparring row must be present and open the four-difficulty settings; host
+     down: the row must still be present and open the bounded diagnostic (no
+     settings, no start, no request, no quit).
+  2. Host up: reach the four-difficulty selection (Rookie, Competitive, Major
+     League, Expert), confirm the practice setup, and observe the hand-off and
+     the AI HUD. **Do not run a full human match.**
+  3. Capture the `companion_boot … host_available_code=…` line, the bounded
+     `event="menu_entry" code=…` line from the Play build, and a Play-menu
+     screenshot. If step (a) is used, capture its `AISP_LIVE_MENU_PROBE_RESULT`
+     line separately and label it a counterprobe only.
+- **Expected:** startup/profile/SP/mods load; the Play entry is present and
+  either starts the setup/hand-off/lobby/AI-HUD path (host up) or opens the
+  diagnostic (host down). The `menu_entry` line names the exact build outcome
+  (`menu_ok`, `menu_launcher_unavailable`, a refusal code, a malformed
+  definition/button, or `menu_wrapper_replaced`), interpreted per R4. No secret,
+  session, path or hidden state is emitted.
+- **Not claimed / boundaries retained:** no full human run, no match result, no
+  policy/transport/playability or Phase-G completion, no stable-playtest
+  readiness. **A missing entry is outside host readiness regardless of the boot
+  `host_available_code`**; if the entry is absent, use the `menu_entry` line (and
+  the counterprobe) to name the branch rather than blaming the host. No
+  marker/identity/auth/source/certificate gate was weakened.

@@ -222,6 +222,7 @@ function F.fixture(repo_root, cfg)
 		host = host,
 		status = status,
 		clock = clock,
+		logger = cfg.logger,
 	})
 	if controller == nil then
 		error("menu_controller.factory failed: " .. tostring(factory_code), 2)

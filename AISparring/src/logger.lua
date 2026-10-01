@@ -4,6 +4,11 @@ Logger.MAX_STRING = 96
 Logger.ALLOWED_FIELDS = {
 	"event", "code", "status", "dependency", "version", "required_version",
 	"detail", "module", "mod", "count", "phase", "action", "seconds",
+	-- Bounded, secret-free boot-time host readiness code (for example
+	-- companion_ok / companion_marker_absent): whether the AI Sparring Play
+	-- entry would open settings or the unavailable diagnostic. It does not
+	-- explain a missing entry.
+	"host_available_code",
 }
 Logger.LEVELS = { info = true, warn = true, error = true, debug = true }
 
