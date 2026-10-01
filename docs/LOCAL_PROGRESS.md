@@ -13,13 +13,28 @@
 
 ## Current work
 
-Current implementation checkpoint: `e0d5a70` (pushed), following `7341727`
-(targeted Tarot finalization) and `93147b7` (Phase A). All implementation uses
-OpenCode Go `opencode-go/deepseek-v4.1-flash`, High; exported sessions were
-independently checked. Astra's full supported suite and separate H1 sweep pass.
-Fresh Claude Code `claude-opus-5-5`, High, acceptance is pending the reported
-September 30, 9:40 p.m. Eastern quota reset. Do not substitute a reviewer or
-interpret an API limit as a verdict. Current source is not certified/installed.
+Current implementation checkpoint: `eb39c62` (pushed). Claude's actual High
+review of `7f2aced` found no Critical/High, two Medium and four Low findings;
+the verbatim review is `CLAUDE_LOCAL_FINAL_REVIEW_7F2.md`. DeepSeek completed
+the fixes, including the additional independently reproduced price/interest
+churn case and tracked, portable release tooling and fault regressions.
+Both coder exports contain only `opencode-go/deepseek-v4.1-flash`, High.
+
+Fresh Astra verification passed **62/62 supported entrypoints**, with all 312
+recorded files unchanged through execution. The immutable H1 sweep passed
+3,600 decisions on both runtimes, identical actions and no budget failures;
+peak 1,263,000 instructions under the unchanged 2M limit. Largest policy
+source is 56,392 bytes, 952 below the unchanged repository guard.
+The fresh-checkout control passed 15 native-runner and 19 upgrade cases without
+ignored implementation files; the separate real-adapter price grid passed
+360 cases per runtime. Raw evidence and exact hashes are recorded in
+`LOCAL_REGRESSION_VERIFICATION.md` and `LOCAL_H1_VERIFICATION.md`.
+
+Final Claude Opus 5.5 High source re-review is next. No API error is a verdict.
+The current build is not yet natively certified or installed; the old live
+27-file build remains unchanged. After current installation/smoke, preserve
+its runtime source generation and move later development to a separate
+worktree so playtest workers keep reading the installed generation.
 
 ## Remaining sequence
 

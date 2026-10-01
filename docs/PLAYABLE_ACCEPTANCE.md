@@ -18,11 +18,12 @@ earlier failures, corrections and full-match evidence.
 
 The newer feature branch contains additional policy, runtime and targeted Tarot
 changes. **Installed evidence does not certify the newer feature branch.** Code
-checkpoint `e0d5a70` includes the Phase A fixes, targeted Tarot finalization and
-the active-supervisor stop fix. Independent verification passed all 60 supported
-entrypoints and the separate H1 sweep on both runtimes. Fresh Claude acceptance
-is pending the reported September 30, 9:40 p.m. Eastern quota reset; certification,
-installation and actual smoke remain separate required gates. See
+checkpoint `eb39c62` includes the Phase A/Tarot work, exhausted Psychic terminal,
+price/interest churn, shutdown intent and portable release-tool fixes after
+Claude's actual review of `7f2aced`. Fresh independent verification passed all
+62 supported entrypoints and the separate H1 sweep on both runtimes. Final
+Claude source re-review, certification, installation and actual smoke remain
+separate required gates. See
 `LOCAL_PROGRESS.md` for the current checkpoint and exact evidence.
 
 ## Acceptance matrix
@@ -37,7 +38,7 @@ installation and actual smoke remain separate required gates. See
 | Fair observation, legal validation and stale-action handling | Reviewed architecture; current boundary, property, broker and runtime suites pass | Fresh final-diff review; actual smoke after installation |
 | Strong-tier Psychic behavior and useful Tarot retention | Pre-fix failures and expanded engine-shaped regressions pass on both runtimes, including the real adapter sale/buy cycle | Claude acceptance and relevant live boss/Tarot checks |
 | Targeted Tarots | Finalized adapter/broker/executor and real production logger fixture path pass | Actual final-diff review, then ten-center live validation and cleanup checks |
-| Determinism, bounded search and source size | Independent H1: 3,600 decisions, peak 1.262M under unchanged 2M, identical runtime actions; maximum source 54,740 bytes; full benchmarks pass | Current-build native large-hand observation; no fixture claim of AI strength |
+| Determinism, bounded search and source size | Fresh H1: 3,600 decisions, peak 1.263M under unchanged 2M, identical runtime actions; maximum source 56,392 bytes; full benchmarks pass | Current-build native large-hand observation; no fixture claim of AI strength |
 | Recovery, disconnects and shutdown | Reviewed host/launcher safety and native ownership contracts | Current native certification, smoke cleanup, and exact open local-queue checks |
 | No save/live-install mutation during isolated practice | Prior seven phases and full-match `changed_roots=[]` verdict | Fresh seven phases for changed companion bytes; no old-certificate reuse |
 | Safe install, uninstall and rollback | Existing reviewed installer and original installation receipts | Fresh verified backups, current accepted package/certificate binding, exact upgrade receipt and independent live hashes |

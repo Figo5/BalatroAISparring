@@ -6,7 +6,7 @@ Local AI practice using Balatro Multiplayer's Major League rules, with separate 
 installed `9f7a8e1`, `0.1.0-dev` build. Its native session recorded unchanged live
 roots. The newer feature branch includes additional policy/runtime work and
 finalized targeted Tarots; it is separate from that installed build. Independent
-local checks passed all 60 supported entrypoints and the 3,600-decision H1 sweep.
+local checks passed all 62 supported entrypoints and the fresh 3,600-decision H1 sweep.
 Fresh Claude acceptance, seven-phase certification, a backed-up upgrade and
 actual current-build smoke are still required. Exact commit, package, review and
 installed-state records are in [local progress](docs/LOCAL_PROGRESS.md) and
