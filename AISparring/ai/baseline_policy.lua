@@ -2510,6 +2510,20 @@ local function recognized_joker(center)
 	return ADD_MULT[center] == true or X_MULT[center] == true or PINNED[center] == true
 end
 
+-- A held consumable only frees a slot when it does not carry capacity itself.
+-- The `negative` edition supplies `ability.card_limit = 1` to the owned row
+-- (current Steamodded `handle_card_limit`, src/utils.lua:3919), so removing it
+-- lowers the area limit by the same slot it occupied: it frees nothing. An
+-- edition the observation cannot classify is treated the same way -- the slot
+-- effect cannot be inferred, so the card is never sold as a slot release rather
+-- than assuming its removal helps.
+local function slot_releasing(edition)
+	if edition == nil then
+		return true
+	end
+	return edition == "foil" or edition == "holo" or edition == "polychrome"
+end
+
 local function sell_consumable_score(observation, action)
 	-- Only a held card the safety floor would never use is worth its slot back.
 	if observation.phase ~= "SHOP" or type(observation.self) ~= "table" then
@@ -2520,11 +2534,16 @@ local function sell_consumable_score(observation, action)
 		return nil
 	end
 	if not harmful_use(observation, held.center) and not unusable(held.center) then
+		if not slot_releasing(held.edition) then
+			return nil
+		end
 		-- A usable targeted Tarot waits for a useful hand, so a full set of
 		-- consumable slots is not by itself a reason to sell it. It is freed
 		-- only when the visible shop offers a concretely better, affordable
 		-- consumable that needs the slot, and then only the lowest-value held
-		-- Tarot is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2).
+		-- Tarot is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2). Only a card
+		-- that actually releases a slot is compared: a lower-worth Negative (or
+		-- any slot-providing/unknown edition) never blocks the regular card.
 		local slots = type(observation.match) == "table" and observation.match.consumable_slots or nil
 		local list = observation.self.consumables
 		local worth = SLOT_WORTH[held.center]
@@ -2535,7 +2554,8 @@ local function sell_consumable_score(observation, action)
 			local other = list[i]
 			local center = type(other) == "table" and other.center or nil
 			local w = type(center) == "string" and SLOT_WORTH[center] or nil
-			if w ~= nil and w < worth then
+			local edition = type(other) == "table" and other.edition or nil
+			if w ~= nil and w < worth and slot_releasing(edition) then
 				return nil
 			end
 		end

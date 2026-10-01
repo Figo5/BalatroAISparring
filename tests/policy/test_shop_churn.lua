@@ -42,6 +42,30 @@ return function(ctx)
 		})
 	end
 
+	-- Current Steamodded recomputes a CardArea limit from the owned row:
+	--   total = base + mod + sum(owned ability.card_limit)
+	--   card_limit = total - sum(owned ability.extra_slots_used)
+	-- (src/utils.lua:3919, lovely/card_limit.toml:120-166, read-only). Re-settle
+	-- after every sale/buy so the observed `consumable_slots` follows the live
+	-- handle_card_limit semantics: an owned Negative owns card_limit = 1.
+	local function settle(engine)
+		local limits = engine.consumeables.config.card_limits
+		local extra, used = 0, 0
+		for _, c in ipairs(engine.consumeables.cards) do
+			extra = extra + (c.ability.card_limit or 0)
+			used = used + (c.ability.extra_slots_used or 0)
+		end
+		limits.extra_slots = extra
+		limits.extra_slots_used = used
+		limits.total_slots = (limits.base or 0) + (limits.mod or 0) + extra
+	end
+
+	local function decide_export(difficulty, export)
+		local result = env.policy_env.run(Support.source(env, difficulty), export)
+		ctx.is_true(result.ok == true, difficulty .. ":" .. tostring(result.code))
+		return result.action
+	end
+
 	local function observed(engine)
 		local pipeline = Engine.pipeline(bundle, engine, {})
 		local result, code = pipeline.adapter.step()
@@ -249,5 +273,93 @@ return function(ctx)
 			ctx.is_true(sales <= 1 and buys <= 1, d .. " no churn sales=" .. sales .. " buys=" .. buys)
 			ctx.eq(engine.G.GAME.dollars, 22, d .. " money preserved")
 		end
+	end)
+
+	-- Astra negative-slot finding: a full Death + Strength + Negative Sun row
+	-- (base 2 + the Negative's card_limit 1 = 3) offers Star and Saturn. Selling
+	-- the Negative frees no slot (its own removal lowers the limit), so the
+	-- policy must keep it, sell only the regular Strength, then buy Saturn.
+	-- Both offer orders and a LEAVE_SHOP-first certificate order are exercised,
+	-- and no repeated or unhelpful sale is allowed afterwards.
+	test("an_owned_negative_is_kept_through_the_real_adapter_multi_step", function()
+		local orders = {
+			{ "c_star", "c_saturn" },
+			{ "c_saturn", "c_star" },
+		}
+		for _, d in ipairs(STRONG) do
+			for o = 1, #orders do
+				for _, leaves_first in ipairs({ false, true }) do
+					local engine = shop(
+						{ tarot(orders[o][1], { cost = 3 }), tarot(orders[o][2], { cost = 3 }) },
+						{ tarot("c_death"), tarot("c_strength"), tarot("c_sun", { edition = "negative", card_limit = 1 }) },
+						36, 2)
+					engine.consumeables.config.type = "joker"
+					settle(engine)
+					ctx.eq(observed(engine).match.consumable_slots, 3, d .. " settled slots = base 2 + 1")
+
+					local sales, buys = 0, 0
+					for _ = 1, 5 do
+						for _, c in ipairs(engine.consumeables.cards) do c.area = engine.consumeables end
+						for _, c in ipairs(engine.G.shop_jokers.cards) do c.area = engine.G.shop_jokers end
+						local export = observed(engine)
+						if leaves_first then
+							local ordered = {}
+							for _, x in ipairs(export.certificates.items) do
+								if x.type == "LEAVE_SHOP" then ordered[#ordered + 1] = x end
+							end
+							for _, x in ipairs(export.certificates.items) do
+								if x.type ~= "LEAVE_SHOP" then ordered[#ordered + 1] = x end
+							end
+							export.certificates.items = ordered
+						end
+						local action = decide_export(d, export)
+						if action.type == "SELL_CONSUMABLE" then
+							local idx = tonumber(action.consumable_ref:match("^consumable:(%d+)$"))
+							local card = table.remove(engine.consumeables.cards, idx)
+							ctx.neq(card.config.center.key, "c_sun", d .. " never sells the Negative")
+							engine.G.GAME.dollars = engine.G.GAME.dollars + card.sell_cost
+							sales = sales + 1
+						elseif action.type == "BUY_ITEM" then
+							local idx = tonumber(action.item_ref:match("^shop:(%d+)$"))
+							local card = table.remove(engine.G.shop_jokers.cards, idx)
+							engine.consumeables.cards[#engine.consumeables.cards + 1] = card
+							engine.G.GAME.dollars = engine.G.GAME.dollars - card.cost
+							buys = buys + 1
+						else
+							break
+						end
+						settle(engine)
+					end
+					ctx.eq(sales, 1, d .. " exactly one sale")
+					ctx.eq(buys, 1, d .. " exactly one buy")
+					ctx.eq(engine.G.GAME.dollars, 34, d .. " sold one (+1), bought Saturn (-3)")
+					local centers = {}
+					for _, c in ipairs(engine.consumeables.cards) do centers[c.config.center.key] = true end
+					ctx.truthy(centers.c_sun == true, d .. " Negative Sun kept")
+					ctx.truthy(centers.c_saturn == true, d .. " Saturn bought")
+					ctx.truthy(centers.c_strength ~= true, d .. " regular Strength sold")
+				end
+			end
+		end
+	end)
+
+	-- The settled capacity itself: removing the Negative lowers the observed
+	-- consumable_slots by its owned card_limit (3 -> 2); removing a regular card
+	-- leaves it unchanged.
+	test("a_negative_consumable_recomputes_the_settled_capacity", function()
+		local engine = shop({}, {
+			tarot("c_death"), tarot("c_strength"),
+			tarot("c_sun", { edition = "negative", card_limit = 1 }),
+		}, 36, 2)
+		settle(engine)
+		ctx.eq(observed(engine).match.consumable_slots, 3, "base 2 + negative 1")
+
+		table.remove(engine.consumeables.cards, 1)
+		settle(engine)
+		ctx.eq(observed(engine).match.consumable_slots, 3, "a regular removal keeps the Negative's slot")
+
+		table.remove(engine.consumeables.cards, 2)
+		settle(engine)
+		ctx.eq(observed(engine).match.consumable_slots, 2, "the Negative removal lowers the limit")
 	end)
 end

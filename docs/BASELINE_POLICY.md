@@ -347,23 +347,30 @@ are discounted (−10) for the same reason.
 A usable allowlisted Tarot is **not** sold just because the consumable slots
 are full: a slot is freed only when the shop offers a concretely better,
 affordable consumable that needs it, and then only the lowest-value held Tarot
-is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2). Rookie keeps the old
-behaviour (never buys, sells a held one). When two offered consumables score
-the same, the higher `SLOT_WORTH` wins (a deterministic tie-break consulted only
-between equal-scored consumable purchases, so a shop listing Star before Saturn
-cannot buy the weaker Tarot first); all price, economy, reserve and edition
-comparisons are unchanged (final review L-b).
+is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2). Only a card that actually
+releases a slot is a candidate: a `negative` owned consumable owns
+`ability.card_limit = 1` (current Steamodded `handle_card_limit`), so removing it
+also lowers the area limit and frees nothing — it is never sold to make room, and
+its (usually lowest) `SLOT_WORTH` never blocks the regular candidate a real
+upgrade needs. An edition the observation cannot classify is treated the same
+way (the slot effect is not inferable, so it is never assumed to free one).
+Rookie keeps the old behaviour (never buys, sells a held one). When two offered
+consumables score the same, the higher `SLOT_WORTH` wins (a deterministic
+tie-break consulted only between equal-scored consumable purchases, so a shop
+listing Star before Saturn cannot buy the weaker Tarot first); all price,
+economy, reserve and edition comparisons are unchanged (final review L-b).
 
-The sale rationale is checked against the purchase the **same** `buy_score` and
-tie-break actually ranks best among the visible offers (`predicted_consumable_buy`):
-the intended purchase must be the best offer and strictly raise the held
-`SLOT_WORTH`. Because sale proceeds are not in the observation, the sale is also
-refused when a same-or-worse-worth offer is *cheaper* than the intended upgrade —
-after the invisible proceeds raise the interest bonus that cheaper offer could
-overtake the upgrade, recreating the slot with a same-worth Tarot and churning
-sell → buy → sell (final review interest churn). This only ever *refuses* a
-borderline sale; it does not change buy scores, reserves, editions or any other
-priority, and Negative purchases and safety-floor sales are untouched.
+The sale rationale is checked inline in `sell_consumable_score` against the
+purchase the **same** `buy_score` and tie-break actually ranks best among the
+visible offers: the intended purchase must be the best offer and strictly raise
+the held `SLOT_WORTH`. Because sale proceeds are not in the observation, the sale
+is also refused when a same-or-worse-worth offer is *cheaper* than the intended
+upgrade — after the invisible proceeds raise the interest bonus that cheaper
+offer could overtake the upgrade, recreating the slot with a same-worth Tarot and
+churning sell → buy → sell (final review interest churn). This only ever
+*refuses* a borderline sale; it does not change buy scores, reserves, editions or
+any other priority, and Negative purchases and safety-floor sales (harmful or
+unusable consumables, even editioned) are untouched.
 
 **The Psychic (`bl_psychic`, not disabled).** A play of fewer than five cards
 scores nothing and is normally never chosen (`MIN_CARDS` is enforced at the top
@@ -565,14 +572,20 @@ neighbour is punctuation. It never joins `--`, a digit with `.`, or `[[` /
 (`BaselinePolicy.loose_source`) sources compile to byte-identical bytecode;
 `test_source.lua` checks this for every difficulty.
 
-| | Rendered size |
+The rows below are **historical** milestone measurements of the stripped
+`BaselinePolicy.source`, except the last, which is a separate space-squeeze
+rendering mode rather than a later milestone. The newest measured value is the
+Negative-consumable slot fix row.
+
+| Milestone (historical) | Rendered `BaselinePolicy.source` size |
 |---|---|
 | Before (`97358b8`, comments included) | 64,303–64,310 bytes (≈1,230 bytes of headroom) |
 | This change, if unstripped | 66,538–66,545 bytes (over the cap) |
 | This change, stripped | **51,544–51,551 bytes** (≈14.0 KB, 21%, under the cap) |
 | After the follow-up backlog commits | 53,110–53,117 bytes (≈12.4 KB under the cap, 4.2 KB under the guard) |
 | After boss awareness (Psychic, Eye, Mouth), with the fallback rewritten | 55,279–55,286 bytes (≈10.2 KB under the cap, 2.0 KB under the guard) |
-| After the final-review fixes (M-A exhausted-hand terminal, L-b buy tie-break) | 55,771–55,778 bytes (≈9.6 KB under the cap, 1.5 KB under the guard) |
+| After the final-review fixes (M-A exhausted-hand terminal, L-b buy tie-break) | 56,385–56,392 bytes (≈8.9 KB under the cap, 0.93 KB under the guard) |
+| After the Negative-consumable slot fix (Astra negative-slot finding) | **56,674–56,681 bytes** (≈8.6 KB under the cap, 0.65 KB under the guard) |
 | With the space squeeze | **50,234–50,241 bytes** (≈15.3 KB under the cap, 7.1 KB under the guard) |
 
 `BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).
@@ -673,7 +686,7 @@ everything is skipped the policy returns no action.
 | `REROLL` | Selective: only meaningful above a surplus threshold; otherwise leave. |
 | `LEAVE_SHOP` | The usual resolution when nothing is worth buying or money is tight. |
 | `SELL_JOKER` | Scored only in `SHOP` under visible slot pressure (full joker board plus a specific, already-affordable, strictly-better same-center copy on offer); never for a Joker whose built-up value a sale resets (`GROWS`: Hologram, Green Joker, Spare Trousers, Constellation, Obelisk, …); no score in every other phase. |
-| `SELL_CONSUMABLE` | **Never selected** (no score); consumable slot pressure is not implemented. |
+| `SELL_CONSUMABLE` | Scored only in `SHOP` when the consumable slots are full and a concretely better, affordable consumable is visible: the lowest-worth **slot-releasing** held Tarot is sacrificed (a `negative` or unclassifiable edition is never sold — it frees no slot). A held harmful or unusable consumable is always sold (safety floor). No score in every other phase. |
 | `SELECT_BOOSTER_ITEM` | Preferred pack pick; known kind weighted. |
 | `SKIP_BOOSTER` | Positive but well below picking; also the only option when nothing is usable. |
 | `SELECT_TARGETS` | Highlight step in `CONSUMABLE_SELECTION`, chosen only when no committing `USE_CONSUMABLE` is legal. |
@@ -690,11 +703,11 @@ re-highlighting forever; `SELECT_TARGETS` is only chosen when no committing use
 is offered. A `USE_CONSUMABLE` whose visible target count is below `min_targets`
 (or whose bounds are not visible) scores `nil` and is never fabricated.
 
-**Slot-pressure sale (SHOP-only).** Outside `SHOP`, `SELL_JOKER` and
-`SELL_CONSUMABLE` are assigned no score in every phase, so the AI never sells
-while waiting on a PvP opponent or anywhere else (it was previously scored, which
-let the AI dump every joker while waiting with no hands left). Inside `SHOP`, a
-`SELL_JOKER` scores only when **all** of the following hold on visible fields:
+**Slot-pressure sale (SHOP-only).** Outside `SHOP`, neither `SELL_JOKER` nor
+`SELL_CONSUMABLE` is scored, so the AI never sells while waiting on
+a PvP opponent or in another non-shop phase (it was previously scored, which let the AI dump
+every joker while waiting with no hands left). Inside `SHOP`, a `SELL_JOKER`
+scores only when **all** of the following hold on visible fields:
 
 - the visible joker board is full (`#self.jokers >= match.joker_slots`);
 - the sold candidate is a visible, non-debuffed, **un-editioned** owned copy of a
@@ -716,7 +729,18 @@ further sale can score in the following frame: there is no dump-all or
 sell/reorder loop. The sale deliberately outranks `LEAVE_SHOP`, `REROLL` and a
 minor card purchase, and stays below booster/voucher/joker purchases, so it
 resolves a genuine slot bottle-neck without pre-empting a real purchase.
-`SELL_CONSUMABLE` is never scored: consumable slot pressure is not implemented.
+
+`SELL_CONSUMABLE` is scored only in `SHOP`, and only in two cases. A held
+harmful or unusable consumable is sold outright (the safety floor). Otherwise a
+slot is freed only when the shop offers a concretely better, affordable
+consumable that needs it, and then only for the lowest-worth held Tarot that
+actually releases a slot — an un-editioned or recognized
+`foil`/`holo`/`polychrome` copy, never a `negative` or unclassifiable edition
+(a Negative's removal also lowers the area limit and frees nothing; an unknown
+edition's slot effect cannot be inferred). The consumable slot sale is refused
+when a cheaper same-or-worse-worth offer could overtake the
+upgrade from hidden proceeds, and selling one card drops the row below full, so
+no further sale can chain in the following frame.
 
 **Joker reorder (monotonic).** The baseline recognizes a small, conservative set
 of vanilla jokers by their visible `center` key: additive-`+Mult` jokers (should
@@ -748,14 +772,18 @@ selected.
   Blueprint/Copycat positioning) is left on the table. A richer ranking was
   deliberately not invented: the baseline does not guess a joker tier list or
   rearrange synergies it cannot see.
-- **Selling is intentionally basic.** The only sale the baseline can justify is a
-  SHOP slot-pressure upgrade: full joker board, same visible center, un-editioned
+- **Selling is intentionally basic.** `SELL_JOKER` is justified only by a SHOP
+  slot-pressure upgrade: full joker board, same visible center, un-editioned
   owned copy, recognized non-negative edition on offer, and already affordable
-  without the sale. It never sells to raise money, never sells consumables, and
-  never picks a joker to give up by value — so it cannot free a slot for an
-  arbitrary stronger-but-different joker (that needs a strategic replacement
-  ranking the visible observation does not provide). This is a conservative
-  baseline, not a strength claim.
+  without the sale. `SELL_CONSUMABLE` is justified only by a SHOP full-slot
+  useful upgrade (the lowest-worth slot-releasing held Tarot for a concretely
+  better, affordable consumable; a Negative or unclassifiable edition frees no
+  slot and is never sold for one) plus the safety-floor sale of a harmful or
+  unusable held consumable. It never sells to raise money and never picks a joker
+  to give up by value — so it cannot free a slot for an arbitrary
+  stronger-but-different joker (that needs a strategic replacement ranking the
+  visible observation does not provide). This is a conservative baseline, not a
+  strength claim.
 - **Buy ranking is intentionally shallow.** Purchases differ only by item kind,
   a fixed bonus for a recognized non-negative edition (or the negative bonus) and
   the reserve/interest economy term. There is no per-joker utility model, so

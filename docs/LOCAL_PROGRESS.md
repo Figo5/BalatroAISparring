@@ -13,28 +13,35 @@
 
 ## Current work
 
-Current implementation checkpoint: `eb39c62` (pushed). Claude's actual High
-review of `7f2aced` found no Critical/High, two Medium and four Low findings;
-the verbatim review is `CLAUDE_LOCAL_FINAL_REVIEW_7F2.md`. DeepSeek completed
-the fixes, including the additional independently reproduced price/interest
-churn case and tracked, portable release tooling and fault regressions.
-Both coder exports contain only `opencode-go/deepseek-v4.1-flash`, High.
+Claude Opus 5.5 High accepted source `9c31d2f` with no Critical/High/Medium
+findings. Its complete review is `CLAUDE_LOCAL_SOURCE_ACCEPTANCE_9C31.md`.
+Before native certification, Astra independently found an additional held-
+Negative consumable case: selling it removes its extra capacity and frees no
+slot. The required DeepSeek High coder fixed the useful-slot sale guard and
+lowest-worth comparison, with permanent regular/Negative, unknown-edition,
+safety-floor and real-adapter settled-capacity regressions. Existing purchase
+ranking, reserves, observation fields and fairness boundaries are unchanged.
 
-Fresh Astra verification passed **62/62 supported entrypoints**, with all 312
-recorded files unchanged through execution. The immutable H1 sweep passed
-3,600 decisions on both runtimes, identical actions and no budget failures;
-peak 1,263,000 instructions under the unchanged 2M limit. Largest policy
-source is 56,392 bytes, 952 below the unchanged repository guard.
-The fresh-checkout control passed 15 native-runner and 19 upgrade cases without
-ignored implementation files; the separate real-adapter price grid passed
-360 cases per runtime. Raw evidence and exact hashes are recorded in
-`LOCAL_REGRESSION_VERIFICATION.md` and `LOCAL_H1_VERIFICATION.md`.
+The new regressions fail on the pre-fix source on both runtimes. DeepSeek's
+post-fix policy suite passes 195/195 per runtime (208 unique / 407 executions);
+engine remains 176/176 per runtime. Astra independently verifies all 12
+Negative traces/runtime, 60 Psychic/shop cases/runtime and 360 nearby-price
+cases/runtime, with identical Lua 5.1/LuaJIT results and unchanged source
+hashes. The new rendered policy is at most 56,681 bytes: 663 bytes below the
+unchanged repository guard, 8,855 below the hard cap. Documentation now matches
+the SHOP-only sale behavior and accurately separates historical size figures.
 
-Final Claude Opus 5.5 High source re-review is next. No API error is a verdict.
-The current build is not yet natively certified or installed; the old live
-27-file build remains unchanged. After current installation/smoke, preserve
-its runtime source generation and move later development to a separate
-worktree so playtest workers keep reading the installed generation.
+Current task: freeze this coherent fix, rerun the full supported suite and
+immutable H1 sweep on the new bytes, record current evidence, then obtain
+Claude's focused re-review before the seven native phases. Prior 62/62 suite
+and H1 evidence remain preserved and do not cover the new policy bytes.
+
+No new native certification, package, installation or actual UI smoke has
+been performed. The live 27-file `9f7a8e1` package and unrelated main staged
+diff remain unchanged. After certification/install/smoke, preserve the
+installed source generation and move future development to a separate
+worktree so playtest workers continue reading stable accepted source. The
+separately accepted match-history candidate remains unintegrated until then.
 
 ## Remaining sequence
 
@@ -230,3 +237,34 @@ Evidence: `work/local-ownership/deepseek-interest-churn-fixed.json`,
 `astra-review-residuals-final-fixes.json`, `astra-source-binding-fixtures-final-fixes.json`
 and `deepseek-claude-findings-fix-report.md`. No native certification, install,
 upgrade, save or Mods mutation was performed.
+
+## Negative-consumable slot fix (fixture-only, native acceptance pending)
+
+Astra independently reproduced one unhandled shop case after the `9c31d2f`
+source acceptance and before native certification. With a full Death + Strength
++ Negative Sun row (base 2, effective 3), $36, and Star $3 and Saturn $3, the
+pre-fix policy sold the Negative Sun first — a sale with no slot benefit — on
+both runtimes. The fix is `AISparring/ai/baseline_policy.lua` only: a `negative`
+owned consumable (or any edition the observation cannot classify) is never sold
+as a slot release, and the lowest-worth scan compares only slot-releasing
+candidates, so a lower-worth Negative cannot block the regular card. Negative
+purchases and the harmful/unusable safety floor are unchanged, and no observation
+fields, hidden information or global buy priorities changed.
+
+Permanent regressions: `tests/policy/test_consumable_slots.lua` (15 cases) and
+`tests/policy/test_shop_churn.lua` (14 cases through the real adapter → reader →
+policy path, including both offer orders, LEAVE_SHOP-first, the regular/unknown
+edition cases, and a settled limit recompute of 3 → 2 after the Negative is
+removed). Pre-fix control: 12 failing cases (6 new tests × 2 runtimes); post-fix
+both suites pass on both runtimes. `run_policy.py` is now 208 unique / 407
+executions (195/195 per runtime, up from 186/186); `run_engine.py` is unchanged
+at 192 unique / 368 executions (176/176 per runtime). Largest rendered policy is
+56,681 bytes (663 below the unchanged 57,344 guard and well under the 65,536 hard
+cap). The corrected probe
+(`astra_negative_slot_probe.py --label deepseek-fixed-after`) is cross-runtime
+identical and shows only SELL Strength, keep the Negative, BUY Saturn across
+both orders, LEAVE_SHOP-first and all three strong tiers. Evidence:
+`work/local-ownership/deepseek-negative-slot-fix-report.md`,
+`astra-negative-slot-deepseek-fixed-after.json` and the pre-fix run log. No
+native launch, install, certification, upgrade, save or Mods mutation was
+performed; LV-12 in `LOCAL_VALIDATION_QUEUE.md` is queued for the live test.

@@ -11,6 +11,17 @@ return function(ctx)
 
 	-- A full-slot SHOP frame. No BUY_ITEM certificate is invented: while the
 	-- slots are full the adapter itself offers none for a consumable.
+	-- A held consumable is either a bare center string or a table carrying a
+	-- visible edition; the adapter exports the same `edition` field for owned
+	-- consumables (the Negative's slot-providing card_limit = 1 is not exported,
+	-- only the edition is, per the observation allowlist).
+	local function held_record(spec)
+		if type(spec) == "table" then
+			return { kind = "consumable", center = spec.center, edition = spec.edition, face_down = false }
+		end
+		return { kind = "consumable", center = spec, face_down = false }
+	end
+
 	local function slots_frame(held, items, money, slots)
 		local f = Support.shop_frame()
 		f.match.consumable_slots = slots or 2
@@ -18,7 +29,7 @@ return function(ctx)
 		f.self.consumables = {}
 		local certs = {}
 		for i = 1, #held do
-			f.self.consumables[i] = { kind = "consumable", center = held[i], face_down = false }
+			f.self.consumables[i] = held_record(held[i])
 			certs[#certs + 1] = { type = "SELL_CONSUMABLE", certified = true, consumable_ref = "consumable:" .. i }
 		end
 		f.shop.items = items or {}
@@ -125,6 +136,94 @@ return function(ctx)
 			ctx.eq(dead.type, "SELL_CONSUMABLE", d .. " magician")
 			local hanged = decide(d, slots_frame({ "c_hanged_man" }, {}))
 			ctx.eq(hanged.type, "SELL_CONSUMABLE", d .. " hanged man")
+		end
+	end)
+
+	-- A Negative Tarot owns card_limit = 1, so its slot disappearance cancels
+	-- its removal: selling it frees nothing. The policy must sacrifice the
+	-- regular Tarot instead and keep the Negative (Astra negative-slot finding).
+	test("an_owned_negative_is_not_sold_to_free_a_slot", function()
+		for _, d in ipairs(STRONG) do
+			local action = decide(d, slots_frame(
+				{ "c_death", "c_strength", { center = "c_sun", edition = "negative" } },
+				{ consumable("c_star", 3), consumable("c_saturn", 3) }, 36, 3))
+			ctx.eq(action.type, "SELL_CONSUMABLE", d .. " sells")
+			ctx.eq(action.consumable_ref, "consumable:2", d .. " the regular Strength, not the Negative")
+		end
+	end)
+
+	test("an_owned_negative_is_not_sold_regardless_of_offer_order", function()
+		local orders = {
+			{ consumable("c_star", 3), consumable("c_saturn", 3) },
+			{ consumable("c_saturn", 3), consumable("c_star", 3) },
+		}
+		for _, d in ipairs(STRONG) do
+			for i = 1, #orders do
+				local action = decide(d, slots_frame(
+					{ "c_death", "c_strength", { center = "c_sun", edition = "negative" } }, orders[i], 36, 3))
+				ctx.eq(action.type, "SELL_CONSUMABLE", d .. " order" .. i .. " sells")
+				ctx.eq(action.consumable_ref, "consumable:2", d .. " order" .. i .. " regular")
+			end
+		end
+	end)
+
+	-- The Negative is the only lower-worth card, but it is not slot-releasing,
+	-- so it must not block the regular candidate the real upgrade needs.
+	test("a_lower_worth_negative_does_not_block_the_regular_candidate", function()
+		for _, d in ipairs(STRONG) do
+			local action = decide(d, slots_frame(
+				{ "c_death", { center = "c_sun", edition = "negative" } },
+				{ consumable("c_saturn", 3) }, 36, 2))
+			ctx.eq(action.type, "SELL_CONSUMABLE", d .. " sells the regular Death")
+			ctx.eq(action.consumable_ref, "consumable:1", d .. " Death")
+		end
+	end)
+
+	test("with_no_regular_upgrade_the_negative_is_kept", function()
+		for _, d in ipairs(STRONG) do
+			-- Star (worth 1) is no upgrade over anything held, so nothing is sold.
+			local action = decide(d, slots_frame(
+				{ "c_death", "c_strength", { center = "c_sun", edition = "negative" } },
+				{ consumable("c_star", 3) }, 36, 3))
+			ctx.eq(action.type, "LEAVE_SHOP", d .. " no useful upgrade")
+		end
+	end)
+
+	test("a_regular_and_negative_pair_sells_the_regular_copy", function()
+		-- Same visible center, a normal full row: base 1 + the Negative's
+		-- card_limit 1 = a settled capacity of 2 holding 2 cards. Only the
+		-- un-editioned copy releases a slot, so it is the one sold.
+		for _, d in ipairs(STRONG) do
+			local action = decide(d, slots_frame(
+				{ { center = "c_sun", edition = "negative" }, "c_sun" },
+				{ consumable("c_saturn", 3) }, 36, 2))
+			ctx.eq(action.type, "SELL_CONSUMABLE", d .. " sells")
+			ctx.eq(action.consumable_ref, "consumable:2", d .. " the regular copy")
+		end
+	end)
+
+	test("an_unclassifiable_edition_is_never_sold_as_a_slot_release", function()
+		for _, d in ipairs(STRONG) do
+			-- Alone, an unknown edition cannot be proven slot-releasing: keep it.
+			local alone = decide(d, slots_frame(
+				{ { center = "c_sun", edition = "modded_alpha" } },
+				{ consumable("c_saturn", 3) }, 36, 1))
+			ctx.eq(alone.type, "LEAVE_SHOP", d .. " conservative")
+			-- A regular candidate beside it may still free the slot.
+			local with_regular = decide(d, slots_frame(
+				{ "c_death", { center = "c_sun", edition = "modded_alpha" } },
+				{ consumable("c_saturn", 3) }, 36, 2))
+			ctx.eq(with_regular.type, "SELL_CONSUMABLE", d .. " regular frees the slot")
+			ctx.eq(with_regular.consumable_ref, "consumable:1", d .. " Death")
+		end
+	end)
+
+	test("safety_floor_sales_survive_a_negative_edition", function()
+		for _, d in ipairs(Support.DIFFICULTIES) do
+			local harmful = decide(d, slots_frame({ { center = "c_ectoplasm", edition = "negative" } }, {}, 30, 2))
+			ctx.eq(harmful.type, "SELL_CONSUMABLE", d .. " negative harmful Spectral")
+			local unusable = decide(d, slots_frame({ { center = "c_magician", edition = "negative" } }, {}, 30, 2))
+			ctx.eq(unusable.type, "SELL_CONSUMABLE", d .. " negative unusable Tarot")
 		end
 	end)
 end

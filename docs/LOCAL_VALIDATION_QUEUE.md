@@ -427,3 +427,32 @@ needs the full re-certification and a companion reinstall, not
   game; record the center and the result code. The executor's post-highlight
   `can_use_consumeable` re-check is the authority, and any refusal clears the
   highlight, so the worst case is a missed use, not a stuck UI.
+
+## LV-12 Negative consumable is never sold to free a slot
+
+- **Commit:** the Negative-consumable slot fix (Astra negative-slot finding);
+  policy-only, so it needs re-certification and a reinstall.
+- **Change:** a full consumable row that includes a `negative` owned card
+  (`ability.card_limit = 1`) no longer sells that Negative to make room: its
+  removal also lowers the area limit (current Steamodded `handle_card_limit`),
+  so it frees no slot. The policy now sells only a card that actually releases a
+  slot (an un-editioned or recognized `foil`/`holo`/`polychrome` copy) and
+  compares only those candidates, so a lower-worth Negative never blocks the
+  regular card a real upgrade needs. An edition the observation cannot classify
+  is never sold as a slot release. Negative purchases and the harmful/unusable
+  safety-floor sales are unchanged.
+- **Local test:** reach a shop with every consumable slot full and a Negative
+  consumable held (a Negative Tarot from an Ouija or a debug seed), with both a
+  weaker and a stronger consumable on offer (for example Star $3 and Saturn $3).
+- **Expected:**
+  - The AI sells a regular held consumable, never the Negative, then buys the
+    stronger offer; the Negative stays in the row.
+  - The consumed count stays within what the shop shows after the sale, and no
+    second sale follows the purchase (no sell → buy → sell cycle).
+  - Both shop orders behave the same; the chosen actions are accepted.
+- **Evidence to capture:** `decisions.jsonl` rows for `SELL_CONSUMABLE` and
+  `BUY_ITEM` (refs and the held-card editions) with the on-screen slot count,
+  plus `results.jsonl` accepted flags.
+- **Risk if it fails:** choice quality and a lost Negative, not a stall; every
+  action stays certified. If the game refuses the `SELL_CONSUMABLE`, record the
+  card's edition and the result code.
