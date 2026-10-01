@@ -199,6 +199,7 @@ CODE_OPEN_RECORD_BLOCKED = "practice_session_open_unmeasured"
 CODE_CLOSURE_PENDING = "practice_host_closure_pending"
 CODE_SESSION_WORKSPACE_EXISTS = "practice_session_workspace_exists"
 CODE_HUMAN_ACTIVE = "practice_human_window_active"
+CODE_SUPERVISOR_ACTIVE = "practice_supervisor_active"
 CODE_CONFIG_DIGEST = "practice_major_league_config_unproven"
 CODE_MEASUREMENT_API_MISSING = "practice_measurement_api_missing"
 CODE_RUNTIME_PREFLIGHT = "practice_runtime_preflight_failed"
@@ -1983,6 +1984,27 @@ class MatchTicket:
         }
 
 
+def _worker_unfinished(thread) -> bool:
+    """True while a supervisor worker thread is assigned and has not exited.
+
+    A thread that has been assigned but not yet started (``ident is None``) is
+    unfinished: its ``run()`` has not begun, so its supervisor must never be
+    cleaned up or have a pending closure retried concurrently. ``None`` means
+    there is no worker (a finished or synthetic ticket) and never blocks.
+    ``is_alive()`` is checked only after start, so the bookkeeping
+    ``_run_ticket`` does after ``run()`` returns completes before the thread
+    reports not-alive. An unqueryable handle fails closed (unfinished).
+    """
+    if thread is None:
+        return False
+    try:
+        if getattr(thread, "ident", None) is None:
+            return True
+        return bool(thread.is_alive())
+    except Exception:  # noqa: BLE001
+        return True
+
+
 class MatchSupervisor:
     """Owns one closed-game practice session: live-exit wait, gates, launch, teardown."""
 
@@ -3633,8 +3655,7 @@ class HostDaemon:
             ticket = self._ticket
         if ticket is None or ticket.supervisor is None:
             return True
-        thread = ticket.thread
-        if thread is not None and thread.is_alive():
+        if _worker_unfinished(ticket.thread):
             return True
         fn = getattr(ticket.supervisor, "retry_pending_closure", None)
         if not callable(fn):
@@ -3658,11 +3679,15 @@ class HostDaemon:
         return runtime_preflight(self.config, checker=self._runtime_checker)
 
     def stop(self, *, force: bool = False) -> dict:
-        """Shut the daemon down. Refuses while a staged human window is retained.
+        """Shut the daemon down. Refuses while a match worker still owns its run.
 
         The staged human process is owned through a kill-on-close Job Object, so
         exiting the daemon while it is still open would kill the user's window.
         A deferred stop leaves the daemon and the loopback socket alive (H4).
+        A non-forced stop also defers while a match supervisor still owns its
+        lifecycle: its worker may be assigned-but-not-yet-started or still
+        running, so cleanup must never race ``run()`` and its ticket, server and
+        Job must not be discarded while it is active. The serve loop retries.
         """
         if not force:
             # H-A-1-R: never reach cleanup() while a finished supervisor still holds
@@ -3671,15 +3696,24 @@ class HostDaemon:
                 return {"ok": False, "code": CODE_CLOSURE_PENDING, "stopped": False}
             if self.human_active():
                 return {"ok": False, "code": CODE_HUMAN_ACTIVE, "stopped": False}
+        # H-A-1-R3: the worker check and the ticket removal are one locked step, so
+        # a worker assigned by a concurrent _op_start can never slip past the guard:
+        # either this sees and defers on it, or the start's own locked re-check sees
+        # the retired daemon (server and ticket cleared) and never spawns a run.
         with self._lock:
             ticket = self._ticket
+            if not force and ticket is not None and ticket.supervisor is not None and _worker_unfinished(
+                ticket.thread
+            ):
+                return {"ok": False, "code": CODE_SUPERVISOR_ACTIVE, "stopped": False}
+            server = self._server
+            self._server = None
             self._ticket = None
         if ticket is not None and ticket.supervisor is not None:
             try:
                 ticket.supervisor.cleanup()
             except Exception:  # noqa: BLE001
                 pass
-        server = self._server
         if server is not None:
             try:
                 server.shutdown()

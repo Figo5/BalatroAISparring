@@ -4246,6 +4246,177 @@ def test_concurrent_pending_closure_retry_persists_once():
         assert len(receipts) == 1 and receipts[0]["verdict"] == "failed"
 
 
+class _BlockingThreadSupervisor:
+    """Harmless supervisor whose run() blocks on a real event until released.
+
+    No process, socket or file is touched. It proves a non-forced daemon stop
+    defers while the worker owns its lifecycle and succeeds once it has exited.
+    """
+
+    def __init__(self):
+        self.phase = "waiting_live_exit"
+        self.error = None
+        self.cleaned = 0
+        self.human_retained = False
+        self.session = None
+        self.session_id = "sess-blocking"
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def run(self):
+        self.started.set()
+        self.release.wait(5.0)
+        self.finished.set()
+        self.phase = "completed"
+        return {"ok": True, "code": practice_host.CODE_OK}
+
+    def human_active(self):
+        return False
+
+    def cleanup(self):
+        self.cleaned += 1
+
+
+def test_daemon_stop_defers_for_an_active_supervisor_worker():
+    """H-A-1-R3: a non-forced stop must not clean up or discard a worker that still
+    owns its lifecycle, and must succeed once that worker has exited."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        created = []
+
+        def factory(cfg, request):
+            created.append(_BlockingThreadSupervisor())
+            return created[-1]
+
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            start_gate=lambda: {"ok": True, "code": practice_host.CODE_OK},
+            supervisor_factory=factory,
+        )
+        daemon.start()
+        try:
+            accepted = daemon._op_start(make_request())
+            assert accepted["ok"] is True and accepted["code"] == practice_host.CODE_ACCEPTED, accepted
+            supervisor = created[0]
+            assert supervisor.started.wait(5.0), "worker never started"
+
+            stopped = daemon.stop()
+            assert stopped["stopped"] is False, stopped
+            assert stopped["code"] == practice_host.CODE_SUPERVISOR_ACTIVE, stopped
+            assert supervisor.cleaned == 0
+            assert daemon._server is not None
+            with daemon._lock:
+                assert daemon._ticket is not None
+            assert not supervisor.finished.is_set()
+
+            supervisor.release.set()
+            assert supervisor.finished.wait(5.0), "worker never exited"
+
+            deadline = time.time() + 5.0
+            while True:
+                stopped = daemon.stop()
+                if stopped.get("stopped") or time.time() > deadline:
+                    break
+                time.sleep(0.01)
+            assert stopped["stopped"] is True, stopped
+            assert supervisor.cleaned == 1
+            with daemon._lock:
+                assert daemon._ticket is None
+        finally:
+            if created:
+                created[0].release.set()
+            with daemon._lock:
+                daemon._ticket = None
+            daemon.stop(force=True)
+
+
+def test_daemon_stop_defers_for_an_assigned_but_unstarted_worker():
+    """H-A-1-R3: a worker thread that is assigned but not yet started still owns
+    its lifecycle, so a non-forced stop defers instead of cleaning it up."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        try:
+            supervisor = FakeSupervisor()
+            worker = threading.Thread(target=lambda: None, daemon=True)
+            with daemon._lock:
+                daemon._ticket = practice_host.MatchTicket(
+                    ticket="ticket-unstarted", request=make_request(), supervisor=supervisor, thread=worker
+                )
+            assert worker.ident is None
+            stopped = daemon.stop()
+            assert stopped["stopped"] is False, stopped
+            assert stopped["code"] == practice_host.CODE_SUPERVISOR_ACTIVE, stopped
+            assert supervisor.cleaned == 0
+            assert daemon._server is not None
+            with daemon._lock:
+                assert daemon._ticket is not None
+
+            worker.start()
+            worker.join(5.0)
+            stopped = daemon.stop()
+            assert stopped["stopped"] is True, stopped
+            assert supervisor.cleaned == 1
+        finally:
+            with daemon._lock:
+                daemon._ticket = None
+            daemon.stop(force=True)
+
+
+def test_daemon_stop_defers_for_retained_human_with_active_worker():
+    """H-A-1-R3: the retained-human protection is unchanged and is reported ahead
+    of the active-worker deferral."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        event = threading.Event()
+        worker = threading.Thread(target=event.wait, args=(5.0,), daemon=True)
+        worker.start()
+        supervisor = FakeSupervisor(human_retained=True, session=FakeSession(roles=("human",)))
+        with daemon._lock:
+            daemon._ticket = practice_host.MatchTicket(
+                ticket="ticket-human", request=make_request(), supervisor=supervisor, thread=worker
+            )
+        try:
+            stopped = daemon.stop()
+            assert stopped["stopped"] is False, stopped
+            assert stopped["code"] == practice_host.CODE_HUMAN_ACTIVE, stopped
+            assert supervisor.cleaned == 0
+            assert daemon._server is not None
+        finally:
+            event.set()
+            worker.join(5.0)
+            with daemon._lock:
+                daemon._ticket = None
+            daemon.stop(force=True)
+
+
+def test_daemon_forced_stop_still_retires_an_active_worker():
+    """H-A-1-R3: the explicit forced stop is unchanged and bypasses the deferral."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        supervisor = FakeSupervisor()
+        worker = threading.Thread(target=lambda: None, daemon=True)
+        with daemon._lock:
+            daemon._ticket = practice_host.MatchTicket(
+                ticket="ticket-force", request=make_request(), supervisor=supervisor, thread=worker
+            )
+        stopped = daemon.stop(force=True)
+        assert stopped["stopped"] is True, stopped
+        assert supervisor.cleaned == 1
+        assert daemon._server is None
+        with daemon._lock:
+            assert daemon._ticket is None
+
+
 def _run_all() -> int:
     tests = sorted(
         (name, value)

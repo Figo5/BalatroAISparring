@@ -422,7 +422,14 @@ A new `start` ticket is refused while a retained human window is still running
 (`practice_human_window_active`); a new ticket never terminates a retained human
 window. The daemon's `stop()` **defers** while that window is active (the staged
 human is owned through a kill-on-close Job Object, so exiting the daemon would
-kill it); the CLI keeps the daemon alive until the human exits.
+kill it); the CLI keeps the daemon alive until the human exits. A non-forced
+`stop()` **also defers** while a match supervisor still owns its lifecycle - its
+worker may be assigned-but-not-yet-started or still running - refusing
+`practice_supervisor_active` (`stopped: false`) without cleaning up the
+supervisor, discarding its ticket or closing the loopback server/Job. The worker
+check and the ticket removal share the daemon lock, so a worker assigned by a
+concurrent `start` can never slip past the guard; a later `stop()` after the
+worker exits succeeds. The explicit `stop(force=True)` is unchanged.
 
 ### 8.1 A prior open/unmeasured record blocks the next session
 
@@ -473,7 +480,10 @@ concurrent authenticated requests persist the closure exactly once (never duplic
 receipts). A non-forced daemon
 `stop()` also retries first and refuses (`practice_host_closure_pending`,
 `stopped: false`) while a closure is still pending, so it never reaches `cleanup()`
-and drops the handles that are the only proof of exit (H-A-1-R).
+and drops the handles that are the only proof of exit (H-A-1-R). Its non-forced
+order is: pending-closure retry, then retained human
+(`practice_human_window_active`), then an active match-supervisor worker
+(`practice_supervisor_active`).
 
 ## 9. Session report and per-session live diff
 
@@ -632,7 +642,10 @@ Balatro and is not game/review acceptance.
   `acknowledge` and `start` ops driving the pending-closure retry after both a stuck
   owned handle and a one-shot persistence failure (and never retrying a still-running
   supervisor thread), a non-forced `stop()` refusing with
-  `practice_host_closure_pending`, live-game-appears void + lockout, a
+  `practice_host_closure_pending` and deferring (`practice_supervisor_active`) for an
+  active or assigned-but-unstarted supervisor worker while still retiring once it
+  exits (plus the retained-human-with-worker and forced-stop variants),
+  live-game-appears void + lockout, a
   real-certificate live byte diff (record `failed` + byte-diff lockout, no pending
   closure, and a public `stop()` that actually stops), `acknowledge`/`start`
   refusing with `practice_host_closure_pending` while a retry still cannot close
