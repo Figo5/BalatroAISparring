@@ -40,3 +40,32 @@ An immutable source snapshot passed policy (176 unique cases, 343 executions), e
 
 Reviewer availability preflight: Claude Code returned API 429/session limit and reported a 9:40 p.m. America/New_York reset on September 30. This is no review verdict. Repository work and verification continue; native certification/install require the fresh acceptance review after reset. Evidence: work/local-ownership/claude-availability.json.
 
+
+## September 30 infrastructure verification checkpoint
+
+Acceptance documentation now reflects the actual full human match and keeps the
+installed `9f7a8e1` build separate from the feature branch. Documentation checkpoint:
+`7d81a14` (no companion byte changes in that commit).
+
+Independent Windows infrastructure run: all 15 entrypoints passed. Installer
+48/48, certificate 65/65, launcher 64/64, staging 52/52, server preparation 8/8,
+measurement lifecycle 11/11 and pinned P2 observer 6/6. Native Job identity,
+IPv4/IPv6 listener ownership, LuaJIT PID/creation-time identity, FIN/SILENT/dead-port
+proofs, actual host process runner and pinned Node server runner all passed.
+Evidence: `work/local-ownership/infrastructure/summary.json` and per-suite logs.
+No Balatro was launched or live content changed by these tests. Fresh Balatro
+certification remains pending final source verification and Claude acceptance.
+
+Prepared read-only-default, one-shot upgrade orchestration in
+`work/local-ownership/upgrade_reviewed_companion.py`; not executed. It requires
+an explicit reviewed source commit and acceptance record, the fresh valid
+certificate, verified old installed hashes, two full fresh backups, a verified
+archive, installer dry run/execute and complete unchanged-live checks outside
+`Mods/AISparring`. Failed first installation restores only the unchanged archive
+into an absent exact target with every game closed. It never restores saves.
+Both this helper and the consolidated native runner must be included in the final
+Claude integration review before execution.
+
+A separate DeepSeek High read-only audit is preparing the next small Phase H
+reliability/diagnostics batch. It is scoped to a scratch report and cannot replace
+Claude review. The primary DeepSeek worker is still finalizing targeted Tarots.
