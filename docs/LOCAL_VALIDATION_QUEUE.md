@@ -378,7 +378,7 @@ needs the full re-certification and a companion reinstall, not
   - If pack center names differ from `p_buffoon*`/`p_celestial*`/…, the pack
     bonus is 0 and behaviour falls back to the previous flat score.
 
-## LV-11 Targeted Tarots on hand cards (`USE_CONSUMABLE_ON_HAND`, v1 WIP)
+## LV-11 Targeted Tarots on hand cards (`USE_CONSUMABLE_ON_HAND`, native validation pending)
 
 - **Commits:** `0f48623` plus the Phase A/B fixes (docs/CLOUD_PROGRESS.md).
 - **Change:** Competitive and above use the ten allowlisted Tarots (Strength,
@@ -390,17 +390,27 @@ needs the full re-certification and a companion reinstall, not
 - **Local test:** play Competitive/Major League/Expert practice matches until
   the AI holds and uses an allowlisted Tarot. A debug seed that starts with
   Strength or Death in hand helps. Try to see:
-  1. one use of each effect kind (rank-up, Death copy, suit change, enhancement);
+  1. one use of **each of the ten centers**: Strength, Death, Lovers, Chariot,
+     Justice, Devil, Star, Moon, Sun and World;
   2. a use on a PvP blind;
   3. a Cerulean Bell (forced-selection) blind with a targeted Tarot held: the AI
      must not use it while a card is forced.
 - **Expected:**
   - The action reaches the game and is accepted, with exactly the highlighted
     cards the log names (compare the on-screen highlight with the
-    `use_consumable_on_hand` `card_refs` in the AI log and `decisions.jsonl`).
+    `use_consumable_on_hand` event's `detail="src=consumable:n refs=hand:a,...
+    highlight=cleared|kept"` and the Python decision's `action.card_refs`).
+    The runtime event uses `action` for the Tarot center and `code` for the
+    executor outcome; it has no table-valued `card_refs` field or sequence id.
   - Death's copy source is the **right-hand** highlighted card.
+  - Strength increments the selected rank (Ace wraps to 2); Lovers/Chariot/
+    Justice/Devil apply Wild/Steel/Glass/Gold to the selected base card; Star/
+    Moon/Sun/World change the selected card to Diamonds/Clubs/Hearts/Spades.
   - No leftover highlight after a use or after a refused use, and a following
     `PLAY_CARDS` is unaffected.
+  - No following decision is dispatched before `STOP_USE`/animation settlement.
+    A broker-accepted result alone does not prove the visual effect or cleanup;
+    inspect the on-screen result and settled highlight too.
   - No use (and no `policy_no_action` loop) while a card is forced; no rejected
     decisions from a targeted use; `policy_budget_exceeded` never appears.
   - `decisions.jsonl` `action.tarot` names only allowlisted centers and

@@ -2,6 +2,13 @@
 
 Initial M2 design by Astra, before implementation. Read with INTEGRATION_PLAN.md, MILESTONE_2_PLAN.md and the source-evidence map. The goal is to prevent project-owned future policy/search code from observing hidden information or bypassing legal actions. Trusted extraction, schema code, broker, runtime-role assignment and future engine-validator implementations are part of the trusted computing base and require review. A malicious game mod, compromised interpreter, or malicious trusted extractor is outside this in-process boundary's guarantee. No sandbox claim follows from a schema or a Lua metatable alone.
 
+The initial-document absence/disabled statements below describe the M2 design
+checkpoint. The current playable implementation wires the restricted worker,
+role-authenticated capture, validating broker and legitimate executor described
+in `M2_EXECUTION_BOUNDARY.md`, `ENGINE_ADAPTER.md`, `DECISION_LOOP.md` and
+`RUNTIME_ISOLATION.md`. Current acceptance and remaining native gates are tracked
+in `PLAYABLE_ACCEPTANCE.md`; the threat requirements here remain authoritative.
+
 | Threat | Required mitigation and attack evidence |
 |---|---|
 | Direct global access | Restricted policy environment excludes G, MP, SMODS, Client, _G, package, require, io, os, love, NFS, debug, getfenv/setfenv, load/dofile and random APIs. Test direct and indirect access; integration modules are never policy imports. |
