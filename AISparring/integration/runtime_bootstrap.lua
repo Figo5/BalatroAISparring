@@ -919,6 +919,10 @@ function RuntimeBootstrap.factory(ports)
 			element_for = element_for,
 			clock = clock,
 			stall_timeout = stall_timeout,
+			-- L4: the same trusted logger the decision loop records to, so a
+			-- targeted Tarot use and its executor outcome / cleared highlight are
+			-- bounded, safe and sequence-correlated with the decision log.
+			logger = decision_logger(),
 		})
 		if executor == nil then
 			return nil, CODE.ACTIVATE_FAILED

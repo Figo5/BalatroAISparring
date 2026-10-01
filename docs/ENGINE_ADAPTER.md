@@ -528,8 +528,22 @@ acceptance:
   **when** the trusted `target_selection()` port names the active source and its
   bounds; without that port the phase is refused (`engine_no_decision_state`). The
   port itself (the launcher/UI side that observes an active highlight phase) is
-  still launcher work; until it is wired no targeted consumable is ever offered or
-  committed.
+  still launcher work.
+- **Targeted Tarots in the hand phase (`USE_CONSUMABLE_ON_HAND`, v1).** In
+  `PLAY_HAND`/`MULTIPLAYER_PVP`, a held, face-up, non-debuffed consumable whose
+  engine center is one of the ten allowlisted Tarots (`c_strength`, `c_death`,
+  `c_lovers`, `c_chariot`, `c_justice`, `c_devil`, `c_star`, `c_moon`, `c_sun`,
+  `c_world`) is certified with positional `hand:` refs: Death only as distinct
+  pairs (lower ordinal first), every other Tarot as singletons (Strength/suit on
+  any visible target the effect would change, enhancements on base cards only).
+  Bounded to 8 selections per source and 24 total, within the engine card's own
+  `min_highlighted`/`max_highlighted`. Targets are face-up, non-debuffed and
+  have a visible rank and suit (never Stone or masked). No use is offered while
+  a card is blind-forced (Cerulean Bell). Four of the 120 certificate slots are
+  reserved for reorders (`REORDER_RESERVE`), so the play/discard catalogue and
+  the Tarot bound are unchanged; the cap itself is unchanged. The executor
+  independently re-checks the same allowlist, visibility, bounds and shape
+  (docs/CLAUDE_BATCH3_REVIEW.md L3). `docs/HAND_TARGETS_DESIGN.md`.
 - **Content-specific consumable eligibility** is delegated to the read-only
   `Card:can_use_consumeable` predicate (which the adapter and executor both call),
   including Ankh's `check_use` full-slot case. Any effect a Tarot cannot apply for

@@ -2112,7 +2112,7 @@ class PracticeService:
             tick=job.sequence,
             phase=job.phase,
             hash=_canonical_hash(job.canonical) if job.canonical else _observation_hash(job.observation),
-            action=_action_summary(job.action),
+            action=_action_summary(job.action, job.observation),
             reason=code,
             latency=round(latency, 6) if isinstance(latency, (int, float)) else None,
             errors=None if ok or no_action else code,
@@ -2171,19 +2171,65 @@ def _observation_hash(observation) -> str:
         return ""
 
 
-def _action_summary(action) -> Optional[dict]:
+# Allowlisted hand-targeted Tarots only (docs/HAND_TARGETS_DESIGN.md v1). A
+# center outside this set is never written to the decision log.
+_HAND_TAROT_CENTERS = frozenset({
+    "c_strength", "c_death", "c_lovers", "c_chariot", "c_justice", "c_devil",
+    "c_star", "c_moon", "c_sun", "c_world",
+})
+
+
+def _tarot_center(observation, source_ref) -> Optional[str]:
+    """The allowlisted Tarot center for a hand-targeted use.
+
+    Derived only from the sanitized observation's own consumables, by the exact
+    ``source_ref`` the policy selected. Any other or missing center is omitted,
+    so a hidden or unexpected value can never be logged.
+    """
+    if not isinstance(source_ref, str) or not isinstance(observation, dict):
+        return None
+    self_view = observation.get("self")
+    if not isinstance(self_view, dict):
+        return None
+    consumables = self_view.get("consumables")
+    if not isinstance(consumables, list):
+        return None
+    for item in consumables:
+        if isinstance(item, dict) and item.get("id") == source_ref:
+            center = item.get("center")
+            if isinstance(center, str) and center in _HAND_TAROT_CENTERS:
+                return center
+            return None
+    return None
+
+
+def _action_summary(action, observation=None) -> Optional[dict]:
     if not isinstance(action, dict):
         return None
-    summary = {"type": _bounded_text(action.get("type"), 32)}
+    kind = _bounded_text(action.get("type"), 32)
+    summary = {"type": kind}
     refs = action.get("card_refs")
     if isinstance(refs, list):
         summary["cards"] = len(refs)
+        if kind == "USE_CONSUMABLE_ON_HAND":
+            # Exact positional hand refs, bounded and without any card value.
+            summary["card_refs"] = [
+                bounded for bounded in (_bounded_text(ref, 16) for ref in refs[:8]) if bounded is not None
+            ]
     targets = action.get("target_refs")
     if isinstance(targets, list):
         summary["targets"] = len(targets)
     order = action.get("order")
     if isinstance(order, list):
         summary["order"] = len(order)
+    if kind == "USE_CONSUMABLE_ON_HAND":
+        source_ref = action.get("source_ref")
+        bounded_source = _bounded_text(source_ref, 32)
+        if bounded_source is not None:
+            summary["source_ref"] = bounded_source
+        center = _tarot_center(observation, source_ref)
+        if center is not None:
+            summary["tarot"] = center
     return summary
 
 

@@ -1487,22 +1487,78 @@ def _lupa_available():
     return True
 
 
+def _lupa_runtimes():
+    """Every lupa runtime that is actually importable in this environment."""
+    found = []
+    for name in ("lupa.lua51", "lupa.luajit21"):
+        try:
+            importlib.import_module(name)
+        except Exception:  # noqa: BLE001
+            continue
+        found.append(name)
+    return found
+
+
 def test_baseline_source_provider_renders_all_difficulties():
-    if not _lupa_available():
+    # Both available runtimes are exercised, not just Lua 5.1 behind a gate that
+    # happens to require both: a missing LuaJIT must not silently skip it.
+    runtimes = _lupa_runtimes()
+    if not runtimes:
         return
     provider = ps.BaselineSourceProvider()
     # The rendered source is compacted, so match its signature tolerantly.
     signature = re.compile(r"function\s*\(\s*observation\s*,\s*actions\s*\)")
-    lua = importlib.import_module("lupa.lua51").LuaRuntime(unpack_returned_tuples=True)
-    for difficulty in ps.DIFFICULTIES:
-        source = provider.source(difficulty)
-        assert isinstance(source, str) and source
-        assert signature.search(source), difficulty
-        # The rendered chunk must actually load and evaluate to a callable
-        # decision function (a meaningful check, not just a substring).
-        decision = lua.execute(source)
-        assert decision is not None and callable(decision), difficulty
+    sources = {difficulty: provider.source(difficulty) for difficulty in ps.DIFFICULTIES}
+    for name in runtimes:
+        lua = importlib.import_module(name).LuaRuntime(unpack_returned_tuples=True)
+        for difficulty in ps.DIFFICULTIES:
+            source = sources[difficulty]
+            assert isinstance(source, str) and source, f"{name}:{difficulty}"
+            assert signature.search(source), f"{name}:{difficulty}"
+            # The rendered chunk must actually load and evaluate to a callable
+            # decision function (a meaningful check, not just a substring).
+            decision = lua.execute(source)
+            assert decision is not None and callable(decision), f"{name}:{difficulty}"
     assert provider.source("rookie") == provider.source("rookie")
+
+
+def test_action_summary_logs_allowlisted_tarot_center_and_positional_refs():
+    observation = {
+        "self": {
+            "consumables": [
+                {"id": "consumable:1", "center": "c_strength"},
+                {"id": "consumable:2", "center": "c_sun"},
+            ]
+        }
+    }
+    action = {
+        "type": "USE_CONSUMABLE_ON_HAND",
+        "source_ref": "consumable:2",
+        "card_refs": ["hand:3", "hand:1"],
+    }
+    summary = ps._action_summary(action, observation)
+    assert summary["type"] == "USE_CONSUMABLE_ON_HAND"
+    assert summary["tarot"] == "c_sun"
+    assert summary["source_ref"] == "consumable:2"
+    assert summary["card_refs"] == ["hand:3", "hand:1"]
+    assert summary["cards"] == 2
+    # Only public positional refs; never a card value.
+    assert "rank" not in summary and "suit" not in summary
+
+
+def test_action_summary_omits_unlisted_or_unknown_tarot_centers():
+    action = {"type": "USE_CONSUMABLE_ON_HAND", "source_ref": "consumable:1", "card_refs": ["hand:1"]}
+    for center in ("c_hanged_man", "c_mystery", None):
+        observation = {"self": {"consumables": [{"id": "consumable:1", "center": center}]}}
+        assert "tarot" not in ps._action_summary(action, observation), center
+    # A missing or malformed observation never invents a center.
+    assert "tarot" not in ps._action_summary(action, {"self": {}})
+    assert "tarot" not in ps._action_summary(action, None)
+    # A non-Tarot action keeps its previous bounded shape.
+    assert ps._action_summary({"type": "PLAY_CARDS", "card_refs": ["hand:1"]}) == {
+        "type": "PLAY_CARDS",
+        "cards": 1,
+    }
 
 
 def test_real_worker_legal_decision_integration():

@@ -1611,15 +1611,34 @@ local function build_hand_selection_refs(selection)
 	return refs
 end
 
-local function certificate_builder()
+-- L2 (docs/CLAUDE_BATCH3_REVIEW.md): the lowest-priority reorders must not be
+-- silently dropped when targeted Tarots plus the play/discard catalogue fill the
+-- certificate cap. A few slots are reserved for them: ordinary certificates stop
+-- at the cap minus the reserve, and only reorders may use the last slots. The
+-- 120 cap, the play/discard selection capacity and the Tarot bounds are all
+-- unchanged. The realistic worst case (12 cards, 8 Jokers, three held Tarots:
+-- 40 + 40 + 11 + 24 = 115 ordinary certificates) stays under the reduced cap, so
+-- no Tarot candidate is lost.
+local REORDER_RESERVE = 4
+
+local function certificate_builder(reserve)
 	local items = {}
-	local function add(item)
-		if #items >= LIMITS.certificates then
-			return
+	local limit = LIMITS.certificates
+	local ordinary_limit = limit - (reserve or 0)
+	local function append(item)
+		if #items >= limit then
+			return false
 		end
 		items[#items + 1] = item
+		return true
 	end
-	return { items = items, add = add }
+	local function add(item)
+		if #items >= ordinary_limit then
+			return false
+		end
+		return append(item)
+	end
+	return { items = items, add = add, add_reserved = append }
 end
 
 -- Engine ordinals (1-based) of blind-forced hand cards. A forced card cannot be
@@ -1900,7 +1919,8 @@ local function cert_reorders(builder, G, zone, area_key, limit)
 			return
 		end
 		seen[key] = true
-		builder.add({ type = "REORDER_" .. string.upper(zone == "joker" and "JOKERS" or "HAND"), certified = true, order = refs })
+		local add = builder.add_reserved or builder.add
+		add({ type = "REORDER_" .. string.upper(zone == "joker" and "JOKERS" or "HAND"), certified = true, order = refs })
 	end
 	if zone ~= "joker" and zone ~= "hand" then
 		return
@@ -2187,7 +2207,7 @@ local function build_certificates(G, MP, phase, context, hand_cards, target)
 	if context.blocked == true or context.timer_expired == true then
 		return { version = SCHEMA_VERSION, items = {} }
 	end
-	local builder = certificate_builder()
+	local builder = certificate_builder(REORDER_RESERVE)
 	if phase == "MATCH_COMPLETE" then
 		return { version = SCHEMA_VERSION, items = {} }
 	end

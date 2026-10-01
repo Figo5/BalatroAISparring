@@ -320,15 +320,38 @@ The same rule applies wherever the card could hurt or waste a slot:
   (`leave_shop + sell_harmful`, 30), which frees the slot for planets and
   tarots. Cards that pass the rule are kept.
 
-**Consumables that need hand targets** get the same treatment, because
-they can never be used live. Examples: Strength, Death, the suit and
-enhancement Tarots, Aura, Cryptid (`TARGETED`). The live runtime wires no
+**Consumables that need hand targets.** Competitive and above
+(`hand_tarots = true`) can use the ten allowlisted Tarots directly on hand
+cards through `USE_CONSUMABLE_ON_HAND` (docs/HAND_TARGETS_DESIGN.md): Strength,
+Death, the four enhancement Tarots (Lovers, Chariot, Justice, Devil) and the
+four suit Tarots (Star, Moon, Sun, World). For each certified use the effect is
+simulated on copies of the selected cards, and the use is chosen only when the
+best play estimate over the hand improves by a clear margin (Gold: when it
+costs nothing, for its held payout); otherwise the Tarot is held. Death is the
+pair rule, Strength/suits/enhancements are singletons and enhancements apply to
+base cards only. Work is metered (`TARGET_WORK`, 6000 units).
+
+The remaining targeted cards **cannot be used live**: Magician, Empress,
+Hierophant, Tower, Hanged Man, the Spectral seal Tarots, Aura and Cryptid
+(`TARGETED`, excluding the ten above). The live runtime wires no
 target-selection port, so `CONSUMABLE_SELECTION` never occurs there. Such a
-card is therefore never bought, and a held one is sold to free its slot. Pack
-picks are already gated by the engine's own `can_use` predicate. If the port
-is ever wired, `TARGETED` must be revisited: `test_source.lua` fails when
+card is never bought, and a held one is sold to free its slot. Pack picks are
+already gated by the engine's own `can_use` predicate. If the port is ever
+wired, `TARGETED` must be revisited: `test_source.lua` fails when
 `companion_host.lua` mentions `target_selection`. Arcana and Spectral packs
 are discounted (−10) for the same reason.
+
+A usable allowlisted Tarot is **not** sold just because the consumable slots
+are full: a slot is freed only when the shop offers a concretely better,
+affordable consumable that needs it, and then only the lowest-value held Tarot
+is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2). Rookie keeps the old
+behaviour (never buys, sells a held one).
+
+**The Psychic (`bl_psychic`, not disabled).** A play of fewer than five cards
+scores nothing and is never chosen (`MIN_CARDS` is enforced at the top of the
+decision and again at `play_score` entry, before the numeric estimate or the
+category fallback). When only undersized plays are offered the policy returns
+no action rather than a short play (docs/CLAUDE_BATCH3_REVIEW.md M1).
 
 Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
 first. At Competitive and above (`hold_hermit`), **The Hermit** (double

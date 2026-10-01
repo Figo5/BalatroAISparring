@@ -282,12 +282,13 @@ needs the full re-certification and a companion reinstall, not
   - Ankh or Hex with two or more Jokers;
   - Ectoplasm or Ouija, always.
 
-  It sells such a card when one is already held. It also never buys a
-  consumable that needs hand targets (Strength, Death, the suit Tarots, Aura,
-  …), and sells a held one. No target-selection port is wired live, so these
-  could never be used. Planets are used before other
-  consumables. The change is policy-only (`baseline_policy.lua`, certified), so
-  it needs re-certification and a reinstall.
+  It sells such a card when one is already held. It also never buys a targeted
+  consumable outside the ten-Tarot allowlist (Magician, Empress, Hierophant,
+  Tower, Hanged Man, Spectral seals, Aura, Cryptid, …), and sells a held one:
+  no target-selection port is wired live, so those could never be used. The ten
+  allowlisted Tarots are usable on hand cards (LV-11). Planets are used before
+  other consumables. The change is policy-only (`baseline_policy.lua`,
+  certified), so it needs re-certification and a reinstall.
 - **Local test:** play practice matches until the AI opens a Spectral pack or
   holds a Spectral card. A debug seed with an early Spectral pack helps. Also
   confirm that an Arcana or Celestial pick, and planet use, still happen.
@@ -376,3 +377,39 @@ needs the full re-certification and a companion reinstall, not
     slot count and the result code.
   - If pack center names differ from `p_buffoon*`/`p_celestial*`/…, the pack
     bonus is 0 and behaviour falls back to the previous flat score.
+
+## LV-11 Targeted Tarots on hand cards (`USE_CONSUMABLE_ON_HAND`, v1 WIP)
+
+- **Commits:** `0f48623` plus the Phase A/B fixes (docs/CLOUD_PROGRESS.md).
+- **Change:** Competitive and above use the ten allowlisted Tarots (Strength,
+  Death, Lovers, Chariot, Justice, Devil, Star, Moon, Sun, World) directly on
+  highlighted hand cards, bought at a modest utility and held when there is no
+  clear gain. Death is a pair, everything else a singleton, enhancements only on
+  base cards. The executor re-checks the allowlist, target visibility, the
+  engine bounds, the Death pair and the Cerulean Bell case.
+- **Local test:** play Competitive/Major League/Expert practice matches until
+  the AI holds and uses an allowlisted Tarot. A debug seed that starts with
+  Strength or Death in hand helps. Try to see:
+  1. one use of each effect kind (rank-up, Death copy, suit change, enhancement);
+  2. a use on a PvP blind;
+  3. a Cerulean Bell (forced-selection) blind with a targeted Tarot held: the AI
+     must not use it while a card is forced.
+- **Expected:**
+  - The action reaches the game and is accepted, with exactly the highlighted
+    cards the log names (compare the on-screen highlight with the
+    `use_consumable_on_hand` `card_refs` in the AI log and `decisions.jsonl`).
+  - Death's copy source is the **right-hand** highlighted card.
+  - No leftover highlight after a use or after a refused use, and a following
+    `PLAY_CARDS` is unaffected.
+  - No use (and no `policy_no_action` loop) while a card is forced; no rejected
+    decisions from a targeted use; `policy_budget_exceeded` never appears.
+  - `decisions.jsonl` `action.tarot` names only allowlisted centers and
+    `action.card_refs` are exact `hand:` positions.
+- **Evidence to capture:** the AI log `use_consumable_on_hand` rows, the
+  `decisions.jsonl` rows, and screenshots of the highlight and the result.
+- **Risk if it fails:** a use with the wrong highlight or wrong Death order is a
+  rules-fidelity defect: revert the entry. If the engine refuses every use, the
+  target counts from `max_highlighted`/`min_highlighted` disagree with the
+  game; record the center and the result code. The executor's post-highlight
+  `can_use_consumeable` re-check is the authority, and any refusal clears the
+  highlight, so the worst case is a missed use, not a stuck UI.

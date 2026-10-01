@@ -91,18 +91,29 @@ Constraints on all of it:
     position (a test checks that a face-down card's hidden rank does not
     change the offer).
 
-## Consumable reasoning (in progress)
+## Consumable reasoning (v1 implemented, WIP)
 
 - **Done:**
-  - consumables that need hand targets are never bought, and a held one is
+  - the ten allowlisted Tarots (Strength, Death, Lovers, Chariot, Justice,
+    Devil, Star, Moon, Sun, World) are used on hand cards through
+    `USE_CONSUMABLE_ON_HAND`, bought at a modest utility and held when there is
+    no clear gain (docs/HAND_TARGETS_DESIGN.md);
+  - a full consumable slot set no longer churns a usable Tarot: only a
+    concretely better, affordable visible offer frees the weakest one
+    (docs/CLAUDE_BATCH3_REVIEW.md M2);
+  - the remaining targeted cards (Magician, Empress, Hierophant, Tower, Hanged
+    Man, Spectral seals, Aura, Cryptid) are never bought and a held one is
     sold: no target port is wired live, and a test guards that;
   - Arcana and Spectral packs are discounted;
   - The Hermit is held until $20.
 - **Next:**
   - Temperance timing needs owned Joker sell values, which are not in the
     observation yet;
-  - wiring the target-selection port would unlock targeted Tarots, but it is
-    a trusted-integration change that needs its own design review.
+  - consider raising the v1 Tarot scope (more centers, 1–2 target
+    enhancements) after live validation;
+  - wiring the target-selection port would additionally unlock the
+    `CONSUMABLE_SELECTION` path, but it is a trusted-integration change that
+    needs its own design review.
 
 ## Open observations from the Batch 2 review (lower priority)
 

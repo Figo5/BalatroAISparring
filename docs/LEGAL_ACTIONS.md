@@ -80,6 +80,7 @@ Phase allowlist per type:
 | `BUY_ITEM`, `REROLL`, `BUY_VOUCHER`, `OPEN_BOOSTER`, `LEAVE_SHOP` | SHOP |
 | `SELECT_BOOSTER_ITEM`, `SKIP_BOOSTER` | BOOSTER_SELECTION |
 | `SELECT_TARGETS` | CONSUMABLE_SELECTION |
+| `USE_CONSUMABLE_ON_HAND` | PLAY_HAND, MULTIPLAYER_PVP |
 | `USE_CONSUMABLE`, `SELL_JOKER`, `SELL_CONSUMABLE`, `REORDER_JOKERS` | all self-bearing phases (not MATCH_COMPLETE) |
 | `REORDER_HAND` | PLAY_HAND, DISCARD, MULTIPLAYER_PVP, CONSUMABLE_SELECTION, BOOSTER_SELECTION |
 
@@ -125,6 +126,15 @@ Per-type filters:
     observation's normalized `consumable_target.source_ref` must be present and
     **equal** to `source_ref` (the `source` display entity is not authorization);
     every target ref exists in `consumable_target.targets`.
+- **USE_CONSUMABLE_ON_HAND:** PLAY_HAND or MULTIPLAYER_PVP only;
+  `source_ref` in own `self.consumables`, not redacted; `self.hand` present;
+  non-empty `card_refs` (one or two, no duplicates), each an existing,
+  non-redacted `self.hand` card. The ten-center Tarot allowlist, the per-center
+  target shape (Strength/suit/enhancement singleton, Death pair, enhancement
+  base-only) and the face-up/non-debuffed/visible-identity rules are enforced
+  by the trusted certificate producer and re-checked by the executor; this
+  module binds `card_refs` to the hand zone exactly as `PLAY_CARDS` does.
+  (`docs/HAND_TARGETS_DESIGN.md`.)
 - **SELECT_TARGETS:** CONSUMABLE_SELECTION; `target_selection == true`; explicit
   min/max; the normalized `consumable_target.source_ref` must be present (binds
   this single source context); non-empty refs, each present in

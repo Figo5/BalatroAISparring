@@ -128,6 +128,118 @@ return function(ctx)
 		end
 	end)
 
+	test("psychic_without_a_five_card_candidate_never_plays_short", function()
+		local hand = {
+			card("Ace", "Spades"), card("Ace", "Hearts"), card("King", "Clubs"),
+			card("Queen", "Diamonds"), card("Jack", "Spades"),
+		}
+		-- A legal discard is offered alongside the undersized pair: the short
+		-- pair scores nothing, so the discard wins.
+		local with_discard = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = PAIR },
+			{ type = "DISCARD_CARDS", certified = true, card_refs = { "hand:3", "hand:4", "hand:5" } },
+		}
+		for _, d in ipairs(STRONG) do
+			local result = Support.run(env, d, psychic_frame(hand, { items = with_discard }))
+			ctx.is_true(result.ok == true, d .. ":" .. tostring(result.code))
+			ctx.eq(result.action.type, "DISCARD_CARDS", d .. " discards over a short play")
+		end
+		-- Only undersized plays: none may be chosen, so there is no action at all
+		-- (nil, not even a zero score).
+		local only_short = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = PAIR },
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1" } },
+		}
+		for _, d in ipairs(STRONG) do
+			local result = Support.run(env, d, psychic_frame(hand, { items = only_short }))
+			ctx.truthy(result.ok ~= true and result.code == "policy_no_action",
+				d .. ":" .. tostring(result.code))
+		end
+	end)
+
+	test("psychic_pads_over_a_face_down_card_in_every_position", function()
+		local items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = PAIR },
+			{ type = "PLAY_CARDS", certified = true, card_refs = PADDED },
+		}
+		for position = 1, #PADDED do
+			local hand = {
+				card("Ace", "Spades"), card("Ace", "Hearts"), card("King", "Clubs"),
+				card("Queen", "Diamonds"), card("Jack", "Spades"),
+			}
+			hand[position].face_down = true
+			for _, d in ipairs(STRONG) do
+				ctx.eq(decides(d, psychic_frame(hand, { items = items })), 5, d .. " hidden@" .. position)
+			end
+		end
+	end)
+
+	test("psychic_hidden_identity_never_perturbs_the_choice", function()
+		-- Two frames identical in every visible field but with different
+		-- underlying ranks behind the face-down padding choose identically, so
+		-- hidden identities never leak into the ranking.
+		local function hidden(rank3, rank4)
+			local hand = {
+				card("Ace", "Spades"), card("Ace", "Hearts"), card(rank3, "Clubs"),
+				card(rank4, "Diamonds"), card("Jack", "Spades"),
+			}
+			for i = 1, #hand do
+				hand[i].face_down = true
+			end
+			return hand
+		end
+		local items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = PAIR },
+			{ type = "PLAY_CARDS", certified = true, card_refs = PADDED },
+		}
+		for _, d in ipairs(STRONG) do
+			local first = Support.run(env, d, psychic_frame(hidden("King", "Queen"), { items = items }))
+			ctx.is_true(first.ok == true, d .. ":" .. tostring(first.code))
+			ctx.eq(first.action.type, "PLAY_CARDS", d .. " plays")
+			ctx.eq(#first.action.card_refs, 5, d .. " five")
+			local second = Support.run(env, d, psychic_frame(hidden("2", "3"), { items = items }))
+			ctx.eq(second.action.id, first.action.id, d .. " stable under hidden perturbation")
+		end
+	end)
+
+	test("psychic_pads_with_all_stone_and_unusual_identities", function()
+		local items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = PAIR },
+			{ type = "PLAY_CARDS", certified = true, card_refs = PADDED },
+		}
+		local all_stone = {
+			card("5", "Clubs", "m_stone"), card("6", "Clubs", "m_stone"), card("7", "Clubs", "m_stone"),
+			card("8", "Clubs", "m_stone"), card("9", "Clubs", "m_stone"),
+		}
+		local unusual = {
+			card("Ace", "Spades"), card("Ace", "Hearts"), card("King", "Clubs"),
+			card("Queen", "Diamonds"), card("Jack", "Spades", "c_unrecognized_center"),
+		}
+		for _, d in ipairs(STRONG) do
+			ctx.eq(decides(d, psychic_frame(all_stone, { items = items })), 5, d .. " all stone")
+			ctx.eq(decides(d, psychic_frame(unusual, { items = items })), 5, d .. " unusual center")
+		end
+	end)
+
+	test("psychic_decision_is_deterministic", function()
+		local hand = {
+			card("Ace", "Spades"), card("Ace", "Hearts"), card("King", "Clubs"),
+			card("Queen", "Diamonds"), card("Jack", "Spades"),
+		}
+		hand[3].face_down = true
+		local items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = PAIR },
+			{ type = "PLAY_CARDS", certified = true, card_refs = PADDED },
+		}
+		for _, d in ipairs(STRONG) do
+			local first = decides(d, psychic_frame(hand, { items = items }))
+			for _ = 1, 3 do
+				ctx.eq(decides(d, psychic_frame(hand, { items = items })), first, d .. " stable")
+			end
+			ctx.vector("psychic_determinism_" .. d, tostring(first))
+		end
+	end)
+
 	test("disabled_psychic_is_a_normal_blind", function()
 		local hand = {
 			card("Ace", "Spades"), card("Ace", "Hearts"), card("King", "Clubs"),

@@ -80,14 +80,32 @@ return function(ctx)
 		return out
 	end
 
+	-- Held targeted Tarots for the H1-with-Tarots budget cell (L2 of
+	-- docs/CLAUDE_BATCH3_REVIEW.md): each is a highlighted-target Tarot, so it is
+	-- never offered as a direct USE_CONSUMABLE.
+	local function tarot_consumables(centers)
+		local out = {}
+		for i = 1, #centers do
+			out[i] = Engine.card({
+				set = "Tarot", consumeable = true, center = centers[i], center_set = "Tarot",
+				consumeable_data = { max_highlighted = centers[i] == "c_death" and 2 or 3, min_highlighted = 1 },
+				area_type = "joker", rank = "Ace", suit = "Spades", cost = 3,
+			})
+		end
+		return out
+	end
+
 	-- pvp: a Multiplayer PvP blind (no displayed requirement). Otherwise a
 	-- normal blind whose requirement no current play can reach.
-	local function frame(hand, joker_count, pvp)
+	local function frame(hand, joker_count, pvp, tarots)
+		local consumeables = tarots ~= nil and tarot_consumables(tarots) or {}
 		local engine = Engine.engine({
 			hand = hand,
 			hand_limit = #hand,
 			jokers = jokers(joker_count),
 			joker_slots = joker_count > 5 and joker_count or 5,
+			consumeables = consumeables,
+			consumable_slots = #consumeables > 0 and #consumeables or 2,
 			blind_pvp = pvp or nil,
 			hands_left = 3,
 			discards_left = 3,
@@ -132,7 +150,7 @@ return function(ctx)
 	end
 
 	local function sweep(name, hand_for, rich_seed)
-		for size = 9, 12 do
+		for size = 8, 12 do
 			for _, joker_count in ipairs({ 5, 8 }) do
 				for _, pvp in ipairs({ true, false }) do
 					local hand = hand_for(size, rich_seed + size * 31 + joker_count)
@@ -158,22 +176,45 @@ return function(ctx)
 		end
 	end
 
-	test("budget_holds_for_plain_9_to_12_card_hands", function()
+	test("budget_holds_for_plain_8_to_12_card_hands", function()
 		sweep("plain", function(size, seed)
 			return deal(seed, size, false)
 		end, 101)
 	end)
 
-	test("budget_holds_for_enhanced_9_to_12_card_hands", function()
+	test("budget_holds_for_enhanced_8_to_12_card_hands", function()
 		sweep("rich", function(size, seed)
 			return deal(seed, size, true)
 		end, 707)
 	end)
 
-	test("budget_holds_for_paired_9_to_12_card_hands", function()
+	test("budget_holds_for_paired_8_to_12_card_hands", function()
 		sweep("paired", function(size)
 			return paired(size)
 		end, 0)
+	end)
+
+	test("budget_holds_for_8_to_12_card_hands_with_targeted_tarots_held", function()
+		-- The L2 worst case: a large hand with 5 or 8 Jokers, a PvP or no-clear
+		-- blind, and the three held targeted Tarots (24 hand-Tarot candidates)
+		-- on the real 2,000,000-instruction budget.
+		for size = 8, 12 do
+			for _, joker_count in ipairs({ 5, 8 }) do
+				for _, pvp in ipairs({ true, false }) do
+					local hand = deal(313 + size * 41 + joker_count, size, true)
+					local export, actions = frame(hand, joker_count, pvp, { "c_death", "c_strength", "c_sun" })
+					local mode = pvp and "pvp" or "noclear"
+					ctx.eq(export.phase, pvp and "MULTIPLAYER_PVP" or "PLAY_HAND", "tarots_phase")
+					ctx.eq(#export.self.hand, size, "tarots_hand_size")
+					ctx.truthy(count_type(actions, "USE_CONSUMABLE_ON_HAND") > 0, "tarot_candidates")
+					for _, difficulty in ipairs({ "competitive", "major_league", "expert" }) do
+						local label = string.format("tarots_%d_%dj_%s_%s", size, joker_count, mode, difficulty)
+						local action = decide(label, difficulty, export)
+						ctx.vector("budget_" .. label, action.type .. ":" .. tostring(action.id))
+					end
+				end
+			end
+		end
 	end)
 
 	test("budget_decisions_are_deterministic", function()

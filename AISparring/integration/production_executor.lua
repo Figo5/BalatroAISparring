@@ -653,6 +653,58 @@ local function contains_card(list, card)
 	return false
 end
 
+-- Targeted-Tarot allowlist and target-visibility checks, mirrored from the
+-- adapter's `HAND_TAROTS` / `grouping_identity` (defence in depth, L3 of
+-- docs/CLAUDE_BATCH3_REVIEW.md). The executor never trusts the certificate for
+-- these: a forged, off-allowlist source or a hidden / Stone / masked / debuffed
+-- target is refused before any engine call. Only public, displayed card facts
+-- are read; no rank or suit of a face-down card is ever inspected.
+local HAND_TAROT_EFFECT = {
+	c_strength = "rank", c_death = "pair",
+	c_lovers = "m_wild", c_chariot = "m_steel", c_justice = "m_glass", c_devil = "m_gold",
+	c_star = "Diamonds", c_moon = "Clubs", c_sun = "Hearts", c_world = "Spades",
+}
+
+local function card_center_key(card)
+	return rget(rpath(card, "config", "center"), "key")
+end
+
+local function card_face_up(card)
+	return rget(card, "facing") == "front" and rget(card, "sprite_facing") == "front"
+end
+
+local function card_debuffed(card)
+	return rget(card, "debuff") == true
+end
+
+-- A hand card a targeted Tarot may actually act on: face-up, not debuffed and
+-- with a visible rank and suit (never a face-down, Stone or identity-masked
+-- center). Mirrors the adapter's `grouping_identity`, so the executor refuses a
+-- forged action the adapter would never have offered.
+local function target_visible(card)
+	if type(card) ~= "table" or not card_face_up(card) or card_debuffed(card) then
+		return false
+	end
+	if rget(rget(card, "ability"), "effect") == "Stone Card" then
+		return false
+	end
+	local center = rpath(card, "config", "center")
+	if type(center) == "table" then
+		local function flag(name)
+			local value = rawget(center, name)
+			return value ~= nil and value ~= false
+		end
+		if flag("replace_base_card") or flag("no_rank") or flag("no_suit") then
+			return false
+		end
+	end
+	local base = rget(card, "base")
+	if type(base) ~= "table" then
+		return false
+	end
+	return type(rawget(base, "value")) == "string" and type(rawget(base, "suit")) == "string"
+end
+
 function ProductionExecutor.factory(ports)
 	if type(ports) ~= "table" then
 		return nil, CODE.BAD_PORTS
@@ -714,6 +766,12 @@ function ProductionExecutor.factory(ports)
 		or stall_timeout == math.huge or stall_timeout <= 0 then
 		return nil, CODE.BAD_PORTS
 	end
+	-- Optional trusted decision-logger port (L4 of docs/CLAUDE_BATCH3_REVIEW.md).
+	-- Wired by runtime_bootstrap; absent in fixtures and other callers.
+	local logger_port = rawget(ports, "logger")
+	if logger_port ~= nil and (type(logger_port) ~= "table" or type(rawget(logger_port, "record")) ~= "function") then
+		return nil, CODE.BAD_PORTS
+	end
 
 	local instance = {}
 	local last_validated = nil
@@ -724,6 +782,99 @@ function ProductionExecutor.factory(ports)
 	-- released back to a usable executor (that would let the old queued action be
 	-- retried and duplicated); only a trusted session cancel/reset clears it.
 	local fault = nil
+
+	-- Bounded, safe decision logging for targeted Tarot use (L4). The trusted
+	-- production logger (`core.lua` -> `src/logger.lua`) accepts only its
+	-- primitive field allowlist, so the record is encoded entirely in existing
+	-- allowlisted fields rather than a new table:
+	--   code   = the executor outcome ("exec_ok", "exec_illegal", ...)
+	--   action = the allowlisted Tarot center, or omitted when refused/hidden
+	--   count  = the number of targets
+	--   detail = "src=<consumable:n> refs=<hand:a,hand:b> highlight=<cleared|kept>"
+	-- Every value is a bounded primitive; hidden card values are never read and
+	-- a logger failure can never affect a decision (`pcall`).
+	local function highlight_cleared()
+		local hand = rget(G, "hand")
+		local count = dense_count(rget(hand, "highlighted"), MAX_SELECTION)
+		return count ~= nil and count == 0
+	end
+
+	-- Normalize one primitive positional reference `zone:n` (1..999), or nil for
+	-- anything else: a forged table, an oversized string, another zone or a
+	-- malformed ordinal is omitted rather than copied.
+	local function positional_ref(value, zone)
+		if type(value) ~= "string" or #value > 24 then
+			return nil
+		end
+		local digits = string.match(value, "^" .. zone .. ":(%d+)$")
+		if digits == nil then
+			return nil
+		end
+		local ordinal = tonumber(digits)
+		if ordinal == nil or ordinal < 1 or ordinal > 999 then
+			return nil
+		end
+		return zone .. ":" .. ordinal
+	end
+
+	-- At most two normalized `hand:n` refs, in the action's own order.
+	local function positional_refs(refs)
+		local out = {}
+		local count = dense_count(refs, MAX_SELECTION)
+		if count == nil then
+			return out
+		end
+		for i = 1, count do
+			if #out >= 2 then
+				break
+			end
+			local ref = positional_ref(rawget(refs, i), "hand")
+			if ref ~= nil then
+				out[#out + 1] = ref
+			end
+		end
+		return out
+	end
+
+	-- Public trace captured before the commit (the source may be gone after it).
+	-- The Tarot identity is only read for a visible, face-up, non-debuffed,
+	-- allowlisted source; a hidden or refused source never has its center (or
+	-- any rank/suit) inspected.
+	local function trace_use_on_hand(action)
+		local trace = {
+			source_ref = positional_ref(rget(action, "source_ref"), "consumable"),
+			card_refs = positional_refs(rget(action, "card_refs")),
+			center = nil,
+		}
+		pcall(function()
+			if trace.source_ref == nil then
+				return
+			end
+			local source = select(1, resolve_ref(G, trace.source_ref))
+			if type(source) == "table" and card_face_up(source) and not card_debuffed(source) then
+				local key = card_center_key(source)
+				if HAND_TAROT_EFFECT[key] ~= nil then
+					trace.center = key
+				end
+			end
+		end)
+		return trace
+	end
+
+	local function log_use_on_hand(trace, outcome)
+		if logger_port == nil or trace == nil then
+			return
+		end
+		local refs = #trace.card_refs > 0 and table.concat(trace.card_refs, ",") or "none"
+		pcall(logger_port.record, {
+			event = "use_consumable_on_hand",
+			code = type(outcome) == "string" and outcome or "exec_unknown",
+			action = trace.center,
+			count = #trace.card_refs,
+			detail = "src=" .. (trace.source_ref or "none") .. " refs=" .. refs
+				.. " highlight=" .. (highlight_cleared() and "cleared" or "kept"),
+		})
+	end
 
 	local function funcs()
 		if funcs_port ~= nil then
@@ -1357,13 +1508,29 @@ function ProductionExecutor.factory(ports)
 		if source == nil or zone ~= "consumable" then
 			return nil, CODE.UNKNOWN_REF
 		end
+		-- L3: the source must be a face-up, non-debuffed Tarot on the v1
+		-- allowlist. A forged/off-allowlist center is refused here, not trusted
+		-- from the certificate.
+		if not card_face_up(source) or card_debuffed(source) then
+			return nil, CODE.ILLEGAL
+		end
+		local effect = HAND_TAROT_EFFECT[card_center_key(source)]
+		if effect == nil then
+			return nil, CODE.ILLEGAL
+		end
 		local refs = rget(action, "card_refs")
 		local count = selection_bound(refs)
 		if count == nil or count < 1 or count > 2 then
 			return nil, CODE.ILLEGAL
 		end
-		if distinct_cards(G, refs, "hand") == nil then
+		local cards = distinct_cards(G, refs, "hand")
+		if cards == nil then
 			return nil, CODE.UNKNOWN_REF
+		end
+		for i = 1, #cards do
+			if not target_visible(cards[i]) then
+				return nil, CODE.ILLEGAL
+			end
 		end
 		local forced = forced_hand_cards(G)
 		if forced == nil or #forced > 0 then
@@ -1380,6 +1547,21 @@ function ProductionExecutor.factory(ports)
 		local min_targets = is_nat(min_highlighted) and min_highlighted or 1
 		if max_targets == nil or count < min_targets or count > max_targets then
 			return nil, CODE.ILLEGAL
+		end
+		-- v1 candidate bounds, mirrored exactly: Death is a pair; every other
+		-- allowlisted Tarot is a singleton, and an enhancement only applies to a
+		-- base card. Never trust the certificate for the shape it claims.
+		if effect == "pair" then
+			if count ~= 2 then
+				return nil, CODE.ILLEGAL
+			end
+		else
+			if count ~= 1 then
+				return nil, CODE.ILLEGAL
+			end
+			if string.sub(effect, 1, 2) == "m_" and card_center_key(cards[1]) ~= "c_base" then
+				return nil, CODE.ILLEGAL
+			end
 		end
 		return source
 	end
@@ -1806,6 +1988,10 @@ function ProductionExecutor.factory(ports)
 	end
 
 	function instance.dispatch(action)
+		local trace = nil
+		if logger_port ~= nil and is_plain(action) and rget(action, "type") == "USE_CONSUMABLE_ON_HAND" then
+			trace = trace_use_on_hand(action)
+		end
 		local ok, result, code = pcall(function()
 			if not is_plain(action) then
 				return nil, CODE.BAD_ACTION
@@ -1863,6 +2049,19 @@ function ProductionExecutor.factory(ports)
 			end
 			return committed, commit_code
 		end)
+		if trace ~= nil then
+			local outcome = code
+			if type(outcome) ~= "string" then
+				if not ok then
+					outcome = "exec_internal"
+				elseif result == true then
+					outcome = CODE.OK
+				else
+					outcome = "exec_failed"
+				end
+			end
+			log_use_on_hand(trace, outcome)
+		end
 		if not ok then
 			last_validated = nil
 			return nil, CODE.INTERNAL

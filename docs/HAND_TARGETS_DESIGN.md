@@ -1,124 +1,170 @@
 # Design: targeted consumables in the hand phase
 
-Status: **proposed**, awaiting architecture review.
+Status: **implemented (conservative v1, WIP)** — awaiting independent Claude
+re-review and real Balatro validation. Not certified, not accepted.
+
+This document describes what the code actually does now. The original
+proposal (extend `USE_CONSUMABLE.target_refs`, 1–3 targets, a 14-center
+allowlist) was reviewed in `docs/CLAUDE_BATCH3_REVIEW.md` (L5) and the
+implementation is the more conservative of the two.
 
 ## Why
 
 Tarots that act on highlighted hand cards (Strength, Death, the enhancement
-Tarots, the suit Tarots) are among Balatro's strongest tools. Today the AI can
-never use them:
+Tarots, the suit Tarots) are among Balatro's strongest tools. In vanilla there
+is no separate targeting phase: the player highlights cards in hand during
+`SELECTING_HAND` and presses Use. The executor supports exactly that path —
+highlight, re-check the engine's own read-only `can_use_consumeable`, then
+`use_card`.
 
-- the adapter certifies `USE_CONSUMABLE` only for consumables that need **no**
-  targets (`needs_targets` in `cert_use_consumables`);
-- targeted uses exist only in the `CONSUMABLE_SELECTION` phase. That phase
-  depends on a `target_selection` port that production never wires, so it
-  never occurs live;
-- the policy therefore never buys a targeted consumable, and sells a held one
-  (`TARGETED`, `docs/BASELINE_POLICY.md`).
+## Action shape
 
-In vanilla there is no separate targeting phase. The player highlights cards
-in hand during `SELECTING_HAND` and presses Use on the consumable. The
-executor already supports exactly that for `USE_CONSUMABLE` with non-empty
-`target_refs`:
+A dedicated action, **`USE_CONSUMABLE_ON_HAND`**:
 
-1. it highlights the targets through `apply_hand_selection`;
-2. it re-checks the engine's own read-only `can_use_consumeable`;
-3. only then does it call `use_card`.
+```
+{ type = "USE_CONSUMABLE_ON_HAND", source_ref = "consumable:i",
+  card_refs = { "hand:j", ... } }
+```
 
-## Fairness
+- `source_ref` is a held consumable in `self.consumables`.
+- `card_refs` are **positional** refs into the AI's own face-up hand.
+- Certified only in `PLAY_HAND` and `MULTIPLAYER_PVP` (not `DISCARD`, shop,
+  booster or `CONSUMABLE_SELECTION`).
 
-- Targets are the AI's own face-up hand cards, which it already sees.
-- The effects are public card text.
-- The action goes through the real UI path (highlight, then Use), and the
-  engine's own predicate is the authority.
+This mirrors the existing `USE_CONSUMABLE`/`card_refs` broker binding. The
+`CONSUMABLE_SELECTION` phase is unchanged and still uses `target:`
+(`USE_CONSUMABLE.target_refs` / `SELECT_TARGETS`).
 
-Only Tarots with deterministic, card-local effects are allowlisted.
-Random-outcome ones (The Wheel of Fortune, Aura) and deck-altering ones
-(The Hanged Man, Cryptid) are out of scope, so nothing about the deck order or
-RNG is involved.
+## Allowlist (ten Tarots)
 
-## Change
+| Center | Effect (vanilla) | v1 targets |
+|---|---|---|
+| `c_strength` | +1 rank (King → Ace, Ace → 2) | exactly 1 |
+| `c_death` | the left card becomes a copy of the right card | exactly 2 |
+| `c_lovers` / `c_chariot` / `c_justice` / `c_devil` | Wild / Steel / Glass / Gold | exactly 1, base card only |
+| `c_star` / `c_moon` / `c_sun` / `c_world` | Diamonds / Clubs / Hearts / Spades | exactly 1, not already that suit |
 
-1. **Adapter** (`engine_adapter.lua`, in `PLAY_HAND` and `MULTIPLAYER_PVP`
-   with gates clear): for each held, face-up, non-debuffed consumable whose
-   engine center is in the allowlist below, certify
-   `USE_CONSUMABLE { source_ref = consumable:i, target_refs = { hand:j, … } }`:
+Deliberately excluded (never certified): Magician, Empress, Hierophant,
+Tower, Hanged Man and every random or deck-altering Tarot/Spectral. No
+`packs`: Arcana-pack picks stay gated by the engine's own
+`can_use_consumeable` (nothing highlighted), so a targeted Tarot is never
+picked from a pack.
 
-   | Center | Effect (vanilla) | Targets |
-   |---|---|---|
-   | `c_strength` | +1 rank (King → Ace, Ace → 2) | 1..2 |
-   | `c_death` | the left card becomes a copy of the right card | exactly 2 |
-   | `c_magician` / `c_empress` / `c_heirophant` | Lucky / Mult / Bonus | 1..2 |
-   | `c_lovers` / `c_chariot` / `c_justice` / `c_devil` / `c_tower` | Wild / Steel / Glass / Gold / Stone | 1 |
-   | `c_star` / `c_moon` / `c_sun` / `c_world` | Diamonds / Clubs / Hearts / Spades | 1..3 |
+## Bounds
 
-   - The target counts come from the engine card's
-     `ability.consumeable.max_highlighted` and `min_highlighted` (default 1),
-     never from the table.
-   - The table only restricts **which** centers are offered.
-   - Targets are only face-up cards with a visible identity (the adapter's
-     `grouping_identity`): never face-down, Stone or no-rank cards.
-   - The selections are bounded and deterministic: all singletons, then
-     lexicographic pairs, then triples. At most 24 per consumable and 48 in
-     total, within the existing selection cap.
-   - The engine predicate cannot be pre-checked without highlighting, so the
-     executor's post-highlight check stays the authority.
-2. **Observation / actions** (`observation.lua`, `actions.lua`):
-   `USE_CONSUMABLE.target_refs` may reference the `hand` zone, but only in
-   `PLAY_HAND` and `MULTIPLAYER_PVP`. In `CONSUMABLE_SELECTION` it stays the
-   `target` zone. A hand ref elsewhere is `observation_invalid_target_ref`.
-   The broker binds certificates exactly as today.
-3. **Executor** (`production_executor.lua`):
-   - `USE_CONSUMABLE` accepts `hand:` refs in the hand phase, resolving them
-     to `G.hand.cards[j]` with the same distinctness checks as `target:`;
-   - if the post-highlight predicate refuses, the highlight is cleared again
-     (`G.hand:unhighlight_all`), so a later `PLAY_CARDS` is unaffected;
-   - vanilla's `use_card` unhighlights after a use.
-4. **Policy:**
-   - For each certified targeted use, simulate the effect on copies of the
-     targeted cards: rank, enhancement or suit (Death copies rank, suit,
-     enhancement, edition and seal).
-   - Compare the best play estimate over the hand after the use with the one
-     before.
-   - Also add a small permanent-value bonus for an enhancement on a card that
-     is in the current best play. Glass, Steel and Lucky are valued through
-     the estimate; Gold at its $3 held value.
-   - Use when the gain clears a margin. Otherwise hold the card: it does not
-     expire.
-   - The work is metered with `WORK`, with at most `TARGET_LIMIT` (24)
-     candidates per decision.
-   - `TARGETED` stops refusing allowlisted Tarots: they are bought at a
-     modest utility and are no longer sold. The unlisted ones keep today's
-     rule.
-   - Rookie keeps today's behaviour.
+- Per source: at most **8** selections; overall at most **24**.
+- The target counts come from the engine card's own
+  `ability.consumeable.max_highlighted` / `min_highlighted` /
+  `mod_num`, never from a hard-coded table.
+- Targets are only face-up cards with a visible identity (rank and suit
+  visible, never Stone, debuffed or identity-masked), the adapter's
+  `grouping_identity`.
+- Death offers only distinct pairs and orders the lower hand ordinal first
+  (the right-hand card is the copy source; confirmed against the vanilla
+  `card.lua` `T.x` rule).
+- The selections are bounded and deterministic: all singletons, then
+  lexicographic pairs (Death). Strength/suit/enhancement are singletons.
+
+## Certificate cap reserve (L2)
+
+Reorders are the lowest-priority certificates. Four slots of the 120-certificate
+cap are reserved for them (`REORDER_RESERVE`), so a 12-card hand with 8 Jokers
+and three held Tarots keeps a few Joker reorders while the play/discard
+capacity and the 24-Tarot bound are unchanged. The 120 cap and every sandbox
+limit are unchanged.
+
+## Executor
+
+`validate_use_on_hand` is defence in depth: it re-checks, from the engine's own
+read-only state, that
+
+- the phase is `SELECTING_HAND` and the gates are clear;
+- the source is a face-up, non-debuffed consumable on the **same** ten-center
+  allowlist (a forged/off-allowlist center is refused);
+- the target count is within the engine card's own bounds, **and** exactly 2
+  for Death / exactly 1 for every other allowlisted Tarot (v1 shape);
+- an enhancement Tarot targets a base card only;
+- every target is a face-up, non-debuffed, visible rank/suit card (never
+  Stone or masked) — checked as a distinct set;
+- no card is blind-forced (Cerulean Bell): a forced card would join every
+  highlight.
+
+The adapter applies the same allowlist and visibility rules, so it never offers
+what the executor refuses. On any refusal or no-op the highlight is cleared
+(`G.hand:unhighlight_all`); vanilla's own `use_card` unhighlights on success.
+The engine's real `can_use_consumeable` is re-checked after highlighting and is
+the authority.
+
+## Policy
+
+- For each certified use, the effect is simulated on copies of the targeted
+  cards: rank +1 (Ace → 2), Death copies the right card (rank, suit,
+  enhancement, edition, seal), an enhancement sets the center, a suit sets the
+  suit. Enhancements are modelled on base cards only.
+- The best play estimate over the hand after the use is compared with the one
+  before; a use is chosen only on a clear gain (Gold: when it costs nothing,
+  for its held payout). Otherwise the Tarot is held — it does not expire.
+- The work is metered (`TARGET_WORK`, 6000 units), so large hands stay inside
+  the 2,000,000-instruction budget.
+- Allowlisted Tarots are bought at a modest utility and are not sold, unless the
+  consumable slots are full and a strictly better, affordable consumable is
+  visible in the shop (then only the lowest-value held Tarot is sold —
+  `docs/CLAUDE_BATCH3_REVIEW.md` M2).
+- Rookie keeps today's behaviour (`hand_tarots = false`).
+
+## Logging (L4)
+
+An optional trusted logger port (wired by `runtime_bootstrap`) records a bounded
+`use_consumable_on_hand` event per dispatch. The trusted production logger
+(`core.lua` -> `src/logger.lua`) accepts only its primitive field allowlist, so
+the details are encoded entirely in existing allowlisted fields:
+
+- `code` — the executor outcome (`exec_ok`, `exec_illegal`, …);
+- `action` — the allowlisted, visible Tarot center (omitted when the source is
+  face-down, debuffed or off-allowlist, whose center is never read);
+- `count` — the number of targets;
+- `detail` — `src=<consumable:n> refs=<hand:a,hand:b> highlight=<cleared|kept>`,
+  with the exact ordered positional refs and the actual highlight state.
+
+Every value is a bounded primitive; `card_refs` are normalized `hand:n`
+positions (a forged table, an oversized string or a wrong-zone ref is omitted),
+and `detail` stays inside the logger's 96-byte cap. Hidden card values are never
+read and the logger call is `pcall`-wrapped, so a throwing or malformed logger
+never affects a dispatch. No correlation id is emitted or claimed: an action id
+is longer than the logger's 96-byte string cap and would be truncated, so it
+cannot survive production formatting. The Python decision log also records the
+allowlisted center (derived from the sanitized observation) and the positional
+refs, reusing the existing decision record.
 
 ## Tests
 
-- **Adapter:**
-  - allowlisted Tarots in the hand phase get bounded hand-ref selections
-    within the engine's min/max, and never face-down or Stone targets;
-  - an unlisted Tarot (Hanged Man), a debuffed consumable, a shop phase or a
-    PvP-blocked state get none.
-- **Observation:** a hand ref outside the hand phases, and a target ref in
-  the hand phase, are both rejected.
-- **Executor:**
-  - a fixture applies the highlight, checks the predicate and calls
-    `use_card`;
-  - when the predicate is refused, the highlight is cleared and the result is
-    `ILLEGAL`;
-  - stale refs give `UNKNOWN_REF`.
-- **Policy:**
-  - Strength on a pair's kicker making two pair is used;
-  - Death turning a low card into a copy of an Ace pair card is used;
-  - a suit Tarot completing a flush is used;
-  - a Tarot with no gain is held;
-  - the budget stays within limits with 24 candidates;
-  - allowlisted Tarots are bought and not sold.
-- **Isolation certificate / cross-service:** re-run and re-certify.
+- **Adapter:** the ten Tarots get bounded hand-ref selections within the
+  engine's min/max, never face-down/Stone/debuffed; unlisted Tarots, a debuffed
+  source, a shop phase and a PvP-blocked state get none; a 12-card/8-Joker/
+  3-Tarot hand keeps play/discard capacity, the 24-Tarot bound and a few Joker
+  reorders under the 120 cap.
+- **Observation/actions:** a hand ref outside the hand phases and a target ref
+  in the hand phase are both rejected.
+- **Executor:** direct negatives (off-allowlist/hidden/debuffed source; hidden,
+  Stone, masked or debuffed target; enhancement on a non-base card; singleton
+  and Death-pair shapes), highlight cleared on refusal and no-op, forged and
+  stale actions refused with no engine call, log-trace normalization of forged/
+  oversized/table/foreign-zone refs, and a throwing or malformed logger that
+  never affects a decision. A permanent regression runs the executor record
+  through the real `src/logger.lua` filter (the production bridge) and asserts
+  the formatted line still contains the identity, ordered refs, outcome and
+  cleanup, on both Lua runtimes.
+- **Policy:** Strength on a kicker, Death copying an Ace, a suit Tarot
+  completing a flush, a no-gain Tarot held; held-Tarot budget inside the
+  2,000,000-instruction cap across 8–12 cards, 5/8 Jokers, PvP/no-clear and
+  Competitive/Major League/Expert; allowlisted Tarots bought and retained.
+- **Isolation certificate / cross-service:** re-run and re-certify (still
+  pending; no native certification is claimed).
 
 ## Out of scope
 
 - Targeted picks from Arcana packs (hand shown during booster selection).
-- The Hanged Man (it destroys cards).
+- The Hanged Man (destroys cards).
 - Spectral cards with targets (seals, Cryptid, Aura).
 - Wiring a `target_selection` port.
+- Raising any cap or sandbox limit.

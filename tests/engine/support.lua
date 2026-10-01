@@ -373,6 +373,7 @@ function Support.pipeline(bundle, engine, opts)
 		element_for = opts.element_for,
 		clock = opts.clock,
 		stall_timeout = opts.stall_timeout,
+		logger = opts.logger,
 	})
 	return { revision = revision, adapter = adapter, executor = executor, adapter_code = adapter_code, executor_code = executor_code }
 end
