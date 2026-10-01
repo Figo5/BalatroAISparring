@@ -37,3 +37,6 @@ Independent pre-fix evidence reproduced both Medium findings on both runtimes us
 
 An immutable source snapshot passed policy (176 unique cases, 343 executions), engine (165/165 on each runtime), service (61/61) and estimator parity (2/2). The initial snapshot engine invocation lacked work/reference/mp/ui/game/timer.lua; this verification-harness dependency was copied before the engine-only rerun passed. No source/test relaxation was used. All five Phase A files were byte-compared to that verified snapshot before the logical commit and push. Final Claude acceptance and native certification remain pending. Original main staged-diff checksum was rechecked unchanged after the worktree move.
 
+
+Reviewer availability preflight: Claude Code returned API 429/session limit and reported a 9:40 p.m. America/New_York reset on September 30. This is no review verdict. Repository work and verification continue; native certification/install require the fresh acceptance review after reset. Evidence: work/local-ownership/claude-availability.json.
+
