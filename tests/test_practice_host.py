@@ -4417,6 +4417,108 @@ def test_daemon_forced_stop_still_retires_an_active_worker():
             assert daemon._ticket is None
 
 
+def test_deferred_stop_refuses_new_tickets_until_the_worker_finishes():
+    """L-d: a deferred non-forced stop refuses every new match ticket while the
+    existing worker completes, then the stop succeeds."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        created = []
+
+        def factory(cfg, request):
+            created.append(_BlockingThreadSupervisor())
+            return created[-1]
+
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            start_gate=lambda: {"ok": True, "code": practice_host.CODE_OK},
+            supervisor_factory=factory,
+        )
+        daemon.start()
+        try:
+            accepted = daemon._op_start(make_request())
+            assert accepted["ok"] is True and accepted["code"] == practice_host.CODE_ACCEPTED, accepted
+            supervisor = created[0]
+            assert supervisor.started.wait(5.0), "worker never started"
+
+            stopped = daemon.stop()
+            assert stopped["stopped"] is False, stopped
+            assert stopped["code"] == practice_host.CODE_SUPERVISOR_ACTIVE, stopped
+            assert daemon._stop_requested is True
+
+            refused = daemon._op_start(make_request())
+            assert refused["ok"] is False, refused
+            assert refused["code"] == practice_host.CODE_HOST_CLOSED, refused
+            assert len(created) == 1, "no new supervisor was created"
+
+            supervisor.release.set()
+            assert supervisor.finished.wait(5.0), "worker never exited"
+            deadline = time.time() + 5.0
+            while True:
+                stopped = daemon.stop()
+                if stopped.get("stopped") or time.time() > deadline:
+                    break
+                time.sleep(0.01)
+            assert stopped["stopped"] is True, stopped
+            assert supervisor.cleaned == 1
+        finally:
+            if created:
+                created[0].release.set()
+            with daemon._lock:
+                daemon._ticket = None
+            daemon.stop(force=True)
+
+
+def test_deferred_stop_refuses_new_tickets_for_an_assigned_unstarted_worker():
+    """L-d race: a worker assigned but not yet started still defers the stop, and
+    a new ticket is refused under the same lock until it completes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        try:
+            supervisor = FakeSupervisor()
+            worker = threading.Thread(target=lambda: None, daemon=True)
+            with daemon._lock:
+                daemon._ticket = practice_host.MatchTicket(
+                    ticket="ticket-unstarted", request=make_request(), supervisor=supervisor, thread=worker
+                )
+            assert worker.ident is None
+            stopped = daemon.stop()
+            assert stopped["stopped"] is False, stopped
+            assert stopped["code"] == practice_host.CODE_SUPERVISOR_ACTIVE, stopped
+
+            refused = daemon._op_start(make_request())
+            assert refused["ok"] is False, refused
+            assert refused["code"] == practice_host.CODE_HOST_CLOSED, refused
+
+            worker.start()
+            worker.join(5.0)
+            stopped = daemon.stop()
+            assert stopped["stopped"] is True, stopped
+            assert supervisor.cleaned == 1
+        finally:
+            with daemon._lock:
+                daemon._ticket = None
+            daemon.stop(force=True)
+
+
+def test_restart_clears_a_deferred_stop_request():
+    """L-d: start() clears the shutdown mark so a restart accepts tickets again."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        daemon = practice_host.HostDaemon(config, opener=_live_opener(config), enumerator=FakeEnumerator([]))
+        daemon.start()
+        daemon.stop()
+        daemon.start()
+        try:
+            assert daemon._stop_requested is False
+        finally:
+            daemon.stop(force=True)
+
+
 def _run_all() -> int:
     tests = sorted(
         (name, value)

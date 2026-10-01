@@ -90,10 +90,20 @@ read-only state, that
   highlight.
 
 The adapter applies the same allowlist and visibility rules, so it never offers
-what the executor refuses. On any refusal or no-op the highlight is cleared
-(`G.hand:unhighlight_all`); vanilla's own `use_card` unhighlights on success.
-The engine's real `can_use_consumeable` is re-checked after highlighting and is
-the authority.
+what the executor refuses. On any refusal or no-op the executor clears the
+highlight itself (`G.hand:unhighlight_all`), before it returns. On success the
+executor does not clear the highlight: vanilla's `use_card` queues its own
+`unhighlight_all` (`card.lua:1150`) that runs **after** the executor has already
+returned and logged, so the highlight is still present at log time. The engine's
+real `can_use_consumeable` is re-checked after highlighting and is the authority.
+
+This is why `exec_ok` together with `highlight=kept` is the normal production
+success line, not a failure: it reports the state immediately after dispatch.
+Settled cleanup must be confirmed from a later observation / visual state (and
+the `STOP_USE` gate), never inferred from that log line. The executor tests model
+both orders: a fixture that clears the highlight inside `use_card` (log
+`cleared`) and one that leaves it through return then clears it on the later
+queued engine event (log `kept`, then settled `cleared`).
 
 ## Policy
 
@@ -124,7 +134,8 @@ the details are encoded entirely in existing allowlisted fields:
   face-down, debuffed or off-allowlist, whose center is never read);
 - `count` — the number of targets;
 - `detail` — `src=<consumable:n> refs=<hand:a,hand:b> highlight=<cleared|kept>`,
-  with the exact ordered positional refs and the actual highlight state.
+  with the exact ordered positional refs and the highlight state **immediately
+  after dispatch** (not the settled post-queue cleanup; see above).
 
 Every value is a bounded primitive; `card_refs` are normalized `hand:n`
 positions (a forged table, an oversized string or a wrong-zone ref is omitted),

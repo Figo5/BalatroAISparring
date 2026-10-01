@@ -80,7 +80,10 @@ Guarantees:
 2. **Deterministic canonical ties.** Each candidate is scored with integer
    arithmetic; equal scores are broken by an explicit byte-wise comparison of the
    candidate `id` (the canonical encoding), the same ordering used by
-   `actions.generate`. The result does not depend on input iteration order.
+   `actions.generate`. The single exception is two equal-scored consumable
+   purchases, where the higher `SLOT_WORTH` wins first and the `id` order then
+   breaks an equal worth (final review L-b); no other kind's tie-break changes.
+   The result does not depend on input iteration order.
 3. **Bounded evaluations.** The loop evaluates at most `max_actions` (256)
    candidates independent of the supplied array length, and each evaluation does
    bounded work over a bounded selection plus a bounded lookup into a `<= 16`
@@ -345,13 +348,38 @@ A usable allowlisted Tarot is **not** sold just because the consumable slots
 are full: a slot is freed only when the shop offers a concretely better,
 affordable consumable that needs it, and then only the lowest-value held Tarot
 is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2). Rookie keeps the old
-behaviour (never buys, sells a held one).
+behaviour (never buys, sells a held one). When two offered consumables score
+the same, the higher `SLOT_WORTH` wins (a deterministic tie-break consulted only
+between equal-scored consumable purchases, so a shop listing Star before Saturn
+cannot buy the weaker Tarot first); all price, economy, reserve and edition
+comparisons are unchanged (final review L-b).
+
+The sale rationale is checked against the purchase the **same** `buy_score` and
+tie-break actually ranks best among the visible offers (`predicted_consumable_buy`):
+the intended purchase must be the best offer and strictly raise the held
+`SLOT_WORTH`. Because sale proceeds are not in the observation, the sale is also
+refused when a same-or-worse-worth offer is *cheaper* than the intended upgrade —
+after the invisible proceeds raise the interest bonus that cheaper offer could
+overtake the upgrade, recreating the slot with a same-worth Tarot and churning
+sell → buy → sell (final review interest churn). This only ever *refuses* a
+borderline sale; it does not change buy scores, reserves, editions or any other
+priority, and Negative purchases and safety-floor sales are untouched.
 
 **The Psychic (`bl_psychic`, not disabled).** A play of fewer than five cards
-scores nothing and is never chosen (`MIN_CARDS` is enforced at the top of the
-decision and again at `play_score` entry, before the numeric estimate or the
-category fallback). When only undersized plays are offered the policy returns
+scores nothing and is normally never chosen (`MIN_CARDS` is enforced at the top
+of the decision and again at `play_score` entry, before the numeric estimate or
+the category fallback). When only undersized plays are offered the policy returns
 no action rather than a short play (docs/CLAUDE_BATCH3_REVIEW.md M1).
+
+**Exhausted-hand terminal (final review M-A).** There is one narrow exception.
+When our own visible hand holds 1–4 cards under an active Psychic, no five-card
+play can exist, and the certified catalogue offers no scoreable discard, a short
+play receives a floor score below every other action. That lets an already-lost
+round consume its last cards and end through the engine instead of stalling
+forever in `policy_no_action`. The exception makes no scoring claim, is
+unreachable while five or more cards remain (so an incomplete catalogue that
+omits valid five-card plays still fails closed), is reset every decision, and is
+disabled with the boss.
 
 Planet cards (and Black Hole) get +1000 over other uses, so levels are banked
 first. At Competitive and above (`hold_hermit`), **The Hermit** (double
@@ -544,6 +572,7 @@ neighbour is punctuation. It never joins `--`, a digit with `.`, or `[[` /
 | This change, stripped | **51,544–51,551 bytes** (≈14.0 KB, 21%, under the cap) |
 | After the follow-up backlog commits | 53,110–53,117 bytes (≈12.4 KB under the cap, 4.2 KB under the guard) |
 | After boss awareness (Psychic, Eye, Mouth), with the fallback rewritten | 55,279–55,286 bytes (≈10.2 KB under the cap, 2.0 KB under the guard) |
+| After the final-review fixes (M-A exhausted-hand terminal, L-b buy tie-break) | 55,771–55,778 bytes (≈9.6 KB under the cap, 1.5 KB under the guard) |
 | With the space squeeze | **50,234–50,241 bytes** (≈15.3 KB under the cap, 7.1 KB under the guard) |
 
 `BaselinePolicy.SOURCE_GUARD` is 57,344 bytes (56 KiB).

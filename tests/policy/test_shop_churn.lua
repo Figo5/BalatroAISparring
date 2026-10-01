@@ -126,4 +126,128 @@ return function(ctx)
 			ctx.vector("shop_churn_" .. d, first.type .. ":" .. tostring(first.consumable_ref or first.item_ref))
 		end
 	end)
+
+	-- L-b: after a justified sale, two equal-priced consumables score the same,
+	-- so the tie must be broken by SLOT_WORTH, not by the shop reference order.
+	test("a_justified_sale_buys_the_higher_worth_offer", function()
+		for _, d in ipairs(STRONG) do
+			-- Star (worth 1) at shop:1, Saturn (worth 9) at shop:2, one slot.
+			local full = shop({ tarot("c_star", { cost = 3 }), tarot("c_saturn", { cost = 3 }) },
+				{ tarot("c_death") }, 30, 1)
+			ctx.eq(decide(d, full).type, "SELL_CONSUMABLE", d .. " sells for the upgrade")
+			local freed = shop({ tarot("c_star", { cost = 3 }), tarot("c_saturn", { cost = 3 }) }, {}, 30, 1)
+			local buy = decide(d, freed)
+			ctx.eq(buy.type, "BUY_ITEM", d .. " buys")
+			ctx.eq(buy.item_ref, "shop:2", d .. " Saturn, the higher worth")
+			local retained = shop({}, { tarot("c_saturn") }, 30, 1)
+			ctx.eq(decide(d, retained).type, "LEAVE_SHOP", d .. " retains")
+		end
+	end)
+
+	test("the_higher_worth_offer_wins_regardless_of_shop_order", function()
+		for _, d in ipairs(STRONG) do
+			-- Saturn at shop:1, Star at shop:2: still Saturn.
+			local freed = shop({ tarot("c_saturn", { cost = 3 }), tarot("c_star", { cost = 3 }) }, {}, 30, 1)
+			ctx.eq(decide(d, freed).item_ref, "shop:1", d .. " Saturn first")
+		end
+	end)
+
+	test("equal_worth_offers_keep_the_deterministic_id_order", function()
+		for _, d in ipairs(STRONG) do
+			-- Star and Moon are both worth 1, so the established id order decides.
+			local freed = shop({ tarot("c_star", { cost = 3 }), tarot("c_moon", { cost = 3 }) }, {}, 30, 1)
+			local first = decide(d, freed)
+			ctx.eq(first.item_ref, "shop:1", d .. " id order")
+			ctx.eq(decide(d, freed).id, first.id, d .. " stable")
+		end
+	end)
+
+	test("a_negative_high_worth_offer_is_bought_over_full_slots", function()
+		for _, d in ipairs(STRONG) do
+			local engine = shop(
+				{ tarot("c_saturn", { cost = 3, edition = "negative", card_limit = 1 }) },
+				{ tarot("c_death"), tarot("c_sun") })
+			local action = decide(d, engine)
+			ctx.eq(action.type, "BUY_ITEM", d .. " buys the negative")
+			ctx.eq(action.item_ref, "shop:1", d .. " item")
+		end
+	end)
+
+	-- The equal-scored tie-break must not depend on certificate order: with
+	-- LEAVE_SHOP listed first, the higher-worth consumable still wins.
+	test("the_buy_tiebreak_ignores_certificate_order", function()
+		local function frame(order)
+			local self = {
+				money = 30, credit_limit = 0, hands = 4, discards = 3, current_score = "0",
+				blind_requirement = "100", hand_visible = false, jokers = {}, consumables = {},
+				vouchers = {}, tags = {}, deck = { total = 52 },
+			}
+			local items = {}
+			for i = 1, #order do
+				items[i] = { kind = "consumable", center = order[i], cost = 3, face_down = false }
+			end
+			return {
+				schema_version = 1, phase = "SHOP", match = Support.match(), self = self,
+				shop = { reroll_cost = 5, items = items, vouchers = {}, boosters = {} },
+				context = { blocked = false, timer_expired = false },
+				certificates = { version = 1, items = {
+					{ type = "LEAVE_SHOP", certified = true },
+					{ type = "BUY_ITEM", certified = true, item_ref = "shop:1", capacity_ok = true },
+					{ type = "BUY_ITEM", certified = true, item_ref = "shop:2", capacity_ok = true },
+				} },
+			}
+		end
+		for _, d in ipairs(STRONG) do
+			local result = Support.run(env, d, frame({ "c_star", "c_saturn" }))
+			ctx.is_true(result.ok == true, d .. ":" .. tostring(result.code))
+			ctx.eq(result.action.type, "BUY_ITEM", d .. " buys")
+			ctx.eq(result.action.item_ref, "shop:2", d .. " Saturn despite LEAVE_SHOP first")
+		end
+	end)
+
+	-- Interest-breakpoint churn (final review): Star cheaper than Saturn means a
+	-- hidden sale-proceeds interest step would flip the next buy to Star, so the
+	-- sale is refused; a Saturn that is not more expensive stays justified.
+	test("interest_breakpoint_sale_rationale_uses_the_actual_best_purchase", function()
+		for _, d in ipairs(STRONG) do
+			local hold = shop({ tarot("c_star", { cost = 3 }), tarot("c_saturn", { cost = 4 }) },
+				{ tarot("c_death"), tarot("c_sun") }, 22, 2)
+			ctx.neq(decide(d, hold).type, "SELL_CONSUMABLE", d .. " no churn")
+			local sell = shop({ tarot("c_star", { cost = 4 }), tarot("c_saturn", { cost = 3 }) },
+				{ tarot("c_death"), tarot("c_sun") }, 22, 2)
+			local action = decide(d, sell)
+			ctx.eq(action.type, "SELL_CONSUMABLE", d .. " sells")
+			ctx.eq(action.consumable_ref, "consumable:2", d .. " the weakest held")
+		end
+	end)
+
+	test("interest_breakpoint_cycle_never_sells_buys_sells", function()
+		for _, d in ipairs(STRONG) do
+			local engine = shop({ tarot("c_star", { cost = 3 }), tarot("c_saturn", { cost = 4 }) },
+				{ tarot("c_death"), tarot("c_sun") }, 22, 2)
+			engine.consumeables.config.type = "joker"
+			local sales, buys = 0, 0
+			for _ = 1, 6 do
+				for _, c in ipairs(engine.consumeables.cards) do c.area = engine.consumeables end
+				for _, c in ipairs(engine.G.shop_jokers.cards) do c.area = engine.G.shop_jokers end
+				local action = decide(d, engine)
+				if action.type == "SELL_CONSUMABLE" then
+					local idx = tonumber(action.consumable_ref:match("^consumable:(%d+)$"))
+					local card = table.remove(engine.consumeables.cards, idx)
+					engine.G.GAME.dollars = engine.G.GAME.dollars + card.sell_cost
+					sales = sales + 1
+				elseif action.type == "BUY_ITEM" then
+					local idx = tonumber(action.item_ref:match("^shop:(%d+)$"))
+					local card = table.remove(engine.G.shop_jokers.cards, idx)
+					engine.consumeables.cards[#engine.consumeables.cards + 1] = card
+					engine.G.GAME.dollars = engine.G.GAME.dollars - card.cost
+					buys = buys + 1
+				else
+					break
+				end
+			end
+			ctx.is_true(sales <= 1 and buys <= 1, d .. " no churn sales=" .. sales .. " buys=" .. buys)
+			ctx.eq(engine.G.GAME.dollars, 22, d .. " money preserved")
+		end
+	end)
 end

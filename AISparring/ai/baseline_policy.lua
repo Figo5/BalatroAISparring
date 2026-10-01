@@ -199,6 +199,12 @@ local WORK = 0
 local SHOP_BEST = false
 -- Minimum cards a play needs to score this decision (5 under The Psychic).
 local MIN_CARDS = 0
+-- True only for the exhausted-hand terminal under The Psychic: our own visible
+-- hand holds 1-4 cards, the boss is active, and no certified discard exists.
+-- A five-card play cannot exist at that size, so a certified short play is the
+-- honest way to consume the last hand and let the round move on to its normal
+-- loss. In every other case an undersized play still scores nothing.
+local PSYCHIC_TERMINAL = false
 -- Hand types that score nothing this decision (docs/HAND_HISTORY_DESIGN.md):
 -- under The Eye the types already played this round; under The Mouth every
 -- type but those played. nil when no such boss is active.
@@ -505,10 +511,15 @@ local function play_score(observation, action)
 	end
 	if #cards < MIN_CARDS then
 		-- The Psychic's five-card minimum: a short play scores nothing in game,
-		-- so it must never be chosen -- not even when it is the only play offered
-		-- (docs/CLAUDE_BATCH3_REVIEW.md M1). Returning nil removes it from the
-		-- ranking entirely, so nil (no action) beats an undersized play, and the
-		-- numeric estimate and the category fallback are both skipped.
+		-- so it is normally removed from the ranking entirely (docs/
+		-- CLAUDE_BATCH3_REVIEW.md M1). The one exception is the exhausted-hand
+		-- terminal (PSYCHIC_TERMINAL): a floor below every other score lets the
+		-- last undersized cards be played so the round can end (M-A). It makes
+		-- no scoring claim and is never reachable while a certified discard or a
+		-- five-card play exists (a five-card play needs five cards).
+		if PSYCHIC_TERMINAL then
+			return -1
+		end
 		return nil
 	end
 	if CONF.estimate_plays and PLAY ~= nil then
@@ -2015,6 +2026,23 @@ local function buy_score(observation, action)
 	return score
 end
 
+-- Equal-scored tie-break for BUY_ITEM actions: a consumable purchase with the
+-- higher SLOT_WORTH wins, so a shop offering Star before Saturn does not cause a
+-- wrongly-bought weaker Tarot (final review L-b). It is only
+-- consulted when two actions already score exactly the same AND both expose a
+-- worth, so no comparison between different kinds or price/economy/reserve/
+-- edition outcomes can change; anything else keeps the established id order.
+local function buy_tiebreak(observation, action)
+	local shop = observation.shop
+	if type(action) ~= "table" or action.type ~= "BUY_ITEM" or type(shop) ~= "table" then
+		return nil
+	end
+	local item = find_by_id(shop.items, action.item_ref)
+	if item == nil or item.kind ~= "consumable" then
+		return nil
+	end
+	return SLOT_WORTH[item.center] or 0
+end
 
 -- The best certified Joker purchase this shop decision, by its full buy score
 -- (edition, estimated gain and economy after its own price), or false. Only
@@ -2516,19 +2544,44 @@ local function sell_consumable_score(observation, action)
 		if spend == nil or type(shop) ~= "table" or type(shop.items) ~= "table" then
 			return nil
 		end
+		-- The sale must be for the purchase the same buy ranking (buy_score plus
+		-- the SLOT_WORTH/id tie-break) actually picks among the visible offers,
+		-- and that purchase must strictly improve the held worth. A cheaper
+		-- same-or-worse-worth offer can overtake it once the invisible sale
+		-- proceeds raise the interest bonus, so refuse that churn (final review
+		-- interest churn; docs/BASELINE_POLICY.md).
+		local predicted = nil
+		local predicted_score = nil
+		local predicted_tie = nil
+		local predicted_id = nil
+		local min_nonupgrade_cost = nil
 		for i = 1, #shop.items do
 			local item = shop.items[i]
-			if type(item) == "table" and item.redacted ~= true and item.kind == "consumable" then
-				local center = item.center
-				local w = type(center) == "string" and SLOT_WORTH[center] or nil
-				local cost = item.cost
-				if w ~= nil and w > worth and not harmful_use(observation, center)
-					and type(cost) == "number" and spend - cost >= CONF.reserve then
-					return CONF.leave_shop + CONF.sell_harmful
+			if type(item) == "table" and item.redacted ~= true and item.kind == "consumable"
+				and type(item.id) == "string" and type(item.cost) == "number" and spend - item.cost >= CONF.reserve then
+				local score = buy_score(observation, { type = "BUY_ITEM", item_ref = item.id })
+				if score ~= nil then
+					local w = SLOT_WORTH[item.center] or 0
+					if predicted == nil or score > predicted_score
+						or (score == predicted_score and (w > predicted_tie or (w == predicted_tie and byte_less(item.id, predicted_id)))) then
+						predicted = item
+						predicted_score = score
+						predicted_tie = w
+						predicted_id = item.id
+					end
+					if w <= worth and (min_nonupgrade_cost == nil or item.cost < min_nonupgrade_cost) then
+						min_nonupgrade_cost = item.cost
+					end
 				end
 			end
 		end
-		return nil
+		if predicted == nil or (SLOT_WORTH[predicted.center] or 0) <= worth then
+			return nil
+		end
+		if min_nonupgrade_cost ~= nil and min_nonupgrade_cost < predicted.cost then
+			return nil
+		end
+		return CONF.leave_shop + CONF.sell_harmful
 	end
 	return CONF.leave_shop + CONF.sell_harmful
 end
@@ -2794,6 +2847,7 @@ return function(observation, actions)
 	WORK = 0
 	SHOP_BEST = false
 	MIN_CARDS = 0
+	PSYCHIC_TERMINAL = false
 	EYE_PLAYED = nil
 	MOUTH_ONLY = nil
 	CURRENT_EFF = {}
@@ -2806,6 +2860,25 @@ return function(observation, actions)
 	-- (docs/CLAUDE_BATCH3_REVIEW.md M1).
 	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and match.blind == "bl_psychic" then
 		MIN_CARDS = 5
+	end
+	if MIN_CARDS > 0 then
+		-- The exhausted-hand terminal (M-A): only when our own visible hand is
+		-- 1-4 cards (so no five-card play can exist) and the certified catalogue
+		-- offers no scoreable discard. A missing five-card candidate at five or
+		-- more cards is a malformed catalogue and stays fail-closed.
+		local hand = type(observation.self) == "table" and observation.self.hand or nil
+		local size = type(hand) == "table" and #hand or nil
+		if size ~= nil and size >= 1 and size <= 4 then
+			local discardable = false
+			for i = 1, count do
+				local a = actions[i]
+				if type(a) == "table" and a.type == "DISCARD_CARDS" and discard_score(observation, a) ~= nil then
+					discardable = true
+					break
+				end
+			end
+			PSYCHIC_TERMINAL = not discardable
+		end
 	end
 	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
 	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and type(levels) == "table"
@@ -2854,6 +2927,7 @@ return function(observation, actions)
 	local best = nil
 	local best_score = nil
 	local best_id = nil
+	local best_tie = nil
 	for i = 1, count do
 		local action = actions[i]
 		local score = score_of(observation, action)
@@ -2862,10 +2936,20 @@ return function(observation, actions)
 			if type(id) ~= "string" then
 				id = ""
 			end
-			if best == nil or score > best_score or (score == best_score and byte_less(id, best_id)) then
+			local tie = buy_tiebreak(observation, action)
+			local take = best == nil or score > best_score
+			if not take and score == best_score then
+				if tie ~= nil and best_tie ~= nil then
+					take = tie > best_tie or (tie == best_tie and byte_less(id, best_id))
+				else
+					take = byte_less(id, best_id)
+				end
+			end
+			if take then
 				best = action
 				best_score = score
 				best_id = id
+				best_tie = tie
 			end
 		end
 	end

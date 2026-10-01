@@ -2,7 +2,10 @@
 -- honoured when the AI owns a rule-changing Joker, i.e. on every path that
 -- skips the numeric estimate and falls back to the category ranking: the
 -- RULE_JOKERS early return, the play-work-cap early return, and the category
--- fallback itself (docs/CLAUDE_BATCH3_REVIEW.md M1).
+-- fallback itself (docs/CLAUDE_BATCH3_REVIEW.md M1). The single documented
+-- exception is the exhausted-hand terminal (M-A): a 1-4 card hand under an
+-- active Psychic with no certified discard may play a short card so an already
+-- lost round can end; five or more cards stay fail-closed.
 return function(ctx)
 	local test = ctx.test
 	local Support = ctx.support
@@ -265,6 +268,114 @@ return function(ctx)
 			local frame = psychic_frame(hand, { jokers = { Support.joker("j_splash") } })
 			frame.match.blind = "bl_small"
 			ctx.eq(decides(d, frame), 2, d .. " small blind")
+		end
+	end)
+
+	-- M-A: the exhausted-hand terminal. Under an active Psychic, a 1-4 card hand
+	-- with no certified discard is already lost: vanilla lets a short play be
+	-- made for zero score so the round can end. The catalogue is shaped exactly
+	-- as the engine adapter emits it there: rank groups and singletons only (a
+	-- padded five needs five cards) and no DISCARD_CARDS (none are left).
+	local function terminal_frame(n, opts)
+		opts = opts or {}
+		local ranks = { "Ace", "Ace", "King", "Queen" }
+		local suits = { "Spades", "Hearts", "Clubs", "Diamonds" }
+		local hand = {}
+		for i = 1, n do
+			hand[i] = card(ranks[i], suits[i])
+		end
+		local items = {}
+		for i = 1, n do
+			items[#items + 1] = { type = "PLAY_CARDS", certified = true, card_refs = { "hand:" .. i } }
+		end
+		if n >= 2 then
+			items[#items + 1] = { type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2" } }
+		end
+		local frame = psychic_frame(hand, {
+			items = opts.items or items,
+			jokers = opts.jokers,
+			disabled = opts.disabled,
+		})
+		frame.self.discards = opts.discards or 0
+		return frame
+	end
+
+	test("psychic_terminal_plays_a_short_card_on_an_exhausted_hand", function()
+		for _, d in ipairs(STRONG) do
+			for n = 1, 4 do
+				local result = Support.run(env, d, terminal_frame(n))
+				ctx.is_true(result.ok == true, d .. " n=" .. n .. ":" .. tostring(result.code))
+				ctx.eq(result.action.type, "PLAY_CARDS", d .. " n=" .. n .. " plays")
+				local count = #result.action.card_refs
+				ctx.is_true(count >= 1 and count <= n, d .. " n=" .. n .. " short")
+				local first = result.action.id
+				for _ = 1, 3 do
+					ctx.eq(Support.run(env, d, terminal_frame(n)).action.id, first, d .. " n=" .. n .. " stable")
+				end
+				ctx.vector("psychic_terminal_" .. d .. "_" .. n, tostring(first))
+			end
+		end
+	end)
+
+	test("psychic_terminal_prefers_a_certified_discard", function()
+		-- The terminal escape must never fire while a discard is certified.
+		for _, d in ipairs(STRONG) do
+			local frame = terminal_frame(3, { discards = 2 })
+			frame.certificates.items[#frame.certificates.items + 1] =
+				{ type = "DISCARD_CARDS", certified = true, card_refs = { "hand:1", "hand:2", "hand:3" } }
+			local result = Support.run(env, d, frame)
+			ctx.is_true(result.ok == true, d .. ":" .. tostring(result.code))
+			ctx.eq(result.action.type, "DISCARD_CARDS", d .. " discards over a short play")
+		end
+	end)
+
+	test("psychic_terminal_is_closed_when_five_or_more_cards_remain", function()
+		-- A malformed/incomplete catalogue that omits every five-card play while
+		-- the hand still holds five cards must stay fail-closed.
+		local hand = {
+			card("Ace", "Spades"), card("Ace", "Hearts"), card("King", "Clubs"),
+			card("Queen", "Diamonds"), card("Jack", "Spades"),
+		}
+		local items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1" } },
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2" } },
+		}
+		for _, d in ipairs(STRONG) do
+			local frame = psychic_frame(hand, { items = items })
+			frame.self.discards = 0
+			local result = Support.run(env, d, frame)
+			ctx.truthy(result.ok ~= true and result.code == "policy_no_action", d .. ":" .. tostring(result.code))
+		end
+	end)
+
+	test("psychic_terminal_is_off_for_a_disabled_or_absent_boss", function()
+		for _, d in ipairs(STRONG) do
+			-- Disabled Psychic: the short pair is an ordinary positive play, so
+			-- the pair (not the floor) is chosen.
+			local disabled = terminal_frame(2, { disabled = true })
+			local result = Support.run(env, d, disabled)
+			ctx.is_true(result.ok == true, d .. " disabled:" .. tostring(result.code))
+			ctx.eq(result.action.type, "PLAY_CARDS", d .. " disabled plays")
+			ctx.eq(#result.action.card_refs, 2, d .. " disabled keeps the pair")
+			-- Same shape on an ordinary blind.
+			local small = terminal_frame(2)
+			small.match.blind = "bl_small"
+			local normal = Support.run(env, d, small)
+			ctx.is_true(normal.ok == true, d .. " small:" .. tostring(normal.code))
+			ctx.eq(#normal.action.card_refs, 2, d .. " small keeps the pair")
+		end
+	end)
+
+	test("psychic_terminal_does_not_leak_into_later_decisions", function()
+		for _, d in ipairs(STRONG) do
+			local source = Support.source(env, d)
+			local first = Support.run_source(env, source, terminal_frame(3))
+			ctx.eq(first.action.type, "PLAY_CARDS", d .. " terminal")
+			local normal = terminal_frame(3)
+			normal.match.blind = "bl_small"
+			local second = Support.run_source(env, source, normal)
+			ctx.eq(second.action.type, "PLAY_CARDS", d .. " normal")
+			ctx.eq(#second.action.card_refs, 2, d .. " normal keeps the pair")
 		end
 	end)
 end

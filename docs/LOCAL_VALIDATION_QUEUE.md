@@ -406,8 +406,12 @@ needs the full re-certification and a companion reinstall, not
   - Strength increments the selected rank (Ace wraps to 2); Lovers/Chariot/
     Justice/Devil apply Wild/Steel/Glass/Gold to the selected base card; Star/
     Moon/Sun/World change the selected card to Diamonds/Clubs/Hearts/Spades.
-  - No leftover highlight after a use or after a refused use, and a following
-    `PLAY_CARDS` is unaffected.
+  - No leftover highlight in the **settled** observation after a use or after a
+    refused use, and a following `PLAY_CARDS` is unaffected. The runtime log
+    line is written immediately after dispatch, so a successful
+    `exec_ok` with `highlight=kept` is normal while vanilla's queued cleanup
+    (`card.lua:1150`) is still pending; it is not a settled-cleanup or receipt
+    correlation claim (final review L-a).
   - No following decision is dispatched before `STOP_USE`/animation settlement.
     A broker-accepted result alone does not prove the visual effect or cleanup;
     inspect the on-screen result and settled highlight too.

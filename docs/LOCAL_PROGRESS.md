@@ -151,3 +151,67 @@ and package paths absent, all 27 old installed files still match their receipt,
 main index digest unchanged. Backup source totals ~88.3 MB; available disk space
 ~155 GB. These observations must be repeated at execution time. No native
 action, new certificate, installation or smoke pass is claimed.
+
+## Final-review findings fix (fixture-only, native acceptance pending)
+
+The fresh required Claude Opus 5.5 review of `7f2aced` raised two Medium and
+four Low findings. This batch fixes them without changing the live install:
+
+- **M-A** exhausted-hand Psychic terminal in `baseline_policy.lua`; a certified
+  short play is now the last resort when 1-4 cards remain and no discard is
+  certified, while five-or-more-card incomplete catalogues stay fail-closed.
+  Pre-fix stall reproduced and post-fix behavior recorded under
+  `work/local-ownership/scratch-ma/`.
+- **M-B** `run_native_certification.py` is now an importable, side-effect-free
+  `main` pinned to `--reviewed-commit`; it refuses a wrong HEAD or any source
+  change before/after/at the end, binds every packaged module file to the
+  reviewed Git blobs (canonical blob plus path-filtered `git hash-object`), and
+  refuses an existing attempt directory. `upgrade_reviewed_companion.py` now
+  requires the native report's source commit/package/certificate bindings.
+- **L-a** docs and a queued-callback regression: `exec_ok` with
+  `highlight=kept` is the normal dispatch-time state; settled cleanup is a later
+  observation, not a log claim.
+- **L-b** equal-scored consumable buys prefer higher `SLOT_WORTH`.
+- **L-c** closed-game checks around the before snapshot and the private Mods
+  copy, plus BaseException-scoped rollback (Ctrl-C after rename still restores).
+- **L-d** a requested non-forced stop refuses new match tickets while existing
+  poll/closure/human ownership finishes.
+
+All changes are fixture/test-only evidence; no native certification, install,
+upgrade, save or Mods mutation was performed. Full report:
+`work/local-ownership/deepseek-claude-findings-fix-report.md`.
+
+## Final-review integration corrections (fixture-only)
+
+Astra's independent inspection of the findings batch raised two integration
+corrections and one reproduced price/interest churn; all are closed without
+native or live operations:
+
+- **Portable release tooling.** The real implementations moved to tracked
+  `tools/run_native_certification.py` and `tools/upgrade_reviewed_companion.py`
+  (REPO resolved from `tools/`), and `tests/test_native_certification_runner.py`
+  now loads those tracked modules, so a fresh checkout can run the regression.
+  The fault harness and source-binding controls load the tracked modules too; the
+  `work/local-ownership/` copies are thin compatibility entrypoints only, and all
+  injected fakes act on the real module. Old 7f2aced review evidence stays in
+  `work/local-ownership/prior-claude-7f2-review-evidence/`.
+- **Buy tie-break metadata.** The selector already initialises the tie metadata
+  whenever a candidate becomes best (including a strict score improvement over an
+  earlier `LEAVE_SHOP`), so an equal-scored higher-worth consumable is still
+  chosen; permanent `LEAVE_SHOP`-first permutation coverage was added.
+- **Interest-breakpoint churn.** A full-slot sale is now justified only for the
+  purchase the same `buy_score` and tie-break actually ranks best, that purchase
+  must strictly raise the held `SLOT_WORTH`, and a cheaper same-or-worse-worth
+  offer blocks the sale (its hidden proceeds would flip the next buy). The
+  reproduced sell ? buy ? sell cycle ($22, Death+Sun, Star $3 / Saturn $4) now
+  holds; useful superior purchases, Negative purchases and safety-floor sales are
+  unchanged.
+- **Final package pin.** `tools/run_native_certification.py` now re-verifies the
+  package against the digest captured at packaging time (verified-manifest pin
+  checker), re-runs source binding and re-binds staging to the original expected
+  roles before writing a certificate report.
+
+Evidence: `work/local-ownership/deepseek-interest-churn-fixed.json`,
+`astra-review-residuals-final-fixes.json`, `astra-source-binding-fixtures-final-fixes.json`
+and `deepseek-claude-findings-fix-report.md`. No native certification, install,
+upgrade, save or Mods mutation was performed.

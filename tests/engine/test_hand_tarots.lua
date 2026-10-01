@@ -413,4 +413,27 @@ return function(ctx)
 		is_true(ex2.dispatch(action2) == true, "dispatch survives a malformed logger")
 		eq(engine2.calls[#engine2.calls].name, "use_card")
 	end)
+
+	test("production_log_reports_the_dispatch_time_highlight_then_settles", function()
+		-- L-a: vanilla's `use_card` queues its `unhighlight_all` (card.lua:1150),
+		-- so on success the executor's line legitimately records the highlight
+		-- still present. It must not claim settled cleanup; the later queued
+		-- engine event settles it. This drives the real src/logger.lua bridge.
+		local plog = production_logger(ctx.repo_root)
+		local engine, ex = executor(tarot("c_strength", 2), plain_hand(), plog)
+		-- The default executor fixture leaves the highlight through return,
+		-- exactly like the queued vanilla callback.
+		local action = use_action("queued", { "hand:2" })
+		is_true(ex.validate(action) == true, "validate")
+		is_true(ex.dispatch(action) == true, "dispatch")
+		eq(#plog.lines, 1, "one production line")
+		local line = plog.lines[1]
+		is_true(line:find('code="exec_ok"', 1, true) ~= nil, "outcome: " .. line)
+		is_true(line:find("highlight=kept", 1, true) ~= nil, "dispatch-time state: " .. line)
+		is_true(line:find("highlight=cleared", 1, true) == nil, "no settled-cleanup claim: " .. line)
+		eq(#engine.G.hand.highlighted, 1, "highlight present at log time")
+		-- The later modeled engine event performs the queued cleanup.
+		engine.G.hand:unhighlight_all()
+		eq(#engine.G.hand.highlighted, 0, "settled cleanup")
+	end)
 end

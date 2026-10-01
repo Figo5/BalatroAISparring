@@ -205,7 +205,12 @@ choice" result, so the loop backs off like the empty-action state
 epoch would return the same answer, so the cooldown **doubles while the epoch is
 unchanged** (capped at `no_action_max_backoff`, default 2s) instead of re-asking
 every 0.25s. The throttle resets on observable progress (a committed action, or a
-changed epoch), so a future state change is never stalled.
+changed epoch), so a future state change is never stalled. One real-game case
+that previously produced an unbounded `policy_no_action` was the exhausted hand
+under The Psychic (final review M-A); the policy now plays a certified short card
+in exactly that terminal state (see docs/BASELINE_POLICY.md), so the loop no
+longer idles on it. This backoff is otherwise unchanged and still correct for a
+genuinely empty action set.
 
 ### 2.2 Pacing, timeout, terminal and empty states
 

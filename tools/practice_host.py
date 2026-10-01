@@ -3569,12 +3569,17 @@ class HostDaemon:
         self._thread = None
         self._lock = threading.RLock()
         self._ticket: Optional[MatchTicket] = None
+        # Set when a non-forced stop is requested. A deferred stop (an active
+        # worker or a retained human window) keeps the daemon alive but must not
+        # accept new match tickets (L-d); start() clears it for a clean restart.
+        self._stop_requested = False
 
     # -- lifecycle ------------------------------------------------------------
 
     def start(self) -> dict:
         if self._server is not None:
             raise HostError(CODE_BAD_REQUEST)
+        self._stop_requested = False
         state = discovery_state(self.config, opener=self._opener, enumerator=self._enumerator)
         if state["state"] == "live":
             raise HostError(CODE_ALREADY_RUNNING)
@@ -3690,6 +3695,11 @@ class HostDaemon:
         Job must not be discarded while it is active. The serve loop retries.
         """
         if not force:
+            # L-d: mark the shutdown under the lock before any deferral. A
+            # deferred stop keeps poll/acknowledge and the retained human window
+            # working, but _op_start refuses every new ticket from now on.
+            with self._lock:
+                self._stop_requested = True
             # H-A-1-R: never reach cleanup() while a finished supervisor still holds
             # a pending closure that needs its retained handles.
             if not self._retry_pending_closure():
@@ -3869,6 +3879,11 @@ class HostDaemon:
         # preflight. Two concurrent starts can no longer both be admitted and
         # overwrite each other, which would orphan a retained human window.
         with self._lock:
+            if self._stop_requested:
+                # L-d: a non-forced stop has been requested (possibly deferred for
+                # an active worker or a retained human window). Never admit a new
+                # match ticket; existing poll/acknowledge and closure still run.
+                return {"ok": False, "code": CODE_HOST_CLOSED}
             current = self._ticket
             if current is not None and current.phase in (
                 "accepted",

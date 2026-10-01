@@ -12,6 +12,31 @@ This procedure uses the existing reviewed first-install tool. It does not add an
 6. Place both verified packaged staged companion copies before any measurement receipt. Check manifest/package binding for both roles. Never rebaseline already-measured content.
 7. Run one consolidated P1A, P1B, FULL_P1, CRASH, P2_INITIAL, P2_CLOSE and P2_SILENT certification, with fresh verified backups, exact intended process ownership/role counts and unchanged live-root snapshots. Failures keep their evidence and require investigation. Build/check the new certificate and recheck package binding.
 
+## Tooling
+
+The release orchestration is tracked, importable and inert on import:
+
+- `tools/run_native_certification.py` — the seven-phase certification runner. It
+  requires `--reviewed-commit`, refuses a wrong HEAD or any tracked/untracked
+  change before packaging, after packaging and at the end, binds every packaged
+  module file (excluding only the generated top-level `config.lua`) to the
+  reviewed Git blobs, and refuses an existing attempt directory. At the end it
+  re-verifies the package against the digest captured at packaging time (through
+  the established verified-manifest pin checker), re-runs the source binding and
+  re-binds the staging area to the original immutable expected roles, so a
+  package swapped during the long run refuses before a certificate report is
+  written.
+- `tools/upgrade_reviewed_companion.py` — the upgrade orchestration. It requires
+  `--reviewed-commit` and a native certificate report whose source commit,
+  package digest and certificate ID equal the values this session actually
+  verified.
+
+`work/local-ownership/run_native_certification.py` and
+`work/local-ownership/upgrade_reviewed_companion.py` are thin compatibility
+entrypoints only. Tests and the fault harnesses load the tracked `tools` modules
+directly, so injected fake globals act on the real module rather than a wrapper's
+namespace.
+
 ## Upgrade from an existing installed build
 
 The first-install tool intentionally refuses an existing target. Upgrade orchestration therefore preserves the old target outside Mods first, while retaining all of its safeguards.
