@@ -88,6 +88,13 @@ A separate check proves the unrelated main staged diff remains unchanged
 `opencode-go/deepseek-v4.1-flash` with `high`; no coder was substituted.
 
 This closes the independent supported-suite gate for these code bytes.
+Afterwards, only two runtime-bootstrap comment lines were corrected to remove
+an obsolete sequence-correlation claim. Executable source lines and Lua 5.1
+compiled bytecode are identical; both runtimes compile. LuaJIT dumps vary even
+for identical-source control compilations, so bytecode equality is not claimed
+there. The separate `bootstrap-comment-bytecode-binding.json` records this;
+policy/H1 inputs are unchanged. Subsequent documentation alignment does not
+change runtime behavior.
 **Claude Opus 5.5 High acceptance remains pending its reported 9:40 p.m.
 Eastern September 30 session-limit reset.** No quota error is a review verdict.
 Seven-phase native certification, package-bound pre-install review, fresh

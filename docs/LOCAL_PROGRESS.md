@@ -116,7 +116,38 @@ Separate future Phase H preparation completed in detached checkout
 `C:\Users\ginom\Documents\Codex\2026-09-30\files-pasted-by-the-user-take\work\match-review-prep`
 at `7341727`: bounded read-only Tarot selections/receipt correlation in match
 history. DeepSeek session `ses_f0b0ce930ffej09gQlTpRo675e`; three scoped files.
-Its reported 14/14 tests need independent verification and a separate Claude
-review. Preserve as a normal detached commit after verification, then integrate
-only after the current installed build is certified and smoke-tested. It does
-not establish engine effects or highlight cleanup from broker acceptance.
+Astra reproduced and DeepSeek corrected malformed timestamp/ref and ambiguous
+sequence defects. The final 19/19 suite passes independently; adversarial proof
+and review of the actual old human match preserve all legacy fields and all
+four log/host files. Preserved as detached commit `3745d9c`; a separate Claude
+review is still required. Integrate only after the current installed build is
+certified and smoke-tested. It does not establish engine effects or highlight
+cleanup from broker acceptance, and it changes no installed bytes.
+
+## Final review preparation and upgrade rehearsal
+
+The scratch upgrade helper was fault-injected exclusively against fake Temp
+live roots. Astra exposed archive-evidence and failure-evidence writes skipping
+rollback, then a failed stderr warning skipping it. DeepSeek hardened the helper;
+all 11 expected outcomes now pass with explicit assertions. Independent checks
+prove restored old companion on safe failures, retained new companion after
+successful installation followed by evidence failure, and refusal to restore
+over an existing target, a changed archive or a running game. All other fake
+Mods/saves remain unchanged. Evidence is `upgrade-fault-injection-before.json`,
+`upgrade-fault-injection-after.json` and
+`astra-upgrade-hardening-verification-{before,after}.json` under local-ownership.
+This is fixture evidence; the real upgrade has not run and still needs review.
+
+The final documentation alignment corrects the runtime logger comment: no
+automatic sequence id/correlation is claimed. Only two comment lines changed
+in `runtime_bootstrap.lua` after the full suite; executable source lines and
+Lua 5.1 compiled bytecode remain identical. Both runtimes compile. LuaJIT dumps
+also vary between compilations of identical source in the control experiment,
+so dump equality is not claimed there. Policy/H1 inputs remain unchanged.
+`bootstrap-comment-bytecode-binding.json` records this exact distinction.
+
+Read-only native preflight: every Balatro process closed, fresh feature staging
+and package paths absent, all 27 old installed files still match their receipt,
+main index digest unchanged. Backup source totals ~88.3 MB; available disk space
+~155 GB. These observations must be repeated at execution time. No native
+action, new certificate, installation or smoke pass is claimed.

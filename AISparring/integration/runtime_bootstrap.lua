@@ -920,8 +920,8 @@ function RuntimeBootstrap.factory(ports)
 			clock = clock,
 			stall_timeout = stall_timeout,
 			-- L4: the same trusted logger the decision loop records to, so a
-			-- targeted Tarot use and its executor outcome / cleared highlight are
-			-- bounded, safe and sequence-correlated with the decision log.
+			-- targeted Tarot use logs bounded, safe outcome/highlight diagnostics
+			-- alongside the Python decision records; no sequence id is emitted.
 			logger = decision_logger(),
 		})
 		if executor == nil then

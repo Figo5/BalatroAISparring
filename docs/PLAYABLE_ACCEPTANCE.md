@@ -17,10 +17,13 @@ every file matched. `NATIVE_TEST_PROGRESS.md` retains the chronological receipts
 earlier failures, corrections and full-match evidence.
 
 The newer feature branch contains additional policy, runtime and targeted Tarot
-changes. **Installed evidence does not certify the newer feature branch.** Phase A
-implementation checkpoint `93147b7` closes the reported Psychic, empty-shop Tarot
-sale and whitespace-test cases; targeted Tarot finalization and final review are
-in progress. See `LOCAL_PROGRESS.md` for the current checkpoint and test results.
+changes. **Installed evidence does not certify the newer feature branch.** Code
+checkpoint `e0d5a70` includes the Phase A fixes, targeted Tarot finalization and
+the active-supervisor stop fix. Independent verification passed all 60 supported
+entrypoints and the separate H1 sweep on both runtimes. Fresh Claude acceptance
+is pending the reported September 30, 9:40 p.m. Eastern quota reset; certification,
+installation and actual smoke remain separate required gates. See
+`LOCAL_PROGRESS.md` for the current checkpoint and exact evidence.
 
 ## Acceptance matrix
 
@@ -31,10 +34,10 @@ in progress. See `LOCAL_PROGRESS.md` for the current checkpoint and test results
 | AI Sparring, handoff, lobby and ready/start | User exercised live menu, live exit and both staged roles | Current-build UI smoke, all four difficulty labels, timings and clean handoff |
 | Independent AI actions and public opponent HUD | Full user match and unchanged-live session verdict | Current-build narrowly scoped native smoke; later user playtest |
 | Lives, PvP and match completion | Full user match completed; real local-server protocol tests cover result orientations | Current-build PvP wait/timer and end-screen enemy Jokers (LV-1, LV-2, LV-6) |
-| Fair observation, legal validation and stale-action handling | Reviewed architecture; boundary, property, broker and runtime suites | Fresh final review and complete supported regression run for the actual final diff |
-| Strong-tier Psychic behavior and useful Tarot retention | Independent pre-fix failures; Phase A corrected reproduction and immutable-snapshot checks on both runtimes | Expanded engine-shaped regressions, full suite and Claude acceptance |
-| Targeted Tarots | WIP adapter/broker/executor pipeline and fixture coverage | Finalization, actual final-diff review, then ten-center live validation and cleanup checks |
-| Determinism, bounded search and source size | Both runtimes and prior H1 evidence; original 2M limit retained | Final 8–12 card, 5/8 Joker, held-Tarot stress, source-byte measurement and benchmarks |
+| Fair observation, legal validation and stale-action handling | Reviewed architecture; current boundary, property, broker and runtime suites pass | Fresh final-diff review; actual smoke after installation |
+| Strong-tier Psychic behavior and useful Tarot retention | Pre-fix failures and expanded engine-shaped regressions pass on both runtimes, including the real adapter sale/buy cycle | Claude acceptance and relevant live boss/Tarot checks |
+| Targeted Tarots | Finalized adapter/broker/executor and real production logger fixture path pass | Actual final-diff review, then ten-center live validation and cleanup checks |
+| Determinism, bounded search and source size | Independent H1: 3,600 decisions, peak 1.262M under unchanged 2M, identical runtime actions; maximum source 54,740 bytes; full benchmarks pass | Current-build native large-hand observation; no fixture claim of AI strength |
 | Recovery, disconnects and shutdown | Reviewed host/launcher safety and native ownership contracts | Current native certification, smoke cleanup, and exact open local-queue checks |
 | No save/live-install mutation during isolated practice | Prior seven phases and full-match `changed_roots=[]` verdict | Fresh seven phases for changed companion bytes; no old-certificate reuse |
 | Safe install, uninstall and rollback | Existing reviewed installer and original installation receipts | Fresh verified backups, current accepted package/certificate binding, exact upgrade receipt and independent live hashes |

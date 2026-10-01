@@ -37,10 +37,15 @@ Constraints on all of it:
 - **Done:** blind simulator (`tests/benchmark_blinds.py`) with debuff, Needle
   and Water bosses. Strong tiers clear about 81% of antes 1–4 blinds, Rookie
   58%. Major League ≈ Competitive on blinds.
+- **Done:** run simulator (`tests/benchmark_runs.py`) chains blinds with hand
+  levels, money, interest, Joker/planet purchases, rerolls and reorders. Its
+  shared scoring model and limited shops remain regression evidence, not an
+  actual win rate. Do not redo the already implemented simple-shop simulator.
 - **Next:**
-  - add hand levels and more boss effects to the simulator;
-  - chain blinds with a simple shop (money, interest, Joker buys) into a
-    run-level metric;
+  - extend independent reference coverage for rule-changing Jokers and more
+    boss effects; add close-EV/acceptable-action diagnostics;
+  - represent scaling, vouchers, packs and survival/economy conflicts beyond
+    the existing simple-shop model;
   - Expert discard thresholds are **not** the lever. On 720 paired blinds
     (seed 7, `benchmark_blinds.py --policy ... --paired ...`):
     - `discard_need_pct` 100 or 125: +0.1% (t 0.6) and −1.0% (t −2.3);
@@ -72,8 +77,12 @@ Constraints on all of it:
   - The Psychic: a play of fewer than five cards is estimated at 0 (paired
     A/B +0.7% overall);
   - The Eye and The Mouth (paired A/B +0.7% / +0.4% overall).
-- **Source size:** 51.4 KB after the render-time space squeeze: about 6 KB
-  under `SOURCE_GUARD` and 14 KB under the hard cap.
+- **Current local source size:** maximum 54,740 UTF-8 bytes after the Phase A/B
+  fixes, 2,604 below `SOURCE_GUARD` and 10,796 below the hard cap. The earlier
+  51.4 KB figure predates targeted Tarots. See `LOCAL_H1_VERIFICATION.md`.
+- **Batch 3 M1 fixed locally:** Psychic minimum applies before every fallback,
+  including all five rule-changing Jokers, face-down/Stone/unknown padding and
+  no-five-candidate cases. Both runtimes pass; final Claude/native gates remain.
 - **Open (review Lows):**
   - ~~the adapter offers few five-card plays under The Psychic~~: fixed with
     padded rank groups and two pair (Psychic clears 68% → 74–84% on 19
@@ -91,7 +100,7 @@ Constraints on all of it:
     position (a test checks that a face-down card's hidden rank does not
     change the offer).
 
-## Consumable reasoning (v1 implemented, WIP)
+## Consumable reasoning (v1 implemented, final local acceptance pending)
 
 - **Done:**
   - the ten allowlisted Tarots (Strength, Death, Lovers, Chariot, Justice,
