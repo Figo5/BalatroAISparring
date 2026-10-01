@@ -13,16 +13,24 @@
 
 ## Current work
 
-Current implementation checkpoint: `93147b7` (Phase A fixes, pushed). First DeepSeek Phase A batch is implemented and passes its selected suites; independent face-down padding reproduction passes after a follow-up guard. No-five-candidate exclusion, actual adapter-generated churn tests and Tarot finalization are in progress in a second fresh OpenCode Go `opencode-go/deepseek-v4.1-flash`, High, session. Worker must not touch live files, saves, the main checkout, or Git history. Orchestrator independently verifies before Claude Code `claude-opus-5-5`, High, acceptance review.
+Current implementation checkpoint: `e0d5a70` (pushed), following `7341727`
+(targeted Tarot finalization) and `93147b7` (Phase A). All implementation uses
+OpenCode Go `opencode-go/deepseek-v4.1-flash`, High; exported sessions were
+independently checked. Astra's full supported suite and separate H1 sweep pass.
+Fresh Claude Code `claude-opus-5-5`, High, acceptance is pending the reported
+September 30, 9:40 p.m. Eastern quota reset. Do not substitute a reviewer or
+interpret an API limit as a verdict. Current source is not certified/installed.
 
 ## Remaining sequence
 
-1. Independently verify Phase A; finish Tarot executor checks, bounded safe logging, certificate-cap handling and accurate docs.
-2. Run every locally supported suite on Lua 5.1/LuaJIT; measured large-hand sweep with held Tarots, unchanged 2M limit, source headroom.
-3. Fresh Claude final-diff review; fix and re-review valid findings; commit/push logical reviewed changes.
-4. Consolidated seven-phase native certification with exact current package; no reuse of old certificates for mod changes.
-5. Fresh verified backup, safe certified installation, live smoke test; record package/certificate/install separately.
-6. Leave build ready for human playtesting, then continue isolated repository improvements.
+1. Fresh Claude final-diff review, including the native/upgrade orchestration;
+   fix and re-review valid findings with the required DeepSeek coder.
+2. Consolidated seven-phase native certification with exact current package;
+   no reuse of old certificates for mod changes.
+3. Package-bound final pre-install review, fresh verified backups, scoped
+   upgrade and actual UI smoke; record package/certificate/install separately.
+4. Leave build ready for human playtesting, then integrate/review the separately
+   prepared read-only match-history improvement without changing live bytes.
 
 ## Evidence
 
@@ -69,3 +77,46 @@ Claude integration review before execution.
 A separate DeepSeek High read-only audit is preparing the next small Phase H
 reliability/diagnostics batch. It is scoped to a scratch report and cannot replace
 Claude review. The primary DeepSeek worker is still finalizing targeted Tarots.
+
+## September 30 full regression checkpoint (e0d5a70)
+
+The earlier in-progress notes above are historical. All 60 locally supported
+entrypoints now pass, including policy/engine/reader/runtime/decision/boundary,
+service 63/63, host 123/123, installer 48/48, certificate 65/65, launcher 64/64,
+staging 52/52, actual cross-service transport, native owned-helper contracts,
+the baseline/hard benchmarks and blind/run simulations on both Lua runtimes.
+The 306 tested source/doc/test files remained byte-identical through the run.
+See `LOCAL_REGRESSION_VERIFICATION.md` and ignored `work/local-ownership/full-suite/`.
+
+The independent H1 snapshot passed 1,800 decisions on each runtime (all strong
+tiers, 8–12 cards, 5/8 Jokers, PvP/nonclear, held Death/Strength/Sun). Zero budget
+failures or nondeterministic repeats; cross-runtime action digests agree.
+Maximum cost 1,262,000 instructions under the unchanged 2M limit. Maximum
+rendered source 54,740 bytes: 2,604 below the 57,344 guard. Measured Lua-only
+latency is not a native gameplay promise. See `LOCAL_H1_VERIFICATION.md`.
+
+Independent production logging checks exposed discarded Tarot fields in the
+real logger filter; the follow-up fix uses existing bounded primitives and now
+passes the full policy -> broker -> executor -> logger checks. The host audit
+exposed a nonforced stop deleting an active supervisor's ticket/Job; `e0d5a70`
+defers safely under the shared lock, with pre-fix reproduction and regressions.
+
+The installed 27-file `9f7a8e1` companion remains unchanged. No Balatro launch,
+fresh certification, install or live smoke has occurred in this local session.
+Original main staged diff was independently rechecked unchanged at this point.
+
+Prepared ignored scripts: `work/local-ownership/run_native_certification.py`
+and `upgrade_reviewed_companion.py`. Both require Claude inspection before any
+execution. The final-review prompt is `final-review-task-draft.txt` in that
+directory. Keep reviewed source HEAD clean and fixed through certification and
+upgrade; record review/native evidence in ignored work first, then commit
+documentation after installation. Never kill the user's game.
+
+Separate future Phase H preparation completed in detached checkout
+`C:\Users\ginom\Documents\Codex\2026-09-30\files-pasted-by-the-user-take\work\match-review-prep`
+at `7341727`: bounded read-only Tarot selections/receipt correlation in match
+history. DeepSeek session `ses_f0b0ce930ffej09gQlTpRo675e`; three scoped files.
+Its reported 14/14 tests need independent verification and a separate Claude
+review. Preserve as a normal detached commit after verification, then integrate
+only after the current installed build is certified and smoke-tested. It does
+not establish engine effects or highlight cleanup from broker acceptance.
