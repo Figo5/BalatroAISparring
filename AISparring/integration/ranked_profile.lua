@@ -4,6 +4,7 @@ local Profile = {}
 local VERSIONS = {
 	Steamodded = "1.0.0~BETA-1620a", Lovely = "0.9.0",
 	Multiplayer = "0.5.5", AISparring = "0.1.0-dev",
+	["lovely-compat-aisparring-staging"] = "0.0.0",
 }
 local function get(t, k)
 	if type(t) == "table" then return rawget(t, k) end
@@ -13,7 +14,8 @@ end
 function Profile.approved_mods()
 	-- Actual Multiplayer parse_modlist splits on the LAST dash.
 	return { ["Steamodded-1.0.0~BETA"] = "1620a", Lovely = "0.9.0",
-		Multiplayer = "0.5.5", ["AISparring-0.1.0"] = "dev" }
+		Multiplayer = "0.5.5", ["AISparring-0.1.0"] = "dev",
+		["lovely-compat-aisparring-staging"] = "0.0.0" }
 end
 
 function Profile.inventory_ok(smods, mp)
@@ -24,6 +26,11 @@ function Profile.inventory_ok(smods, mp)
 		if type(mod) ~= "table" or rawget(mod, "version") ~= version
 			or rawget(mod, "disabled") == true or rawget(mod, "can_load") ~= true then return false end
 	end
+	-- Steamodded advertises our certificate-bound, patch-only isolation guard
+	-- as a lovely compatibility mod. Require its real loader metadata too.
+	local guard = rawget(mods, "lovely-compat-aisparring-staging")
+	if rawget(guard, "lovely") ~= true or rawget(guard, "lovely_only") ~= true
+		or rawget(guard, "meta_mod") ~= true then return false end
 	for id, mod in pairs(mods) do
 		if id ~= "Balatro" and VERSIONS[id] == nil then return false end
 	end

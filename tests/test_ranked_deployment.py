@@ -40,6 +40,19 @@ def main():
             'eligible_decks':['b_red'],'decks':{'red':{'center_key':'b_red','name':'Red Deck'}},
             'stakes':{'white':{'index':1,'max_index':8}}}}
     assert rd.validate_report(report,'human','n')
+    # Exact inventory observed from the genuine 1620a/0.9 native preparation.
+    # Missing guard, changed version and unrelated compatibility mods refuse.
+    observed={'AISparring-0.1.0':'dev','Multiplayer':'0.5.5','Steamodded-1.0.0~BETA':'1620a',
+              'lovely-compat-aisparring-staging':'0.0.0','Lovely':'0.9.0'}
+    changed=copy.deepcopy(report);changed['mods']=observed
+    assert rd.validate_report(changed,'human','n')
+    for bad in (dict(observed, **{'lovely-compat-aisparring-staging':'0.0.1'}),
+                {k:v for k,v in observed.items() if k!='lovely-compat-aisparring-staging'},
+                dict(observed, **{'lovely-compat-unreviewed':'0.0.0'})):
+        changed=copy.deepcopy(report);changed['mods']=bad
+        try:rd.validate_report(changed,'human','n')
+        except RuntimeError as e:assert str(e)=='ranked_preparation_inventory'
+        else:raise AssertionError('native inventory control accepted')
     for key in rd.REQUIRED:
         for value in (False,None,1,'true'):
             changed=copy.deepcopy(report);changed[key]=value

@@ -18,7 +18,8 @@ READY = 'ranked-profile-ready.json'
 REQUIRED = ('release_mode', 'debug_disabled', 'animations_normal', 'handy_disabled',
             'content_unlocked', 'unlock_check', 'advertised_unlocked', 'game_speed_ok', 'tutorial_ready')
 APPROVED = {'Steamodded-1.0.0~BETA': '1620a', 'Lovely': '0.9.0',
-            'Multiplayer': '0.5.5', 'AISparring-0.1.0': 'dev'}
+            'Multiplayer': '0.5.5', 'AISparring-0.1.0': 'dev',
+            'lovely-compat-aisparring-staging': '0.0.0'}
 
 def pins():
     return json.loads(PINS.read_text(encoding='utf-8'))

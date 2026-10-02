@@ -8,6 +8,7 @@ local profile = assert(loadfile(PROFILE_PATH))()
 local mods = {
  Steamodded={version='1.0.0~BETA-1620a',can_load=true},Lovely={version='0.9.0',can_load=true},
  Multiplayer={version='0.5.5',can_load=true},AISparring={version='0.1.0-dev',can_load=true},Balatro={version='1.0.1o'},
+ ['lovely-compat-aisparring-staging']={version='0.0.0',can_load=true,lovely=true,lovely_only=true,meta_mod=true},
 }
 local smods = {booted=true,Mods=mods,stake_from_index=function(i)
  return ({'stake_white','stake_red','stake_green','stake_black','stake_blue','stake_purple','stake_orange','stake_gold'})[i]
@@ -17,6 +18,12 @@ local G = {DEBUG=false,SETTINGS={profile=1,GAMESPEED=1,tutorial_complete=true},P
  j_test={unlocked=true},j_demo={demo=true}}, P_BLINDS={a={unlocked=true}},P_TAGS={a={unlocked=true}}}
 local mp={INTEGRATIONS={Preview=false},DECK={MAX_STAKE=0},get_cocktail_decks=function()return {'b_red','b_blue'}end}
 assert(profile.inventory_ok(smods,mp)==true)
+local guard=mods['lovely-compat-aisparring-staging']
+guard.version='0.0.1';assert(profile.inventory_ok(smods,mp)==false);guard.version='0.0.0'
+guard.lovely_only=false;assert(profile.inventory_ok(smods,mp)==false);guard.lovely_only=true
+mods['lovely-compat-aisparring-staging']=nil;assert(profile.inventory_ok(smods,mp)==false)
+mods['lovely-compat-aisparring-staging']=guard
+assert(profile.approved_mods()['lovely-compat-aisparring-staging']=='0.0.0')
 assert(profile.content_unlocked(G)==true)
 local facts=profile.facts(G,smods,mp,true)
 assert(facts.debug_disabled==true and facts.animations_normal==true and facts.handy_disabled==true)
