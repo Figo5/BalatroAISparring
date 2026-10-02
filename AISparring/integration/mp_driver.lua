@@ -1139,7 +1139,12 @@ function MPDriver.factory(ports)
 			allowed[ranked_config.LOBBY_ORDER[i]] = true
 		end
 		for key in next, config do
-			if type(key) ~= "string" or allowed[key] ~= true then
+			-- The pinned action_lobby_options receives the complete JSON packet
+			-- and stores its transport action alongside the options. It is not a
+			-- rule. Accept only this exact envelope value, retaining rejection of
+			-- every unknown option and every other action value.
+			local envelope = key == "action" and rawget(config, key) == "lobbyOptions"
+			if type(key) ~= "string" or (allowed[key] ~= true and not envelope) then
 				return nil, CODE.BAD_DIGEST
 			end
 		end

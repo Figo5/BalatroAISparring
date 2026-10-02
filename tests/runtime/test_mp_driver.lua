@@ -967,6 +967,23 @@ return function(ctx)
 		ctx.is_true(driver.ranked_config_digest() ~= nil, "clearing the override restores the digest")
 	end)
 
+	test("ranked_digest_accepts_only_the_pinned_lobby_options_envelope", function()
+		local parity = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs, ranked_config = parity })
+		local baseline = driver.ranked_config_digest()
+		ctx.is_true(type(baseline) == "string")
+		MP.LOBBY.config.action = "lobbyOptions"
+		ctx.eq(driver.ranked_config_digest(), baseline, "transport envelope preserves the rules digest")
+		MP.LOBBY.config.action = "startGame"
+		ctx.eq(driver.ranked_config_digest(), nil, "an unrelated action is refused")
+		MP.LOBBY.config.action = true
+		ctx.eq(driver.ranked_config_digest(), nil, "an invalid action type is refused")
+		MP.LOBBY.config.action = "lobbyOptions"
+		MP.LOBBY.config.injected_rule = true
+		ctx.eq(driver.ranked_config_digest(), nil, "unknown options remain refused")
+	end)
+
 	test("post_start_selection_state_reads_the_actual_initialized_run", function()
 		local MP, funcs = ranked_engine()
 		local G = { GAME = {} }

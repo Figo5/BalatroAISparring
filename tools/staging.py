@@ -1480,6 +1480,14 @@ def startup_guard_payload(expected_save_dir, expected_mods_dir, patch_id: str = 
         "    error('AISparring staging refused: Mods missing under ' .. ai_expected_save, 0)\n"
         "  end\n"
         "  local ai_mods = os.getenv('LOVELY_MOD_DIR') or ''\n"
+        # Identify the owned role as soon as its native save/Mods guard passes.
+        # This is a display label, not attestation or permission to start.
+        # Minimize and all runtime operations still wait for attestation.
+        "  local ai_role = os.getenv('BALATRO_AI_ROLE')\n"
+        "  if ai_role == 'human' or ai_role == 'ai' then\n"
+        "    local ai_label = ai_role == 'human' and 'Player' or 'AI'\n"
+        "    love.window.setTitle('Balatro AI Sparring - ' .. ai_label .. ' (starting)')\n"
+        "  end\n"
         "  love.filesystem.write('" + PROBE_MAIN + "', 'probe=main\\npatch=' .. ai_patch .. '\\nnonce=' .. ai_nonce .. '\\nsave=' .. tostring(ai_actual) .. '\\nexpected=' .. ai_expected_save .. '\\nmods=' .. ai_expected_mods)\n"
         "  love.filesystem.write('" + PROBE_GUARD + "', 'probe=guard\\npatch=' .. ai_patch .. '\\nnonce=' .. ai_nonce .. '\\nsave=' .. tostring(ai_actual) .. '\\nlovely_mod_dir=' .. ai_mods .. '\\nmods=' .. ai_expected_mods)\n"
         "end"
