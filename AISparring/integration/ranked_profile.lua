@@ -10,6 +10,14 @@ local function get(t, k)
 	if type(t) == "table" then return rawget(t, k) end
 	return nil
 end
+-- Steamodded GameObject instances inherit set/name/mod defaults. Read these
+-- engine-owned fields with the same semantics as Multiplayer, while containing
+-- a faulty metamethod and keeping the resulting primitive checks fail-closed.
+local function object_field(t, k)
+	if type(t) ~= "table" then return nil, false end
+	local ok, value = pcall(function() return t[k] end)
+	return value, ok
+end
 
 function Profile.approved_mods()
 	-- Actual Multiplayer parse_modlist splits on the LAST dash.
@@ -87,10 +95,13 @@ function Profile.catalog(G, smods, mp)
 		if type(key) ~= "string" or seen[key] or key == "b_mp_cocktail" then return nil end
 		seen[key] = true
 		local center = get(centers, key)
-		if get(center, "set") ~= "Back" or type(get(center, "name")) ~= "string" then return nil end
+		local set, set_ok = object_field(center, "set")
+		local name, name_ok = object_field(center, "name")
+		local mod, mod_ok = object_field(center, "mod")
+		if not set_ok or not name_ok or not mod_ok or set ~= "Back" or type(name) ~= "string" then return nil end
 		-- Only base-game Back centers enter this first practice draft.
-		if get(center, "mod") == nil and key:match("^b_[%w_]+$") then
-			decks[key:sub(3)] = { center_key = key, name = rawget(center, "name") }
+		if mod == nil and key:match("^b_[%w_]+$") then
+			decks[key:sub(3)] = { center_key = key, name = name }
 		end
 	end
 	local cap = get(get(mp, "DECK"), "MAX_STAKE")

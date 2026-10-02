@@ -33,6 +33,20 @@ G.SETTINGS.tutorial_complete='true';assert(profile.facts(G,smods,mp,true).tutori
 local catalog=profile.catalog(G,smods,mp)
 assert(catalog.decks.red.center_key=='b_red' and catalog.stakes.green.index==3 and catalog.stakes.gold.index==8)
 assert(catalog.stakes.orange==nil and catalog.stakes.blue==nil)
+-- Actual SMODS.Back instances inherit class fields; Multiplayer includes its
+-- whitelisted backs in the eligible list, although our draft uses base backs.
+local back_class={set='Back',unlocked=true,mod={id='Multiplayer'}}
+G.P_CENTERS.b_mp_test=setmetatable({name='MP Back'}, {__index=back_class})
+mp.get_cocktail_decks=function() return {'b_red','b_blue','b_mp_test'} end
+catalog=assert(profile.catalog(G,smods,mp))
+assert(catalog.decks.red and catalog.decks.blue and catalog.decks.mp_test==nil)
+G.P_CENTERS.b_inherited=setmetatable({}, {__index={set='Back',name='Inherited Base'}})
+mp.get_cocktail_decks=function() return {'b_red','b_inherited'} end
+assert(profile.catalog(G,smods,mp).decks.inherited.name=='Inherited Base')
+G.P_CENTERS.b_inherited=setmetatable({}, {__index=function()error('field fault')end})
+assert(profile.catalog(G,smods,mp)==nil)
+G.P_CENTERS.b_inherited=nil;G.P_CENTERS.b_mp_test=nil
+mp.get_cocktail_decks=function()return {'b_red','b_blue'}end
 G.DEBUG=true;assert(profile.facts(G,smods,mp,true).debug_disabled==false)
 G.DEBUG=nil;assert(profile.facts(G,smods,mp,true).debug_disabled=='unknown');G.DEBUG=false
 G.P_TAGS.a.unlocked=false;assert(profile.content_unlocked(G)==false);G.P_TAGS.a.unlocked=true
@@ -56,6 +70,6 @@ def main():
         runtime=module.LuaRuntime(unpack_returned_tuples=True)
         runtime.globals().PROFILE_PATH=str(REPO/'AISparring/integration/ranked_profile.lua')
         assert runtime.execute(SCRIPT)
-        print(name+': 18 readiness/catalog controls passed; no native unlock claim')
+        print(name+': 21 readiness/catalog controls passed; no native unlock claim')
     return 0
 if __name__=='__main__':sys.exit(main())
