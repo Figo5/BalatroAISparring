@@ -290,6 +290,19 @@ def bound_tool_specs() -> dict:
         "policy_worker": TOOLS_DIR / "policy_worker.py",
         "policy_env": TOOLS_DIR / "lua" / "policy_env.lua",
         "ruleset_contract": TOOLS_DIR / "ruleset_contract.py",
+        # The Ranked effective-config authority and its typed Lua parity module,
+        # plus the reviewed source-pin file, are bound so an edit after
+        # certification cannot silently change the expected configuration.
+        "ranked_effective_config": TOOLS_DIR / "ranked_effective_config.py",
+        # The host-owned attended-draft authority is bound alongside the Ranked
+        # config authority so a post-certification edit cannot silently change
+        # the draft pool/profile/transcript/commitment rules.
+        "ranked_draft": TOOLS_DIR / "ranked_draft.py",
+        "ranked_deployment": TOOLS_DIR / "ranked_deployment.py",
+        "ranked_dependency_pins": staging.REPO_ROOT / "docs" / "RANKED_DEPENDENCIES_V1.json",
+        "ai_ranked_profile": staging.REPO_ROOT / "AISparring" / "integration" / "ranked_profile.lua",
+        "ai_ranked_config": staging.REPO_ROOT / "AISparring" / "integration" / "ranked_config.lua",
+        "ranked_source_pins": staging.REPO_ROOT / "docs" / "RANKED_SOURCE_PINS_V1.json",
         "ai_baseline_policy": ai_dir / "baseline_policy.lua",
         "ai_codec": ai_dir / "codec.lua",
         "ai_observation": ai_dir / "observation.lua",
@@ -301,6 +314,13 @@ BOUND_RUNTIME_SOURCES = (
     "policy_worker",
     "policy_env",
     "ruleset_contract",
+    "ranked_effective_config",
+    "ranked_draft",
+    "ranked_deployment",
+    "ranked_dependency_pins",
+    "ai_ranked_profile",
+    "ai_ranked_config",
+    "ranked_source_pins",
     "ai_baseline_policy",
     "ai_codec",
     "ai_observation",

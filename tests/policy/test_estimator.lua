@@ -582,5 +582,44 @@ return function(ctx)
 			end
 		end
 	end)
+
+	-- M4: Glass is estimated from the projected own-card multiplier, not a
+	-- hardcoded value. The same hand with a projected x1.5 (Standard) and x2
+	-- (vanilla/Major League) must rank the certified plays differently.
+	local function glass_pair_or_trips_frame(xmult)
+		local f = Support.requirement_frame("10", 3, 3)
+		f.self.hand_visible = true
+		f.self.hand = {
+			{ kind = "card", rank = "10", suit = "Hearts", center = "m_glass", xmult = xmult, face_down = false },
+			{ kind = "card", rank = "10", suit = "Spades", center = "c_ten", face_down = false },
+			{ kind = "card", rank = "2", suit = "Clubs", center = "c_two", face_down = false },
+			{ kind = "card", rank = "2", suit = "Diamonds", center = "c_two", face_down = false },
+			{ kind = "card", rank = "2", suit = "Spades", center = "c_two", face_down = false },
+		}
+		f.certificates.items = {
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2" } },
+			{ type = "PLAY_CARDS", certified = true, card_refs = { "hand:3", "hand:4", "hand:5" } },
+			{ type = "DISCARD_CARDS", certified = true, card_refs = { "hand:1" } },
+		}
+		return f
+	end
+
+	test("glass_projection_changes_the_estimated_play", function()
+		local low = Support.run(env, "competitive", glass_pair_or_trips_frame(150))
+		local high = Support.run(env, "competitive", glass_pair_or_trips_frame(200))
+		ctx.is_true(low.ok == true, tostring(low.code))
+		ctx.is_true(high.ok == true, tostring(high.code))
+		ctx.eq(low.action.type, "PLAY_CARDS", "x1.5 still plays")
+		ctx.eq(high.action.type, "PLAY_CARDS", "x2 plays")
+		ctx.eq(table.concat(low.action.card_refs, ","), "hand:3,hand:4,hand:5", "x1.5 prefers three 2s")
+		ctx.eq(table.concat(high.action.card_refs, ","), "hand:1,hand:2", "x2 prefers the glass pair")
+	end)
+
+	test("a_malformed_glass_projection_is_refused_before_policy", function()
+		for _, bad in ipairs({ 1.5, "150", 50, 20000 }) do
+			local handle = env.obs.observe(glass_pair_or_trips_frame(bad))
+			ctx.eq(handle, nil, "malformed xmult " .. tostring(bad))
+		end
+	end)
 end
 

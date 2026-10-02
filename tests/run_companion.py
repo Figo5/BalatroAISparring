@@ -69,6 +69,10 @@ def static_cases() -> list[dict]:
 
     add("companion_host_loopback_only", '"127.0.0.1"' in host_src and "aisparring.practice_host.discovery.v1" in host_src)
     add(
+        "companion_host_passes_dwell_only_for_normal",
+        'descriptors.pacing == "normal"' in host_src and "RuntimeBootstrap.DEFAULT_DWELL" in host_src,
+    )
+    add(
         "companion_host_validates_marker",
         all(token in host_src for token in ("MARKER_HOST", "MARKER_PORT", "MARKER_VERSION", "IDENTITY_STALE", "MARKER_ENUMS")),
     )
@@ -167,6 +171,12 @@ def static_cases() -> list[dict]:
         and "ai/codec.lua" in core_src
         and "codec = codec_module" in core_src
         and "modules.codec = policy" not in core_src,
+    )
+    add(
+        "core_loads_common_ranked_config_for_both_roles",
+        "COMPANION_STAGED_RANKED_CONFIG" in core_src
+        and "integration/ranked_config.lua" in core_src
+        and "ranked_config = ranked_config_module" in core_src,
     )
     add("config_default_disabled", bool(re.search(r"ai_enabled\s*=\s*false", config_src)))
 
@@ -303,7 +313,7 @@ def wire_cases(runtime_factory) -> list:
             "python_practice_host_parses_wire_host_request",
             set(parsed) == {"schema", "op", "auth", "request"}
             and parsed["request"].get("gauntlet") is None
-            and set(parsed["request"]) == practice_host.START_REQUEST_KEYS,
+            and set(parsed["request"]) == practice_host.START_REQUIRED_KEYS,
         )
     except Exception as exc:  # noqa: BLE001
         add("python_practice_host_parses_wire_host_request", False, f"unavailable: {exc}")

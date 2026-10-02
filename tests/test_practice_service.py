@@ -1023,6 +1023,84 @@ def test_ai_receipt_after_human_advances_phase_to_closed():
         assert status["terminal_result"] == "draw" and status["ai_end_received"] is True
 
 
+def _run_end_order(tmp, ai_first, ai_payload, human_payload):
+    service = make_service(tmp)
+    session = Session(service)
+    session.handshake()
+    if ai_first:
+        session.send("ai", "end", ai_payload)
+        session.send("human", "end", human_payload)
+    else:
+        session.send("human", "end", human_payload)
+        session.send("ai", "end", ai_payload)
+    rows = [row for row in read_jsonl(Path(tmp) / "logs" / "summary.jsonl") if row.get("terminal")]
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
+def test_end_counter_schema_is_order_independent():
+    """M2: the final summary's counter schema and the AI loop metrics do not
+    depend on which END arrives first, and the misleading generic loop_* fields
+    are gone while the AI's real metrics survive."""
+    ai_payload = {
+        "result": "ai_win",
+        "rejected": 4,
+        "counter_version": 2,
+        "loop_idle": 7,
+        "loop_transient": 2,
+        "loop_empty": 1,
+        "loop_no_action": 3,
+        "loop_waits": 5,
+    }
+    human_payload = {"result": "human_win", "human_lives": 3, "ai_lives": 0, "ante": 4, "round": 2, "counter_version": 2}
+    with tempfile.TemporaryDirectory() as t1:
+        ai_first = _run_end_order(t1, True, ai_payload, human_payload)
+    with tempfile.TemporaryDirectory() as t2:
+        human_first = _run_end_order(t2, False, ai_payload, human_payload)
+    for row in (ai_first, human_first):
+        assert row["counter_version"] == 2, row
+        assert row["human_counter_version"] == 2, row
+        assert row["ai_counter_version"] == 2, row
+        assert row["ai_rejected"] == 4, row
+        assert row["ai_loop_idle"] == 7 and row["ai_loop_transient"] == 2, row
+        assert row["ai_loop_empty"] == 1 and row["ai_loop_no_action"] == 3 and row["ai_loop_waits"] == 5, row
+        assert "loop_idle" not in row and "loop_waits" not in row, "generic loop_* must not be carried"
+    assert ai_first["counter_version"] == human_first["counter_version"]
+    assert ai_first["ai_loop_idle"] == human_first["ai_loop_idle"]
+    assert ai_first["ai_counter_version"] == human_first["ai_counter_version"]
+
+
+def test_end_refuses_invalid_counter_version_and_metrics():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = make_service(tmp)
+        session = Session(service)
+        session.handshake()
+        for bad in (3, -1, True):
+            response = session.send("ai", "end", {"result": "ai_win", "counter_version": bad})
+            assert response["ok"] is False and response["code"] == ps.CODE_BAD_PAYLOAD, (bad, response)
+        oversized = session.send("ai", "end", {"result": "ai_win", "loop_idle": ps.MAX_SEQUENCE + 1})
+        assert oversized["ok"] is False and oversized["code"] == ps.CODE_BAD_PAYLOAD, oversized
+        accepted = session.send(
+            "ai", "end", {"result": "ai_win", "counter_version": 2, "loop_idle": ps.MAX_SEQUENCE}
+        )
+        assert accepted["ok"] is True and accepted["recorded"] is True, accepted
+
+
+def test_legacy_end_absence_is_counter_version_one():
+    """M2: an older receipt without `counter_version` is recorded as legacy 1,
+    while the service's own final summary still reports the current version 2."""
+    with tempfile.TemporaryDirectory() as tmp:
+        row = _run_end_order(
+            tmp,
+            True,
+            {"result": "ai_win"},  # no counter_version
+            {"result": "human_win"},  # no counter_version
+        )
+    assert row["counter_version"] == 2, row
+    assert row["ai_counter_version"] == 1, row
+    assert row["human_counter_version"] == 1, row
+
+
 def test_abort_and_close_write_exactly_one_terminal_summary():
     with tempfile.TemporaryDirectory() as tmp:
         service = make_service(tmp)
@@ -1181,6 +1259,13 @@ def test_terminal_summary_written_on_ai_receipt_grace_expiry():
             assert terminal_rows and terminal_rows[-1]["reason"] == "human_end"
             assert terminal_rows[-1]["ai_end_received"] is False
             assert terminal_rows[-1]["result_conflict"] is False
+            # L-b: a missing AI receipt leaves the AI provenance unknown (None),
+            # not legacy 1 (which would require a receipt with no version). The
+            # service's own schema version and the human receipt's version stand.
+            assert terminal_rows[-1]["ai_counter_version"] is None
+            assert terminal_rows[-1]["ai_rejected"] is None
+            assert terminal_rows[-1]["counter_version"] == 2
+            assert terminal_rows[-1]["human_counter_version"] == 1
             assert service.terminal_phase == ps.TERMINAL_CLOSED
         finally:
             service.stop()
@@ -1669,6 +1754,354 @@ def test_loopback_socket_roundtrip_and_rate_limit():
                         assert response.get("code") == ps.CODE_RATE_LIMITED, response
         finally:
             service.stop()
+
+
+# -- Ranked effective-config contract (versioned schema) --------------------
+
+PINNED_MOD = REPO / "work" / "reference" / "certified-mods" / "Multiplayer"
+RANKED_PINS = REPO / "docs" / "RANKED_SOURCE_PINS_V1.json"
+
+
+def _ranked_catalog():
+    return {
+        "decks": {
+            "red": {"center_key": "b_red", "name": "Red Deck"},
+            "blue": {"center_key": "b_blue", "name": "Blue Deck"},
+        },
+        "stakes": {"white": {"index": 1, "max_index": 8}},
+    }
+
+
+def _ranked_selection(rec):
+    return {
+        "schema": rec.SELECTION_SCHEMA,
+        "deck_key": "red",
+        "back_key": "b_red",
+        "back_name": "Red Deck",
+        "stake_key": "white",
+        "stake_index": 1,
+    }
+
+
+def _ranked_views():
+    import ranked_effective_config as rec
+
+    verdict = rec.derive_effective_config(
+        PINNED_MOD,
+        RANKED_PINS,
+        cocktail="11H",
+        selection=_ranked_selection(rec),
+        catalog=_ranked_catalog(),
+    )
+    assert verdict["ok"] is True, verdict["problems"]
+    return rec, verdict["host"], verdict["resolved"], verdict["checksum"]
+
+
+def _ranked_kwargs(rec, host, resolved, digest):
+    # A completed host-owned draft commitment is mandatory under the Ranked
+    # schema; the fixture transcript's final option ("red~white") maps to the
+    # fixture selection (Red Deck / White Stake).
+    draft, draft_digest = _ranked_draft_commitment()
+    return dict(
+        expected_config_digest=digest,
+        ruleset_id=rec.RULESET_ID,
+        gamemode=rec.FORCED_GAMEMODE,
+        forced_options=None,
+        config_schema=rec.RANKED_CONFIG_SCHEMA,
+        ranked_host=host,
+        ranked_resolved=resolved,
+        selection=_ranked_selection(rec),
+        ranked_catalog=_ranked_catalog(),
+        draft=draft,
+        expected_draft_digest=draft_digest,
+    )
+
+
+def _readiness_all_true():
+    return {key: True for key in ps.RANKED_READINESS_KEYS}
+
+
+def test_ranked_service_derives_digest_independently():
+    rec, host, resolved, digest = _ranked_views()
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, **_ranked_kwargs(rec, host, resolved, digest))
+        service = make_service_with_config(config)
+        assert service.ruleset_label == "standard_ranked"
+        # A caller digest that does not match the independently re-derived one is
+        # refused at construction, so the service never merely trusts a string.
+        try:
+            make_config(tmp, **{**_ranked_kwargs(rec, host, resolved, digest), "expected_config_digest": "deadbeef"})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a caller digest that did not match its derived view")
+        # A wrong ruleset under the ranked schema is refused.
+        try:
+            make_config(tmp, **{**_ranked_kwargs(rec, host, resolved, digest), "ruleset_id": ps.MAJOR_LEAGUE_RULESET_ID})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a non-ranked ruleset under the ranked schema")
+        # A missing selection/catalog is refused (no fixed-deck fallback).
+        try:
+            make_config(tmp, **{**_ranked_kwargs(rec, host, resolved, digest), "selection": None})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a missing selection")
+        # A Ranked gauntlet is refused pre-ACK (seed derivation not provisioned).
+        try:
+            make_config(
+                tmp,
+                **{**_ranked_kwargs(rec, host, resolved, digest), "mode": "gauntlet", "gauntlet": "Test1"},
+            )
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a Ranked gauntlet")
+        # The setup response carries the explicit schema, the validated selection
+        # and no forced-keyset.
+        session = Session(service)
+        session.service.mark_attested(digest)
+        session.hello("human")
+        setup = session.send("human", "setup", {})
+        assert setup["ok"] is True
+        assert setup["config_schema"] == rec.RANKED_CONFIG_SCHEMA
+        assert setup["ruleset_id"] == rec.RULESET_ID
+        assert setup["forced_options"] == []
+        assert setup["selection"]["back_key"] == "b_red"
+
+
+def test_ranked_service_refuses_bad_typed_host_view():
+    rec, host, resolved, digest = _ranked_views()
+    with tempfile.TemporaryDirectory() as tmp:
+        # A field-type swap in the host view is refused at construction: the
+        # service cannot accept an unvalidated bad typed view as schema evidence.
+        bad_host = dict(host)
+        bad_host["the_order"] = 1
+        try:
+            make_config(tmp, **{**_ranked_kwargs(rec, host, resolved, digest), "ranked_host": bad_host})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a bad typed host view")
+        bad_resolved = dict(resolved)
+        bad_resolved["modifier_list"] = ["ok", ""]
+        try:
+            make_config(tmp, **{**_ranked_kwargs(rec, host, resolved, digest), "ranked_resolved": bad_resolved})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a bad typed resolved view")
+
+
+def test_ranked_service_refuses_view_selection_mismatch():
+    rec, host, resolved, digest = _ranked_views()
+    with tempfile.TemporaryDirectory() as tmp:
+        # The host view's canonical back/stake must equal the validated
+        # selection; a disagreeing view is refused before service setup.
+        bad_host = dict(host)
+        bad_host["back"] = "Blue Deck"
+        try:
+            make_config(tmp, **{**_ranked_kwargs(rec, host, resolved, digest), "ranked_host": bad_host})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a view whose back disagrees with the selection")
+        bad_stake = dict(host)
+        bad_stake["stake"] = 8
+        try:
+            make_config(tmp, **{**_ranked_kwargs(rec, host, resolved, digest), "ranked_host": bad_stake})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a view whose stake disagrees with the selection")
+
+
+def test_ranked_ready_and_start_require_schema_parity():
+    rec, host, resolved, digest = _ranked_views()
+    _, draft_digest = _ranked_draft_commitment()
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, **_ranked_kwargs(rec, host, resolved, digest))
+        service = make_service_with_config(config)
+        session = Session(service)
+        session.service.mark_attested(digest)
+        assert session.hello("human")["ok"]
+        assert session.hello("ai")["ok"]
+        readiness = _readiness_all_true()
+        # A missing schema is refused under the ranked contract.
+        assert session.send("human", "ready", {"config_digest": digest})["code"] == ps.CODE_CONFIG_MISMATCH
+        # A wrong schema is refused.
+        assert session.send("human", "ready", {"config_digest": digest, "config_schema": "other"})["code"] == ps.CODE_CONFIG_MISMATCH
+        # A missing or non-true readiness record is refused.
+        assert session.send(
+            "human", "ready", {"config_digest": digest, "config_schema": rec.RANKED_CONFIG_SCHEMA}
+        )["code"] == ps.CODE_BAD_PAYLOAD
+        bad_readiness = dict(readiness)
+        bad_readiness["unlock_check"] = False
+        assert session.send(
+            "human",
+            "ready",
+            {"config_digest": digest, "config_schema": rec.RANKED_CONFIG_SCHEMA, "readiness": bad_readiness},
+        )["code"] == ps.CODE_NOT_READY
+        # Preview is optional: both raw booleans false with true predicates is OK.
+        disabled_preview = dict(readiness)
+        disabled_preview["advertised_preview"] = False
+        disabled_preview["live_preview"] = False
+        assert session.send(
+            "human",
+            "ready",
+            {
+                "config_digest": digest,
+                "config_schema": rec.RANKED_CONFIG_SCHEMA,
+                "readiness": disabled_preview,
+                "draft_digest": draft_digest,
+            },
+        )["ok"]
+        # Unknown evidence is refused even when predicates are true.
+        unknown_preview = dict(readiness)
+        unknown_preview["advertised_preview"] = "unknown"
+        assert session.send(
+            "ai",
+            "ready",
+            {"config_digest": digest, "config_schema": rec.RANKED_CONFIG_SCHEMA, "readiness": unknown_preview},
+        )["code"] == ps.CODE_NOT_READY
+        # A missing predicate is refused.
+        missing_predicate = dict(readiness)
+        del missing_predicate["preview_consistent"]
+        assert session.send(
+            "ai",
+            "ready",
+            {"config_digest": digest, "config_schema": rec.RANKED_CONFIG_SCHEMA, "readiness": missing_predicate},
+        )["code"] == ps.CODE_BAD_PAYLOAD
+        assert session.send(
+            "human",
+            "ready",
+            {
+                "config_digest": digest,
+                "config_schema": rec.RANKED_CONFIG_SCHEMA,
+                "readiness": readiness,
+                "draft_digest": draft_digest,
+            },
+        )["ok"]
+        assert session.send(
+            "ai",
+            "ready",
+            {
+                "config_digest": digest,
+                "config_schema": rec.RANKED_CONFIG_SCHEMA,
+                "readiness": readiness,
+                "draft_digest": draft_digest,
+            },
+        )["ok"]
+        assert session.start("human")["ok"]
+
+
+def _ranked_draft_commitment(final: str = "red~white"):
+    import ranked_draft as rd
+
+    pool = [
+        "blue~green",
+        "blue~black",
+        "green~green",
+        "green~black",
+        "yellow~green",
+        final,
+        "black~green",
+        "black~black",
+        "yellow~black",
+    ]
+    transcript = [
+        {"actor": "human", "operation": "ban", "option_ids": [pool[0]]},
+        {"actor": "ai", "operation": "ban", "option_ids": [pool[1], pool[2]]},
+        {"actor": "human", "operation": "ban", "option_ids": [pool[3], pool[4]]},
+        {"actor": "ai", "operation": "select", "option_ids": [pool[5]]},
+    ]
+    public = {
+        "schema": rd.DRAFT_SCHEMA,
+        "profile_id": rd.DRAFT_PROFILE_ID,
+        "first_actor": "human",
+        "pool": pool,
+        "transcript": transcript,
+        "final": pool[5],
+    }
+    verdict = rd.commitment_from_public(public)
+    assert verdict["ok"], verdict
+    public["digest"] = verdict["digest"]
+    return public, verdict["digest"]
+
+
+def test_ranked_service_binds_draft_commitment():
+    rec, host, resolved, digest = _ranked_views()
+    draft, draft_digest = _ranked_draft_commitment()
+    kwargs = {
+        **_ranked_kwargs(rec, host, resolved, digest),
+        "draft": draft,
+        "expected_draft_digest": draft_digest,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, **kwargs)
+        service = make_service_with_config(config)
+        session = Session(service)
+        session.service.mark_attested(digest)
+        assert session.hello("human")["ok"]
+        assert session.hello("ai")["ok"]
+        setup = session.send("human", "setup", {})
+        assert setup["ok"] and setup["draft"]["final"] == "red~white"
+        readiness = _readiness_all_true()
+        payload = {"config_digest": digest, "config_schema": rec.RANKED_CONFIG_SCHEMA, "readiness": readiness}
+        # A missing draft digest is refused under a bound draft.
+        assert session.send("human", "ready", payload)["code"] == ps.CODE_BAD_PAYLOAD
+        # A wrong draft digest is refused.
+        assert session.send("human", "ready", {**payload, "draft_digest": "deadbeef"})["code"] == ps.CODE_CONFIG_MISMATCH
+        assert session.send("human", "ready", {**payload, "draft_digest": draft_digest})["ok"]
+        assert session.send("ai", "ready", {**payload, "draft_digest": draft_digest})["ok"]
+        assert session.start("human")["ok"]
+        # A tampered transcript fails at construction.
+        bad = dict(draft)
+        bad["transcript"] = [dict(step) for step in draft["transcript"]]
+        bad["transcript"][0] = {"actor": "human", "operation": "ban", "option_ids": ["blue~black"]}
+        try:
+            make_config(tmp, **{**kwargs, "draft": bad})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a tampered draft transcript")
+        # A final that does not map back to the selection is refused.
+        other, other_digest = _ranked_draft_commitment(final="blue~white")
+        try:
+            make_config(tmp, **{**kwargs, "draft": other, "expected_draft_digest": other_digest})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a draft final that disagrees with the selection")
+
+
+def test_ranked_service_requires_draft_commitment():
+    rec, host, resolved, digest = _ranked_views()
+    base = _ranked_kwargs(rec, host, resolved, digest)
+    with tempfile.TemporaryDirectory() as tmp:
+        # A Ranked config with no completed draft commitment is refused.
+        try:
+            make_config(tmp, **{**base, "draft": None, "expected_draft_digest": None})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a Ranked config with no draft commitment")
+        # A missing dedicated digest is refused even with a valid draft.
+        try:
+            make_config(tmp, **{**base, "expected_draft_digest": None})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a missing dedicated digest")
+        # A wrong dedicated digest is refused.
+        try:
+            make_config(tmp, **{**base, "expected_draft_digest": "deadbeef"})
+        except ps.PracticeError:
+            pass
+        else:
+            raise AssertionError("service accepted a wrong dedicated digest")
 
 
 def _run_all(require_all: bool) -> int:

@@ -7,9 +7,23 @@ const root = path.resolve(process.argv[2] || '../../work/upstream-api-server');
 const load = name => import(pathToFileURL(path.join(root, 'dist', name)).href);
 const {default: Client} = await load('Client.js');
 const {default: Lobby, Lobbies} = await load('Lobby.js');
-const {actionHandlers: A} = await load('actionHandlers.js');
+const actionsModule = await load('actionHandlers.js');
+const A = actionsModule.actionHandlers;
+// The server-internal connection-drop path (`main.ts` socket close -> this
+// handler). Driving it directly is the exact terminal-disconnect causal chain
+// without opening a listener.
+const disconnectFromLobby = actionsModule.disconnectFromLobbyAction;
 let passed = 0;
-function test(name, fn) { fn(); passed++; console.log(`PASS ${name}`); Lobbies.clear(); }
+function releaseLobbies() {
+  for (const lobby of Lobbies.values()) {
+    if (lobby.disconnectedSlot) {
+      clearTimeout(lobby.disconnectedSlot.timer);
+      lobby.disconnectedSlot = null;
+    }
+  }
+  Lobbies.clear();
+}
+function test(name, fn) { fn(); passed++; console.log(`PASS ${name}`); releaseLobbies(); }
 function pair() {
   const humanMessages = [], aiMessages = [];
   const human = new Client({}, msg => humanMessages.push(msg), () => {}, '127.0.0.1');
@@ -88,5 +102,49 @@ test('hide-score option suppresses opponent score before own play', () => {
   hand(p.ai, 999, 3);
   const frame = p.humanMessages.filter(m => m.action === 'enemyInfo').at(-1);
   assert.equal(frame.noScore, true); assert.equal(frame.score, null);
+});
+// Terminal retention causal chain. `Lobby.disconnect` only signals the surviving
+// player when `isInGame` is still true; win/loseGame never clears it, so an AI
+// process terminated after a normal terminal result sends enemyDisconnected
+// (the false reconnect overlay). Keeping the connection retained never calls
+// disconnect, so no such signal is produced.
+function engageTerminal(p) {
+  p.ai.lives = 1;
+  hand(p.human, 100, 1);
+  hand(p.ai, 50, 0);
+  assert.ok(has(p.aiMessages, 'loseGame'));
+  assert.ok(has(p.humanMessages, 'winGame'));
+  assert.equal(p.lobby.isInGame, true, 'win/loseGame must not clear isInGame');
+}
+test('terminal AI drop still signals enemyDisconnected through the real Lobby', () => {
+  const p = pair(); A.startGame(p.human); engageTerminal(p);
+  p.humanMessages.length = 0;
+  disconnectFromLobby(p.ai);
+  const flood = p.humanMessages.filter(m => m.action === 'enemyDisconnected');
+  assert.equal(flood.length, 1, 'terminal AI termination must reproduce the disconnect signal');
+  assert.equal(typeof flood[0].timeout, 'number');
+  assert.equal(p.lobby.isInGame, true);
+});
+test('retained terminal AI connection produces no enemyDisconnected or stopGame', () => {
+  const p = pair(); A.startGame(p.human); engageTerminal(p);
+  p.humanMessages.length = 0;
+  // Retained: the AI process and its socket stay up, so no disconnect is sent.
+  assert.equal(has(p.humanMessages, 'enemyDisconnected'), false);
+  assert.equal(has(p.humanMessages, 'stopGame'), false);
+});
+test('mid-match AI loss remains a genuine positive control', () => {
+  const p = pair(); A.startGame(p.human);
+  p.humanMessages.length = 0;
+  disconnectFromLobby(p.ai);
+  const flood = p.humanMessages.filter(m => m.action === 'enemyDisconnected');
+  assert.equal(flood.length, 1, 'a real mid-match drop must still signal enemyDisconnected');
+});
+test('server stopGame clears isInGame so a later drop is a plain leave', () => {
+  const p = pair(); A.startGame(p.human); engageTerminal(p);
+  A.stopGame(p.human);
+  assert.equal(p.lobby.isInGame, false);
+  p.humanMessages.length = 0;
+  disconnectFromLobby(p.human);
+  assert.equal(has(p.humanMessages, 'enemyDisconnected'), false);
 });
 console.log(`PASS ${passed} upstream server contracts; no game runtime or listener started`);

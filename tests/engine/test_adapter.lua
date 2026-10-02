@@ -279,6 +279,99 @@ return function(ctx)
 		is_true(plain.opponent ~= nil and plain.opponent.hands == 3, "visible hands were hidden")
 	end)
 
+	test("masked_opponent_score_never_moves_the_epoch_or_leaks", function()
+		local function pvp(opts)
+			opts.info_received = true
+			opts.enemy_lives = opts.enemy_lives == nil and 4 or opts.enemy_lives
+			opts.hide_score = true
+			opts.hands_played = 0
+			opts.blind_pvp = true
+			return support.engine(opts)
+		end
+
+		local engine = pvp({ score_text = "123" })
+		local pipeline = support.pipeline(bundle, engine, {})
+		local first = pipeline.adapter.step()
+		is_true(first ~= nil, "first step")
+		local first_handle = bundle.reader.capture(first.runtime, first.ui_view)
+		is_true(first_handle ~= nil, "first capture")
+		local first_plain = bundle.obs.export(first_handle)
+		is_true(first_plain.opponent == nil or first_plain.opponent.displayed_score == nil,
+			"masked score leaked into the observation")
+
+		engine.MP.GAME.enemy.score_text = "999999"
+		local second = pipeline.adapter.step()
+		is_true(second ~= nil, "second step")
+		eq(second.epoch, first.epoch, "a different masked score must not move the epoch")
+		local second_handle = bundle.reader.capture(second.runtime, second.ui_view)
+		is_true(second_handle ~= nil, "second capture")
+		local second_plain = bundle.obs.export(second_handle)
+		is_true(second_plain.opponent == nil or second_plain.opponent.displayed_score == nil,
+			"masked score leaked into the second observation")
+
+		-- The AI's own first hand of the blind lifts the mask.
+		engine.G.GAME.current_round.hands_played = 1
+		local third = pipeline.adapter.step()
+		is_true(third ~= nil, "third step")
+		is_true(third.epoch ~= first.epoch, "the score becomes visible after the own first hand")
+		local third_handle = bundle.reader.capture(third.runtime, third.ui_view)
+		is_true(third_handle ~= nil, "third capture")
+		eq(bundle.obs.export(third_handle).opponent.displayed_score, "999999",
+			"the unmasked score must project the current value")
+	end)
+
+	test("visible_opponent_score_still_moves_the_epoch", function()
+		local engine = support.engine({
+			info_received = true,
+			enemy_lives = 4,
+			score_text = "123",
+			hide_score = false,
+			blind_pvp = true,
+			hands_played = 0,
+		})
+		local pipeline = support.pipeline(bundle, engine, {})
+		local first = pipeline.adapter.step()
+		is_true(first ~= nil, "first step")
+		engine.MP.GAME.enemy.score_text = "124"
+		local second = pipeline.adapter.step()
+		is_true(second ~= nil, "second step")
+		is_true(second.epoch ~= first.epoch, "a genuinely visible score change must move the epoch")
+	end)
+
+	test("disabled_opponent_location_is_absent_from_every_surface", function()
+		local engine = support.engine({
+			info_received = true,
+			enemy_lives = 4,
+			enemy_location = "Ante 3 Small Blind",
+			location_disabled = true,
+			hide_score = false,
+		})
+		local pipeline = support.pipeline(bundle, engine, {})
+		local first = pipeline.adapter.step()
+		is_true(first ~= nil, "first step")
+		local first_handle = bundle.reader.capture(first.runtime, first.ui_view)
+		is_true(first_handle ~= nil, "first capture")
+		local first_plain = bundle.obs.export(first_handle)
+		is_true(first_plain.opponent == nil or first_plain.opponent.location == nil,
+			"a disabled opponent location leaked into the observation")
+
+		engine.MP.GAME.enemy.location = "Ante 4 Boss Blind"
+		local second = pipeline.adapter.step()
+		is_true(second ~= nil, "second step")
+		eq(second.epoch, first.epoch, "a disabled location change must not move the epoch")
+	end)
+
+	test("enabled_opponent_location_is_projected", function()
+		local engine = support.engine({
+			info_received = true,
+			enemy_lives = 4,
+			enemy_location = "Ante 3 Small Blind",
+			location_disabled = false,
+		})
+		local _, handle = capture(engine)
+		eq(bundle.obs.export(handle).opponent.location, "Ante 3 Small Blind")
+	end)
+
 	test("sell_consumable_is_certified", function()
 		local engine = support.engine({
 			consumeables = {
@@ -742,6 +835,137 @@ return function(ctx)
 		local sets = discard_sets(support.engine({ state = STATES.SELECTING_HAND, hand = hand }))
 		-- The Ace-low straight draw A-2-3-4 is kept: discard the 9 and 10 only.
 		is_true(contains(sets, "hand:6,hand:7"), table.concat(sets, " | "))
+	end)
+
+	-- M4: the effective OWN-card X-multiplier (Glass) is projected from the
+	-- engine as integer hundredths. Standard reworks Glass to 1.5 (150);
+	-- vanilla/Major League keep 2 (200).
+	test("glass_xmult_projects_the_effective_multiplier", function()
+		local engine = support.engine({
+			state = STATES.SELECTING_HAND,
+			hand = { support.card({ center = "m_glass", rank = "Ace", suit = "Spades", x_mult = 1.5 }) },
+		})
+		local _, handle = capture(engine)
+		local plain = bundle.obs.export(handle)
+		eq(plain.self.hand[1].center, "m_glass")
+		eq(plain.self.hand[1].xmult, 150)
+	end)
+
+	test("glass_xmult_two_projects_and_differs_from_one_point_five", function()
+		local engine = support.engine({
+			state = STATES.SELECTING_HAND,
+			hand = { support.card({ center = "m_glass", rank = "King", suit = "Hearts", x_mult = 2 }) },
+		})
+		local _, handle = capture(engine)
+		eq(bundle.obs.export(handle).self.hand[1].xmult, 200)
+	end)
+
+	test("non_glass_cards_never_project_xmult", function()
+		-- An accidental x_mult on a non-allowlisted center is not projected.
+		local engine = support.engine({
+			state = STATES.SELECTING_HAND,
+			hand = { support.card({ center = "c_ace", rank = "Ace", suit = "Spades", x_mult = 1.5 }) },
+		})
+		local _, handle = capture(engine)
+		eq(bundle.obs.export(handle).self.hand[1].xmult, nil)
+	end)
+
+	test("a_debuffed_glass_card_projects_no_xmult", function()
+		local engine = support.engine({
+			state = STATES.SELECTING_HAND,
+			hand = { support.card({ center = "m_glass", rank = "Ace", suit = "Spades", x_mult = 1.5, debuff = true }) },
+		})
+		local _, handle = capture(engine)
+		eq(bundle.obs.export(handle).self.hand[1].xmult, nil)
+	end)
+
+	local function probe_for(engine)
+		local pipeline = support.pipeline(bundle, engine, {})
+		is_true(pipeline.adapter ~= nil, "adapter factory: " .. tostring(pipeline.adapter_code))
+		return pipeline.adapter.probe()
+	end
+
+	test("probe_reports_supported_phases", function()
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND })).phase, "PLAY_HAND")
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND, blind_pvp = true })).phase, "MULTIPLAYER_PVP")
+		eq(probe_for(support.engine({ state = STATES.GAME_OVER })).phase, "MATCH_COMPLETE")
+		eq(probe_for(support.engine({ state = STATES.ROUND_EVAL })).phase, "ROUND_EVAL_CONTROL")
+		eq(probe_for(support.engine({ state = STATES.SHOP })).phase, "SHOP")
+		eq(probe_for(support.engine({ state = STATES.BLIND_SELECT })).phase, "BLIND_SELECTION")
+		eq(probe_for(support.engine({ state = STATES.MENU })).ready, false, "unsupported state is not ready")
+	end)
+
+	test("probe_is_not_ready_while_non_actionable", function()
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND })).ready, true)
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND, locked = true })).ready, false)
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND, stop_use = 1 })).ready, false)
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND, play_cards = { support.card({}) } })).ready, false)
+		local paused = support.engine({ state = STATES.SELECTING_HAND })
+		paused.G.SETTINGS.paused = true
+		eq(probe_for(paused).ready, false, "paused is not actionable")
+		local overlay = support.engine({ state = STATES.SELECTING_HAND })
+		overlay.G.OVERLAY_MENU = { id = "overlay" }
+		eq(probe_for(overlay).ready, false, "an open overlay is not actionable")
+	end)
+
+	test("probe_reports_only_the_own_visible_active_timer", function()
+		-- Non-PvP own timer: `timer_started` means the AI's own countdown.
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND, timer = 42, timer_started = true })).timer_remaining, 42)
+		-- No own start flag: no cap, even if an enemy timer is present.
+		local idle = support.engine({ state = STATES.SELECTING_HAND, timer = 42 })
+		idle.MP.GAME.enemy.last_timer = 99
+		eq(probe_for(idle).timer_remaining, nil, "the opponent timer is never read")
+		-- pvp_timer gating: `timer_started` (AI timering the opponent) is NOT the
+		-- AI's own countdown; only `nemesis_timer_started` is.
+		eq(
+			probe_for(support.engine({ state = STATES.SELECTING_HAND, blind_pvp = true, timer = 42, timer_started = true })).timer_remaining,
+			nil
+		)
+		local nemesis = support.engine({ state = STATES.SELECTING_HAND, blind_pvp = true, timer = 42 })
+		nemesis.MP.GAME.nemesis_timer_started = true
+		eq(probe_for(nemesis).timer_remaining, 42)
+	end)
+
+	test("probe_reports_terminal_before_the_overlay_gate", function()
+		-- L-a: a real GAME_OVER/win screen is an overlay, so the terminal phase
+		-- must be resolved before the readiness gate.
+		local engine = support.engine({ state = STATES.GAME_OVER })
+		engine.G.OVERLAY_MENU = { id = "game_over" }
+		local probe = probe_for(engine)
+		eq(probe.ready, true)
+		eq(probe.phase, "MATCH_COMPLETE")
+	end)
+
+	test("probe_splits_soft_and_hard_readiness", function()
+		-- Pause and overlay are soft (thinking-clock gates only).
+		local paused = support.engine({ state = STATES.SELECTING_HAND })
+		paused.G.SETTINGS.paused = true
+		eq(probe_for(paused).block, "soft")
+		local overlay = support.engine({ state = STATES.SELECTING_HAND })
+		overlay.G.OVERLAY_MENU = { id = "info" }
+		eq(probe_for(overlay).block, "soft")
+		-- A hard gate always wins, so an overlay cannot hide a lock or STOP_USE.
+		overlay.G.CONTROLLER.locked = true
+		eq(probe_for(overlay).block, "hard", "an overlay must not hide a lock")
+		local unlocked = support.engine({ state = STATES.SELECTING_HAND, stop_use = 1 })
+		unlocked.G.OVERLAY_MENU = { id = "info" }
+		eq(probe_for(unlocked).block, "hard", "an overlay must not hide STOP_USE")
+		-- Lock and play animation stay hard without any overlay.
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND, locked = true })).block, "hard")
+		eq(probe_for(support.engine({ state = STATES.SELECTING_HAND, play_cards = { support.card({}) } })).block, "hard")
+	end)
+
+	test("reader_refuses_a_glass_xmult_that_disagrees_with_the_engine", function()
+		local engine = support.engine({
+			state = STATES.SELECTING_HAND,
+			hand = { support.card({ center = "m_glass", rank = "Ace", suit = "Spades", x_mult = 1.5 }) },
+		})
+		local result, code = produce(engine)
+		is_true(result ~= nil, tostring(code))
+		result.ui_view.self.cards.hand[1].xmult = 200 -- tampered projection
+		local handle, rcode = bundle.reader.capture(result.runtime, result.ui_view)
+		eq(handle, nil, "a mismatched multiplier is refused")
+		is_true(rcode ~= nil)
 	end)
 end
 

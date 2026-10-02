@@ -57,7 +57,10 @@ local HOST_KEYS = {
 	request = true,
 }
 
-local REQUEST_KEYS = {
+-- The strict `start` request: the seven reviewed keys plus the single added
+-- `draft_id`. The draft ops below carry the host-owned attended draft over the
+-- same authenticated channel before the start request.
+local START_REQUEST_KEYS = {
 	session_id = true,
 	difficulty = true,
 	pacing = true,
@@ -65,7 +68,25 @@ local REQUEST_KEYS = {
 	gauntlet = true,
 	live_pid = true,
 	live_create_time = true,
+	draft_id = true,
 }
+
+local DRAFT_BEGIN_REQUEST_KEYS = {
+	difficulty = true,
+	pacing = true,
+	mode = true,
+	gauntlet = true,
+}
+
+local DRAFT_ACTION_REQUEST_KEYS = {
+	draft_id = true,
+	expected_revision = true,
+	request_id = true,
+	operation = true,
+	option_ids = true,
+}
+
+local DRAFT_ID_REQUEST_KEYS = { draft_id = true }
 
 local function is_plain(value)
 	return type(value) == "table" and getmetatable(value) == nil
@@ -171,9 +192,148 @@ function WireJson.factory(base)
 			.. ',"observation":' .. payload .. '}'
 	end
 
-	-- Exact practice-host request envelope. `gauntlet` is optional in the input
-	-- table but always emitted: a string label in gauntlet mode, literal null
-	-- otherwise.
+	-- Exact `start` request body. `gauntlet` and `draft_id` are optional in the
+	-- input table: `gauntlet` is always emitted (literal null when absent) and
+	-- `draft_id` is emitted only when present.
+	local function host_start_body(request)
+		local has_gauntlet = rawget(request, "gauntlet") ~= nil
+		local has_draft = rawget(request, "draft_id") ~= nil
+		local expected = 6 + (has_gauntlet and 1 or 0) + (has_draft and 1 or 0)
+		local count = key_count(request, START_REQUEST_KEYS)
+		if count == nil or count ~= expected then
+			return nil
+		end
+		if type(rawget(request, "session_id")) ~= "string"
+			or type(rawget(request, "difficulty")) ~= "string"
+			or type(rawget(request, "pacing")) ~= "string"
+			or type(rawget(request, "mode")) ~= "string" then
+			return nil
+		end
+		if not is_int(rawget(request, "live_pid")) then
+			return nil
+		end
+		local create_time = rawget(request, "live_create_time")
+		if type(create_time) ~= "number" or create_time ~= create_time then
+			return nil
+		end
+		local gauntlet = rawget(request, "gauntlet")
+		if gauntlet ~= nil and type(gauntlet) ~= "string" then
+			return nil
+		end
+		local draft_id = rawget(request, "draft_id")
+		if draft_id ~= nil and type(draft_id) ~= "string" then
+			return nil
+		end
+		local session_id = value_text(request.session_id)
+		local difficulty = value_text(request.difficulty)
+		local pacing = value_text(request.pacing)
+		local mode = value_text(request.mode)
+		local label = value_text(gauntlet)
+		local live_pid = value_text(request.live_pid)
+		local live_create_time = value_text(create_time)
+		if session_id == nil or difficulty == nil or pacing == nil or mode == nil
+			or label == nil or live_pid == nil or live_create_time == nil then
+			return nil
+		end
+		local body = '{"session_id":' .. session_id
+			.. ',"difficulty":' .. difficulty
+			.. ',"pacing":' .. pacing
+			.. ',"mode":' .. mode
+			.. ',"gauntlet":' .. label
+			.. ',"live_pid":' .. live_pid
+			.. ',"live_create_time":' .. live_create_time
+		if draft_id ~= nil then
+			local draft_text = value_text(draft_id)
+			if draft_text == nil then
+				return nil
+			end
+			body = body .. ',"draft_id":' .. draft_text
+		end
+		return body .. '}'
+	end
+
+	local function host_draft_begin_body(request)
+		local count = key_count(request, DRAFT_BEGIN_REQUEST_KEYS)
+		if count == nil or count < 3 or count > 4 then
+			return nil
+		end
+		if rawget(request, "gauntlet") == nil and count ~= 3 then
+			return nil
+		end
+		if type(rawget(request, "difficulty")) ~= "string"
+			or type(rawget(request, "pacing")) ~= "string"
+			or type(rawget(request, "mode")) ~= "string" then
+			return nil
+		end
+		local gauntlet = rawget(request, "gauntlet")
+		if gauntlet ~= nil and type(gauntlet) ~= "string" then
+			return nil
+		end
+		local difficulty = value_text(request.difficulty)
+		local pacing = value_text(request.pacing)
+		local mode = value_text(request.mode)
+		local label = value_text(gauntlet)
+		if difficulty == nil or pacing == nil or mode == nil or label == nil then
+			return nil
+		end
+		return '{"difficulty":' .. difficulty
+			.. ',"pacing":' .. pacing
+			.. ',"mode":' .. mode
+			.. ',"gauntlet":' .. label .. '}'
+	end
+
+	local function host_draft_action_body(request)
+		if key_count(request, DRAFT_ACTION_REQUEST_KEYS) ~= 5 then
+			return nil
+		end
+		if type(rawget(request, "draft_id")) ~= "string"
+			or type(rawget(request, "request_id")) ~= "string"
+			or type(rawget(request, "operation")) ~= "string" then
+			return nil
+		end
+		if not is_int(rawget(request, "expected_revision")) then
+			return nil
+		end
+		local options = rawget(request, "option_ids")
+		if type(options) ~= "table" or next(options) == nil then
+			return nil
+		end
+		for i = 1, #options do
+			if type(options[i]) ~= "string" then
+				return nil
+			end
+		end
+		local draft_text = value_text(request.draft_id)
+		local request_text = value_text(request.request_id)
+		local operation = value_text(request.operation)
+		local revision = value_text(request.expected_revision)
+		local options_text = value_text(options)
+		if draft_text == nil or request_text == nil or operation == nil
+			or revision == nil or options_text == nil then
+			return nil
+		end
+		return '{"draft_id":' .. draft_text
+			.. ',"expected_revision":' .. revision
+			.. ',"request_id":' .. request_text
+			.. ',"operation":' .. operation
+			.. ',"option_ids":' .. options_text .. '}'
+	end
+
+	local function host_draft_id_body(request)
+		if key_count(request, DRAFT_ID_REQUEST_KEYS) ~= 1
+			or type(rawget(request, "draft_id")) ~= "string" then
+			return nil
+		end
+		local draft_text = value_text(request.draft_id)
+		if draft_text == nil then
+			return nil
+		end
+		return '{"draft_id":' .. draft_text .. '}'
+	end
+
+	-- Exact practice-host request envelope. Dispatches on the reviewed op to the
+	-- strict body builder; an unknown op or key is refused, never silently
+	-- dropped.
 	function wire.encode_host(envelope)
 		if key_count(envelope, HOST_KEYS) ~= 4 then
 			return nil, CODE.BAD_ENVELOPE
@@ -183,58 +343,33 @@ function WireJson.factory(base)
 			or type(rawget(envelope, "auth")) ~= "string" then
 			return nil, CODE.BAD_VALUE
 		end
+		local op = rawget(envelope, "op")
 		local request = rawget(envelope, "request")
-		local count = key_count(request, REQUEST_KEYS)
-		-- `gauntlet` is optional in the input (absent means null on the wire);
-		-- the other six keys are mandatory.
-		if count == nil or count < 6 or count > 7 then
+		local body
+		if op == "start" then
+			body = host_start_body(request)
+		elseif op == "draft_begin" then
+			body = host_draft_begin_body(request)
+		elseif op == "draft_action" then
+			body = host_draft_action_body(request)
+		elseif op == "draft_cancel" or op == "draft_status" then
+			body = host_draft_id_body(request)
+		else
 			return nil, CODE.BAD_KEY
 		end
-		if rawget(request, "gauntlet") == nil and count ~= 6 then
+		if body == nil then
 			return nil, CODE.BAD_KEY
-		end
-		if type(rawget(request, "session_id")) ~= "string"
-			or type(rawget(request, "difficulty")) ~= "string"
-			or type(rawget(request, "pacing")) ~= "string"
-			or type(rawget(request, "mode")) ~= "string" then
-			return nil, CODE.BAD_VALUE
-		end
-		if not is_int(rawget(request, "live_pid")) then
-			return nil, CODE.BAD_VALUE
-		end
-		local create_time = rawget(request, "live_create_time")
-		if type(create_time) ~= "number" or create_time ~= create_time then
-			return nil, CODE.BAD_VALUE
-		end
-		local gauntlet = rawget(request, "gauntlet")
-		if gauntlet ~= nil and type(gauntlet) ~= "string" then
-			return nil, CODE.BAD_VALUE
 		end
 		local schema = value_text(envelope.schema)
-		local op = value_text(envelope.op)
+		local op_text = value_text(envelope.op)
 		local auth = value_text(envelope.auth)
-		local session_id = value_text(request.session_id)
-		local difficulty = value_text(request.difficulty)
-		local pacing = value_text(request.pacing)
-		local mode = value_text(request.mode)
-		local label = value_text(gauntlet)
-		local live_pid = value_text(request.live_pid)
-		local live_create_time = value_text(create_time)
-		if schema == nil or op == nil or auth == nil or session_id == nil
-			or difficulty == nil or pacing == nil or mode == nil or label == nil
-			or live_pid == nil or live_create_time == nil then
+		if schema == nil or op_text == nil or auth == nil then
 			return nil, CODE.ENCODE_FAILED
 		end
 		return '{"schema":' .. schema
-			.. ',"op":' .. op
+			.. ',"op":' .. op_text
 			.. ',"auth":' .. auth
-			.. ',"request":{"session_id":' .. session_id
-			.. ',"difficulty":' .. difficulty
-			.. ',"pacing":' .. pacing
-			.. ',"mode":' .. mode
-			.. ',"gauntlet":' .. label
-			.. ',"live_pid":' .. live_pid
-			.. ',"live_create_time":' .. live_create_time .. '}}'
+			.. ',"request":' .. body .. '}'
 	end
 
 	function wire.decode(text)

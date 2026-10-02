@@ -391,6 +391,10 @@ local instance, boot_code, bctx = support.bootstrap(ROOT, {
 	encode = encode,
 	decode = decode,
 	logger = { record = function() end },
+	-- This is the explicit legacy Major League fixture: it keeps its own
+	-- registry/digest semantics rather than being relabelled as Ranked.
+	ruleset_key = 'ruleset_mp_majorleague',
+	ruleset_short = 'majorleague',
 })
 assert(instance ~= nil, 'bootstrap: ' .. tostring(boot_code))
 -- The match is not running yet; the ordinary RUN stage is only reached by the

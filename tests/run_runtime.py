@@ -131,6 +131,10 @@ def static_cases() -> list[dict]:
     add("modules_no_forbidden_apis", not offenders, ";".join(offenders))
 
     add(
+        "bootstrap_saturates_summary_metrics",
+        "clamp_metric" in bootstrap_src and "max_sequence" in bootstrap_src,
+    )
+    add(
         "bootstrap_mints_capability_via_registrar",
         "production_factory" in bootstrap_src and "mint" in bootstrap_src and "authorize" in bootstrap_src,
     )
@@ -160,10 +164,20 @@ def static_cases() -> list[dict]:
         all(name in driver_src for name in ("start_lobby", "lobby_ready_up", "lobby_start_game")),
     )
     add(
-        "driver_selects_actual_majorleague_ruleset",
-        "ruleset_mp_majorleague" in driver_src
+        "driver_selects_actual_standard_ranked_ruleset",
+        "ruleset_mp_standard_ranked" in driver_src
         and "forced_gamemode" in driver_src
         and "force_lobby_options" in driver_src,
+    )
+    add(
+        "driver_calls_real_is_disabled_before_create_join",
+        "ruleset_disabled" in driver_src
+        and "NO_DISABLED" in driver_src
+        and "RULESET_DISABLED" in driver_src,
+    )
+    add(
+        "driver_reads_actual_ranked_config",
+        "ranked_config_digest" in driver_src and "LOBBY_ORDER" in driver_src and "_layer_order" in driver_src,
     )
     add(
         "driver_uses_original_force_lobby_options",
@@ -184,7 +198,12 @@ def static_cases() -> list[dict]:
         and "getNemesisDeck" in driver_src
         and "guard_allows" in driver_src,
     )
-    add("driver_no_hardcoded_majorleague_timer", "180" not in driver_code and "timer_base_seconds" not in driver_code)
+    # The Ranked digest reads the actual `timer_base_seconds` field name, so the
+    # check forbids a hardcoded timer *value* (the old 180), not the field read.
+    add(
+        "driver_no_hardcoded_majorleague_timer",
+        "180" not in driver_code and "= 150" not in driver_code and "= 60" not in driver_code,
+    )
     add(
         "driver_resolves_real_ready_element",
         "lobby_menu_start" in driver_src and "get_UIE_by_ID" in driver_src and "resolve_ready_element" in driver_src,

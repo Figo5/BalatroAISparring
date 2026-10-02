@@ -424,6 +424,46 @@ local function copy_current(view, card, view_record)
 	return { kind = spec[1], value = value, step = step }, true
 end
 
+-- M4: the engine's own-card X-multiplier (hundredths), from
+-- `card.ability.x_mult` (copied from `center.config.Xmult`, pinned
+-- card.lua:288), for the strict enhancement allowlist only. `ok` is false only
+-- on an out-of-contract value; `value` is nil when the card carries none.
+local CARD_XMULT_CENTERS = { m_glass = true }
+local CARD_XMULT_MIN = 100
+local CARD_XMULT_MAX = 10000
+
+local function engine_card_xmult(card)
+	local key = rget(rget(rget(card, "config"), "center"), "key")
+	if type(key) ~= "string" or CARD_XMULT_CENTERS[key] ~= true then
+		return nil, true
+	end
+	if rget(card, "debuff") == true then
+		return nil, true
+	end
+	local value = rget(rget(card, "ability"), "x_mult")
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return nil, true
+	end
+	local scaled = math.floor(value * 100 + 0.5)
+	if scaled < CARD_XMULT_MIN or scaled > CARD_XMULT_MAX then
+		return nil, true
+	end
+	return scaled, true
+end
+
+-- Returns the verified hundredths, or nil, false when the view disagrees.
+local function copy_card_xmult(view, card)
+	local projected = rawget(view, "xmult")
+	if not is_int(projected) or projected < CARD_XMULT_MIN or projected > CARD_XMULT_MAX then
+		return nil, false
+	end
+	local engine_value, ok = engine_card_xmult(card)
+	if ok ~= true or engine_value == nil or engine_value ~= projected then
+		return nil, false
+	end
+	return engine_value, true
+end
+
 local function build_entity(record, card, kind)
 	local face_down = rawget(record, "face_down")
 	local facing = rget(card, "facing")
@@ -460,6 +500,19 @@ local function build_entity(record, card, kind)
 				return nil
 			end
 			out.current = current
+		end
+	end
+	-- M4: verify the projected own-card X-multiplier against the engine card.
+	-- The view may declare it only for the strict enhancement allowlist, and the
+	-- recomputed engine value must match exactly; a mismatch or out-of-range
+	-- value rejects the entity (fail closed).
+	if kind == "card" and rawget(record, "xmult") ~= nil then
+		local xmult, ok = copy_card_xmult(record, card)
+		if not ok then
+			return nil
+		end
+		if xmult ~= nil then
+			out.xmult = xmult
 		end
 	end
 	return out

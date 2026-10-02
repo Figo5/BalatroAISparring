@@ -1,0 +1,2517 @@
+{
+  "schema": "aisparring.ranked_dependencies.v1",
+  "previous_winmm_sha256": "6f707d32ff022f155584340bfb19cd93205cb47234e8bec80ccfc747222dfea2",
+  "sources": {
+    "smods": {
+      "path": "work/reference/smods-ranked",
+      "files": {
+        ".gitattributes": {
+          "sha256": "f70d755466b101646b043fe3c62c4f8a39eae827c1a2a303a2d39ccd93f534f8",
+          "size": 18
+        },
+        ".gitignore": {
+          "sha256": "8a21bb1e2421f5ff32a3dd14f359b836f8a979ffbe4afdd86c368dc11a90c83e",
+          "size": 3903
+        },
+        "LICENSE": {
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "size": 35149
+        },
+        "README.md": {
+          "sha256": "ea0a5da7bdd9d3dc2b2fc3a68d6022ff8ee0f42df00d2e915e4103b4cce9f8be",
+          "size": 1802
+        },
+        "assets/1x/default_achievements.png": {
+          "sha256": "0c109cb298def43abc909d6ad48cfccd5bbd3db511155e9a9501712263c81bd0",
+          "size": 2936
+        },
+        "assets/1x/dropdown_arrow.png": {
+          "sha256": "30a03cada4c622aebd1786869f851b540b5ca8c2fdcb7234322e3ca2018ca231",
+          "size": 754
+        },
+        "assets/1x/mod_tags.png": {
+          "sha256": "41b6cf4d5001fc433a446e178d0703a5e5423eace3e33a1c7f3162e2ef0ffbc4",
+          "size": 3034
+        },
+        "assets/2x/default_achievements.png": {
+          "sha256": "d20deaff089bee1d6ba3c55313251dcee9c170c04aee3a493b273dd7925fd554",
+          "size": 3764
+        },
+        "assets/2x/dropdown_arrow.png": {
+          "sha256": "39826879a0991fc2fc9678de35b6b14f577aeb4d275a5dd798b1eb0ab3aa433e",
+          "size": 1578
+        },
+        "assets/2x/mod_tags.png": {
+          "sha256": "2ea6cf5c4fd0c018d4a2f6078a21fce9012f5a07650cde82c2c89b41719e2442",
+          "size": 3928
+        },
+        "assets/cat.png": {
+          "sha256": "0aee0871efcfbe8975ded7d9a5b2820ebdfb89d78bf58908a775aaacd3ffa404",
+          "size": 18937
+        },
+        "assets/sounds/xblindsize.ogg": {
+          "sha256": "970f23b388c0b1b779fb4a7eadf089b0ac324a92e16631a5529944d07533c1cd",
+          "size": 13361
+        },
+        "assets/sounds/xchips.ogg": {
+          "sha256": "6494053167f572c39890454e74d90e97df8dde80791759a1b263ea80f1489be6",
+          "size": 25026
+        },
+        "assets/sounds/xscore.ogg": {
+          "sha256": "cd353ee815ea6e834ad712d2516923d7dfdb62a9172d969aa31ee15222ab7151",
+          "size": 47477
+        },
+        "config.lua": {
+          "sha256": "e84dea86965900c8434ce54db9774438698e3ee4136d29fe10007970ece9d663",
+          "size": 188
+        },
+        "icon.png": {
+          "sha256": "209145d91fddfa8458436d8c07e039d0f7b197bba6791d0d3a2c9b8b30373022",
+          "size": 32481
+        },
+        "libs/https/luajit-curl.lua": {
+          "sha256": "b9af22caea0d48988ed066b987b3b6c1065e78705d45d550052b6c107df287bf",
+          "size": 28739
+        },
+        "libs/https/smods-https.lua": {
+          "sha256": "4bfc94b0615dab6c51c7cd612e7cd4aed3ecb43fe2340631b821892bd2a2d71d",
+          "size": 8478
+        },
+        "libs/json/init.lua": {
+          "sha256": "7d21b64d0d6975e6bcb0bf4ab59bf73f4b6fa811c1a0af6f31e57da4387ce627",
+          "size": 32
+        },
+        "libs/json/json.lua": {
+          "sha256": "a3c0a1693143a6a2aa4a55329733f55f7c1cff28bc3795b66623822c52a4d7a3",
+          "size": 9637
+        },
+        "libs/nativefs/LICENSE": {
+          "sha256": "95f277a0713322f2ba3103d15c52bbae6e2196fa78a3f628f7262779ab0813f7",
+          "size": 1055
+        },
+        "libs/nativefs/README.md": {
+          "sha256": "66798198d705d0acfb2a2d5fe31c7866252e642465cecf1a03c282141161973e",
+          "size": 5388
+        },
+        "libs/nativefs/icon.png": {
+          "sha256": "ce45cb2f880d878d1a1157c24448aabc5ada0250b0a0daf0f5ac5620f61435d9",
+          "size": 141796
+        },
+        "libs/nativefs/init.lua": {
+          "sha256": "f8a404bcf049b9cba91e93d6a80fece1b4c54e489b383bfd7a8bf5023cac143b",
+          "size": 37
+        },
+        "libs/nativefs/manifest.json": {
+          "sha256": "f1ea41e82c41b6491acde97464dd1e299daee8ea7750758d00cd8257056af550",
+          "size": 291
+        },
+        "libs/nativefs/nativefs.lua": {
+          "sha256": "f86a68e388b98786769ed75f796e5f613b544a783ed8ec3262f9d9a2157cbe8a",
+          "size": 18214
+        },
+        "localization/de.lua": {
+          "sha256": "74c370f086e5d2f3cb3e3edb59b1d37c8763a30a194f6e4afb593ce654b6e2e1",
+          "size": 13964
+        },
+        "localization/en-us.lua": {
+          "sha256": "88f7133d970a95a8c7a4a3998d0dc47c9b307e8334c39358023b7f9db4e14130",
+          "size": 12526
+        },
+        "localization/es_419.lua": {
+          "sha256": "efcfe4b69e2056d1fe21fdb4545b461faec46864cb779938734d48bea84c9d43",
+          "size": 13264
+        },
+        "localization/es_ES.lua": {
+          "sha256": "81273cc2942579c54dd334654fa1c8c4a961b82de26374f5908f64484b2d9d75",
+          "size": 13263
+        },
+        "localization/fr.lua": {
+          "sha256": "ceb289046fe0d397395fca601d63db86d97d2faf20b543f73622aa6e492f58c3",
+          "size": 8030
+        },
+        "localization/id.lua": {
+          "sha256": "129e495ce75617767c50c33a325595efdbd1c3965ea74f4eff6e13b5a50076ac",
+          "size": 1018
+        },
+        "localization/it.lua": {
+          "sha256": "22336e2589c06cdc1aa81d6615b862a9784b48620d379809c71a8fbcdb4060c2",
+          "size": 6427
+        },
+        "localization/ja.lua": {
+          "sha256": "2e843d983d5de8060295c16a0261b906a31df48d01828e2780de1b44aa373674",
+          "size": 1098
+        },
+        "localization/ko.lua": {
+          "sha256": "b296e0cf66238d524a8fddf8e9155c29ff667e7ff2265afb393ef18534edebd0",
+          "size": 7449
+        },
+        "localization/nl.lua": {
+          "sha256": "9ba7db8032d8fd54536bba7046b0f1795008b574b022ba55956b0f36f355b4c2",
+          "size": 1032
+        },
+        "localization/pl.lua": {
+          "sha256": "218af4bfd4b3dc8287b832da9828dd29ac4da02f4e6ab8e4f518a8dc4853a36d",
+          "size": 1029
+        },
+        "localization/pt_BR.lua": {
+          "sha256": "2f4712549f16e24571dc384f45caa53a5f85be0bc81f581489a23e49cedb5d80",
+          "size": 5355
+        },
+        "localization/ru.lua": {
+          "sha256": "37c869b8f09dc3b8850fdd4c47fa0747423e35a07b9ab58fd16da6435c4d7504",
+          "size": 9379
+        },
+        "localization/zh_CN.lua": {
+          "sha256": "098a11fbb361c344b2c874e483b2924a2e60a1df3841e139002cf9355d77aee8",
+          "size": 9367
+        },
+        "localization/zh_TW.lua": {
+          "sha256": "3244ce533ccd893c439e2e0a280f54a2e1b17a6aa68870df91a23eab39559239",
+          "size": 1008
+        },
+        "lovely/achievements.toml": {
+          "sha256": "81c19b0829c3a84c66b48f49958a1e51a0edc2ee5a9b0a321afbdd073a9e9229",
+          "size": 3545
+        },
+        "lovely/atlas.toml": {
+          "sha256": "bb4ce44430b62da97ab82095aaa9555fe1b72c9ddb951ed60c1f9fd13185693a",
+          "size": 1135
+        },
+        "lovely/back.toml": {
+          "sha256": "4bf691fae0b0904b9a46381c5ba01c48874e1a083a9fbdd34db678ab64641168",
+          "size": 5584
+        },
+        "lovely/better_calc.toml": {
+          "sha256": "a91ca65e3961a52ccff607a767d6f5416c2ec313051b9c5f32d85003e3f6ebb9",
+          "size": 70343
+        },
+        "lovely/better_calc_fixes.toml": {
+          "sha256": "f8ca92086edbe90c00184ccb536f67e234725c21e8933196e44c6655b3b173d5",
+          "size": 1000
+        },
+        "lovely/blind.toml": {
+          "sha256": "7cf619c72203073de852bc8cda1f5fe37e6656401e3db775512db0027612a995",
+          "size": 19080
+        },
+        "lovely/blind_score_mod.toml": {
+          "sha256": "1216ad454f448fcb9b103f18cff793f362dd24fda7458320d7106ec4dbe759f8",
+          "size": 1400
+        },
+        "lovely/blind_ui.toml": {
+          "sha256": "2f3d0e107034cc25ef711ab9aaa1d970fc0dc26e988d27ae43b24ff04c042b44",
+          "size": 6691
+        },
+        "lovely/booster.toml": {
+          "sha256": "067a1eb21afbd20eb95a9dea44c135ac260385a06e5826be410f80f67c5cedcf",
+          "size": 13205
+        },
+        "lovely/calc_returns.toml": {
+          "sha256": "3c5e52e9205b66a562a98489d68b4a5149a1a3e820209d974323e37887d5593d",
+          "size": 1159
+        },
+        "lovely/calculate_card_added.toml": {
+          "sha256": "a989ae9d40c03e07e53169dcf4530e6ee05ab0d4c915e0cafc151ed2ef34a47a",
+          "size": 754
+        },
+        "lovely/can_calculate.toml": {
+          "sha256": "a4842454a931c2c136784ab4807419c4ad4f281e445da5d2b69a7fba23b752c2",
+          "size": 1425
+        },
+        "lovely/card_limit.toml": {
+          "sha256": "171b527a7fa5d5c58e9fa5b540a03317f54c68a86597cdf29744bf0d019b3d20",
+          "size": 11443
+        },
+        "lovely/cardarea.toml": {
+          "sha256": "f3df7a1d47320ab787827a9e60fab9486682d4632d7e33b5be18786cbbe0c027",
+          "size": 1191
+        },
+        "lovely/cardareas.toml": {
+          "sha256": "619bf7be0ad204bb0dcf505228e8dd10cec11f626257e55051a69c3e47d89532",
+          "size": 1209
+        },
+        "lovely/center.toml": {
+          "sha256": "bf14fcae03010783868636a49438384ee366b5f81687b6641584da9bbd20b57d",
+          "size": 22934
+        },
+        "lovely/challenge.toml": {
+          "sha256": "6e4f64c7c535c38c2dfab29a19ace4b9315169953bae2e8290cd15aa250436cb",
+          "size": 4125
+        },
+        "lovely/compact_cashout.toml": {
+          "sha256": "a72b860995ee6695a5c288b651e6016dc64082dc1ab47b4216d30bb3b17c9a38",
+          "size": 1594
+        },
+        "lovely/compat_0_9_8.toml": {
+          "sha256": "3a9b8cf7511e67866290ae4e46b3bd012505b9d7dee2b5ebd772fa7db1fe9505",
+          "size": 1053
+        },
+        "lovely/core.toml": {
+          "sha256": "e138068508d994610a8eddf89d18c11b766962280f17f2ac84ebc0e986d923da",
+          "size": 491
+        },
+        "lovely/crash_handler.toml": {
+          "sha256": "7646cefd2275bf501258938cbdc9b42f8c9f0a570dc889e0c985382c816fea66",
+          "size": 591
+        },
+        "lovely/create_sprite.toml": {
+          "sha256": "37f25834518c768a613aa14a28703a48fae8ed8e4ce2909b35df9e1fac8a5955",
+          "size": 3153
+        },
+        "lovely/deck_skins.toml": {
+          "sha256": "3ec9ad3b2c61165a6040c185136ccd82996788c950ffa2046ebcba9cd769b3fd",
+          "size": 2745
+        },
+        "lovely/dollar_row.toml": {
+          "sha256": "6ac18fccfdf20f359ba301c023dd9e961d4872bb51dd78bd6992b73e7a397aab",
+          "size": 2896
+        },
+        "lovely/dynatext_conditionals.toml": {
+          "sha256": "a02ea0e8a66de9926c92467c62d54416a35f2e49f67afffd3d72ffdbe6f60206",
+          "size": 2126
+        },
+        "lovely/easings.toml": {
+          "sha256": "e438a77af76bf7e2bf2eb32c6612d2ca021ec0ad0c13d491d8785c2e28844d99",
+          "size": 2101
+        },
+        "lovely/edition.toml": {
+          "sha256": "fea73c5c60925ec957a53a72bc2dac04c79db22be47ac8a4a2c06b652186e424",
+          "size": 7422
+        },
+        "lovely/enhancement.toml": {
+          "sha256": "60a9251830613e5e5720eb4053eca14a1beb5fe0be559ca9e1cb925710291b03",
+          "size": 10260
+        },
+        "lovely/event.toml": {
+          "sha256": "bdc9d27bb5fa451f58d1c28561482cd34f95a4892d55673cd1ef059f4383d657",
+          "size": 1352
+        },
+        "lovely/fixes.toml": {
+          "sha256": "eb436b3abc306eabcc44a627f01a24304a979897e0658da622474a98b7583037",
+          "size": 27491
+        },
+        "lovely/gradient.toml": {
+          "sha256": "9f75a544041225b4a818ee8773b25e2944268915a03e55be5e9acc26b3bd3c6b",
+          "size": 1449
+        },
+        "lovely/hand_limit.toml": {
+          "sha256": "02ba768ce893a7353cad5e92bdd3de973adb9037618425485fdb4deb71ca5116",
+          "size": 2816
+        },
+        "lovely/jimboquip.toml": {
+          "sha256": "6c05452f5055d5f279de31f86cd9d130530a99780ab21bbd47987cfef7c39c78",
+          "size": 5718
+        },
+        "lovely/joker_retriggers.toml": {
+          "sha256": "f1b640c85625202ddda7e90ab9847d711d312557a559d12419472ca8b9f47d81",
+          "size": 6996
+        },
+        "lovely/joker_size.toml": {
+          "sha256": "5d805d65b334d4e714c697ad55e1c22e41805e425c144508a1ba403155a3caff",
+          "size": 2407
+        },
+        "lovely/keybind.toml": {
+          "sha256": "68f1e791d6da2fd5f1a2bea55643dff33196721400485e64955b57670e2bd635",
+          "size": 2191
+        },
+        "lovely/language.toml": {
+          "sha256": "2773d8a3004cb302e83a596edce9416170f9361a308555c4d9b74c6f28a4ce88",
+          "size": 1997
+        },
+        "lovely/libs.toml": {
+          "sha256": "5b33292ee0630e4213128e17e2642a8909249ae29a5fbc9c777d0b6e5d9e7a3d",
+          "size": 607
+        },
+        "lovely/listed_probabilities.toml": {
+          "sha256": "830f8f0c594f260ae442157077bf79bfd0f79ea7f7a66c7209e996c684210cbd",
+          "size": 6299
+        },
+        "lovely/loader.toml": {
+          "sha256": "97bf78621d58fc181006ca1353f1b495efc7b91edf89fdafd965fc74ebf39c10",
+          "size": 518
+        },
+        "lovely/menu.toml": {
+          "sha256": "9f1d7ff06db5c9a6fcc47abf9af02fadb2bbf59a7634de14c030fcc8e7886070",
+          "size": 2179
+        },
+        "lovely/mobile_patches.toml": {
+          "sha256": "c5d3801d76547b34176cf427eb957fb1bd8b46b03a7efdd5b5ed83cf1aa880fe",
+          "size": 2402
+        },
+        "lovely/mod.toml": {
+          "sha256": "ba6be3fa21e7f6bbcd737f735efff8a8de11f7825f9077e6ff7b100637dc64b6",
+          "size": 1755
+        },
+        "lovely/multi_box_descriptions.toml": {
+          "sha256": "c873cfc164903b6ca542cda3230284f7374a033d94e777fd52c7b378b0f75e37",
+          "size": 5727
+        },
+        "lovely/number_formatting.toml": {
+          "sha256": "33c8397fb2b74f2cb6aa5fedd366342ca52c4f0dc38ca02535e123746f5ea182",
+          "size": 4741
+        },
+        "lovely/override_notice.toml": {
+          "sha256": "d354f2c904bc07be161aeb83d5e3b0d67a644f54de278c545884ae788fa29a27",
+          "size": 7936
+        },
+        "lovely/perma_bonus.toml": {
+          "sha256": "52f446866499a0611639dc6d57448a4114fd3ec3da39cf78d3b00dbd76f7bf6f",
+          "size": 13160
+        },
+        "lovely/playing_card.toml": {
+          "sha256": "5cbe7c24838d54aed30d3a390f82082e874031ea0d1d2061b39f5e871430aed7",
+          "size": 11305
+        },
+        "lovely/poker_hand.toml": {
+          "sha256": "7711cff4d8fd80d191c45f1a5e2b3516e4b08200b9aae70f11a616237d188efe",
+          "size": 3329
+        },
+        "lovely/poker_hand_screen.toml": {
+          "sha256": "870bd990c4923c545b7214b09fb19d04baa41146b071d20e594f99cce150d84f",
+          "size": 2101
+        },
+        "lovely/poker_hand_text.toml": {
+          "sha256": "17227070bb082b84d0969ae691eb9c10337a2391d67f61cba8f41006f30ce3e3",
+          "size": 1262
+        },
+        "lovely/pool.toml": {
+          "sha256": "a7ebbb692bf0996611a9bb126dd75aeee8c662df01d0546b8458c4e64942cc11",
+          "size": 6131
+        },
+        "lovely/preflight.toml": {
+          "sha256": "2ab548e372daadc65aca36e075d48e3412be995e7c601af9fd02c211223ef6b9",
+          "size": 1226
+        },
+        "lovely/rarity.toml": {
+          "sha256": "925ddaec115d74df60b2302989c7871811593ba7d345607ffbd8e30f9b8d02e4",
+          "size": 2347
+        },
+        "lovely/scaling.toml": {
+          "sha256": "f80a60d1c32e485fb87f1d0f66800e50b2d2019f6082634deb36141291fee798",
+          "size": 16728
+        },
+        "lovely/score_mod.toml": {
+          "sha256": "17c8949a6d24328177941b04c9e514d513f75ef7a34d8d903dc73c767caaf7e5",
+          "size": 1503
+        },
+        "lovely/scoring_calculation.toml": {
+          "sha256": "13349e45f52f434be16de9f61d99344b924d73b51d908b6aef948d8c6600ccb5",
+          "size": 11316
+        },
+        "lovely/screenshader_rendering.toml": {
+          "sha256": "66af89572646d80ef2408ac1b43251f91454b33c4f2857a40ae9849bea42658b",
+          "size": 2159
+        },
+        "lovely/seal.toml": {
+          "sha256": "3fa2b238558dd5e5d3ba890789b245f91013fee0c97e089ec06b18dd8c0b4f76",
+          "size": 6815
+        },
+        "lovely/shaders.toml": {
+          "sha256": "685d4378eb330c6e71b444895c3f08c2f04162307ab3edf1f1ff089f3133a320",
+          "size": 919
+        },
+        "lovely/shop.toml": {
+          "sha256": "3f9b4b3842bc7ee1afda9b4ab57a533e5f123ead038f0427f0bac0ad14ec54a4",
+          "size": 7329
+        },
+        "lovely/sound.toml": {
+          "sha256": "6d59a9108571f26ca5b61c2e8ac69acd994c5ba0da4680a7c37a3bc97fe43c8a",
+          "size": 5160
+        },
+        "lovely/stake.toml": {
+          "sha256": "e5a6d26092e6ac6354e58d29e99fc4f13bda32dd0e69543e53b4b9bdf2e2d8d3",
+          "size": 10206
+        },
+        "lovely/sticker.toml": {
+          "sha256": "2984440bf4f49808e97df6355d677d2875dfbac80984d904986fd775c0f0c636",
+          "size": 3955
+        },
+        "lovely/tag.toml": {
+          "sha256": "c351aa224692444c64652f0cdca798778d39fad17d0bab9bfed7a44a15e3b9d9",
+          "size": 5092
+        },
+        "lovely/text_effect.toml": {
+          "sha256": "5bc2f4ac0a2405dff5b198c136b0e9e64d8d65015e598a8492886e62731214c1",
+          "size": 5849
+        },
+        "lovely/threads.toml": {
+          "sha256": "41477113e483692fda3cdc4827627ba62a725839457a6b8c3d74a0a98ae5f2d8",
+          "size": 682
+        },
+        "lovely/ui.toml": {
+          "sha256": "424f635e5b334c5405d0c7aeae03b5ac8203c6bdd65d3eb239a1e53bbe943dba",
+          "size": 16861
+        },
+        "lovely/ui_additional_text_props.toml": {
+          "sha256": "e4d85199367f7f3927f546ddeb7601340e1915144afbc169767159abb976b0b6",
+          "size": 10391
+        },
+        "lovely/ui_elements.toml": {
+          "sha256": "8946fcf37861a8c914f91cb1eec37904dbb0feb0d1883f3bc1d1d348dd02a2f1",
+          "size": 12255
+        },
+        "lovely/ui_overflow.toml": {
+          "sha256": "5907ed653ac9e32e60648b8dcef8ab24b2eb9f93cec6816035e11504e0dedceb",
+          "size": 2554
+        },
+        "lovely/weights.toml": {
+          "sha256": "f0b0f7b6f732a16dbf6c888cea1e72bdfc4a295e37cad64d467557817eeb2a7a",
+          "size": 2726
+        },
+        "lsp_def/classes/achievement.lua": {
+          "sha256": "f8e93eb0da0c980d5793b527a8f7b8dd9c327c48e2b6c97903ee0521d95099f4",
+          "size": 3544
+        },
+        "lsp_def/classes/atlas.lua": {
+          "sha256": "4f90760094ad0267a16ba2425cca6164a422cffa9314c448170930c81e211f01",
+          "size": 3347
+        },
+        "lsp_def/classes/back.lua": {
+          "sha256": "0235f5b11a7480774161db5ae3fa0419d5d416ec1ee7ad9a8459b7f7ea6e58d1",
+          "size": 3060
+        },
+        "lsp_def/classes/blind.lua": {
+          "sha256": "c464cf7b3b50bd6886f22c70801102203729ec79e7a65e532b7e9b2d101903e0",
+          "size": 6189
+        },
+        "lsp_def/classes/booster.lua": {
+          "sha256": "7d3e49ba0ed027de9e0fae262bdd0eb9e8a18ff7bc7c4e57cef58c096cd01904",
+          "size": 4565
+        },
+        "lsp_def/classes/center.lua": {
+          "sha256": "619b924e0e8ff845e35c2ded82c0db3f8cf0a0240367375ffeac19f3a90e5798",
+          "size": 8065
+        },
+        "lsp_def/classes/challenge.lua": {
+          "sha256": "8b6670641aba1f4ac7e9a808f9cebb78a993b113037688ef9384101994915071",
+          "size": 4921
+        },
+        "lsp_def/classes/consumable.lua": {
+          "sha256": "02a8460e858e0afdc131d248c93478ab4cc6d3516aa7d1181084dc539342bab6",
+          "size": 4095
+        },
+        "lsp_def/classes/consumable_type.lua": {
+          "sha256": "a1d5d9e99a6ef6c9e4f9178253ba1515ec194e1c91984b648e0bbc492eadf739",
+          "size": 4294
+        },
+        "lsp_def/classes/deck_skin.lua": {
+          "sha256": "582e2e544df7beebfe15ad386b8ea6bfeafee6aeebe4d2960da15a102176fa90",
+          "size": 3421
+        },
+        "lsp_def/classes/draw_step.lua": {
+          "sha256": "06ce7f2383554882aa7b488a590b3ab112ecb96d6449dfe3afd5196229e4ca1a",
+          "size": 3855
+        },
+        "lsp_def/classes/dynatexteffect.lua": {
+          "sha256": "97e6bb47c571c28d255a868e823e73d01d1a5ce44af7790b2f2b84f7a69f693b",
+          "size": 4680
+        },
+        "lsp_def/classes/edition.lua": {
+          "sha256": "2465940752263a5e80555081c157319dfa177b8a9bc79dd9876df6530b0399f3",
+          "size": 6113
+        },
+        "lsp_def/classes/enhancement.lua": {
+          "sha256": "e7b928a11a059e48f0914dc00ad64bc96135d87504437e50cb84a3262d31f8f5",
+          "size": 3834
+        },
+        "lsp_def/classes/font.lua": {
+          "sha256": "bf325bdf2b698345379aeb76bc8477cb9b006a64eb5611965f8b2eb10ced2763",
+          "size": 3515
+        },
+        "lsp_def/classes/game_object.lua": {
+          "sha256": "57de6992239c1976e4e971b9ec9f5dab7fd4c6b1adce97521bd7e08674d9faea",
+          "size": 4555
+        },
+        "lsp_def/classes/gradient.lua": {
+          "sha256": "a2d2a7cc4f9df5dfb63513c293b0c13763d7b13df356c437898097950d25f9a4",
+          "size": 3218
+        },
+        "lsp_def/classes/jimbo_quip.lua": {
+          "sha256": "332f8aafc70057fe62e8963c26e1edf21fd717ecf1802a4fae3ad58fc44db515",
+          "size": 2824
+        },
+        "lsp_def/classes/joker.lua": {
+          "sha256": "e7e786104d52a01c284e8b8a94606368fd72a3055891b288205d5adc2092cd57",
+          "size": 3383
+        },
+        "lsp_def/classes/keybind.lua": {
+          "sha256": "0313942aee16e94b446d10fe981b195a27bb32819434674880a6a3bf87e70880",
+          "size": 3266
+        },
+        "lsp_def/classes/language.lua": {
+          "sha256": "486fb00b8028519c9fe66566ab4327d1ab3ab194eece9adaddeb16790b357c19",
+          "size": 3106
+        },
+        "lsp_def/classes/object_type.lua": {
+          "sha256": "1856f726447eb102533daeb514ff7ad0f4bd187fc5901f6e002f772a66733130",
+          "size": 3298
+        },
+        "lsp_def/classes/poker_hand.lua": {
+          "sha256": "2bd1a81826734230ff5aabc3378a64dfce947d9567d291e7cfdf8ca733f5b2cf",
+          "size": 6903
+        },
+        "lsp_def/classes/rank.lua": {
+          "sha256": "2b416714c2281f9220f531b4feba97e2f91bb30525c229b418fea963f42cf029",
+          "size": 4602
+        },
+        "lsp_def/classes/rarity.lua": {
+          "sha256": "51a70c4109ddd20cebc085ca4b04b1e3ae76a65f2537dcb368ee7e51d1e843e2",
+          "size": 4092
+        },
+        "lsp_def/classes/scoring_calculation.lua": {
+          "sha256": "6c916baa8a07acaa279be521fd658e75e18ab30c8d29143f9f26e5f2d08cce04",
+          "size": 7459
+        },
+        "lsp_def/classes/screenshader.lua": {
+          "sha256": "a37484d6f7182de82407c620ec0f66f118772e9d690482434f65d4720d1e21c5",
+          "size": 3316
+        },
+        "lsp_def/classes/seal.lua": {
+          "sha256": "9f147e7a0885ff869e962ddf12ab413f1dfd9d0707a8ef80aa0cad32841168f6",
+          "size": 5086
+        },
+        "lsp_def/classes/shader.lua": {
+          "sha256": "4dc3ea75bd71531d19b6a6ec70f3bde8ae96bd5fd7fb56db608ff84e8b7d7713",
+          "size": 2962
+        },
+        "lsp_def/classes/sound.lua": {
+          "sha256": "dbb832bd7f2384e49947c24f06f929712c0a36d58a3b15b4022395c6ef93f4d2",
+          "size": 3727
+        },
+        "lsp_def/classes/stake.lua": {
+          "sha256": "ea1207dedab187782b394c8c86731243954b89b9ce68e02215d4396b6f176f0f",
+          "size": 5083
+        },
+        "lsp_def/classes/sticker.lua": {
+          "sha256": "3031f194c8514f78744c947c6798c2d3e0e871bcf4d7a7774c0bd35b32e0962e",
+          "size": 5433
+        },
+        "lsp_def/classes/suit.lua": {
+          "sha256": "e0a5fe5da8a6e3be63dcec3040242ef5586b6b4457c7c503d0a03dc14f11030e",
+          "size": 4113
+        },
+        "lsp_def/classes/tag.lua": {
+          "sha256": "8461bdd41e09cf584444df8d9ed08e30a101d3c484ab5bb27923fbdcf2f6ff74",
+          "size": 3956
+        },
+        "lsp_def/classes/undiscovered_sprite.lua": {
+          "sha256": "d75b02614c3cf8ba680852dbb5fe5fa5ce264f9bb600da5e71ab48f9d37374fd",
+          "size": 3410
+        },
+        "lsp_def/classes/voucher.lua": {
+          "sha256": "47fa0c23d39de581eb8e4f23be66ac6837ee900c6a92d4a2e5d7cce37a6710c3",
+          "size": 3459
+        },
+        "lsp_def/lib/json.lua": {
+          "sha256": "dcd14c7b4bfd48792f9bfb478f0e6774628f1f06c8890bfab5d4f4ac2ecf5112",
+          "size": 369
+        },
+        "lsp_def/lib/lovely.lua": {
+          "sha256": "8923dfa1a66698df904267edce46dfd7723f761d8927830658b2ba354e9bfa4e",
+          "size": 249
+        },
+        "lsp_def/lib/nativefs.lua": {
+          "sha256": "c922e855ed69ef77c9e55e1a38ddde3afcb03e5db6898d9f9ab5b4c743e66a81",
+          "size": 2502
+        },
+        "lsp_def/lib/smods-https.lua": {
+          "sha256": "e7219dc847a312097d32ae0703136caeb9590882c7b8a18a0ddeef23856d5f93",
+          "size": 1921
+        },
+        "lsp_def/smods_core.lua": {
+          "sha256": "20a0b0f5325a051acc3feb81704ed1aa72ce771a02e0bf1d90a2f1f9a482d161",
+          "size": 4353
+        },
+        "lsp_def/ui.lua": {
+          "sha256": "bf2bc3e6cf817bca5e244a6dedf2d14b5c14b06f4b7547b61474645f9b607566",
+          "size": 19622
+        },
+        "lsp_def/utils.lua": {
+          "sha256": "68da08c5a270e350cb208bac4ac9637631fb2b81a16976e9a62418d4a0b1d600",
+          "size": 39319
+        },
+        "lsp_def/vanilla.lua": {
+          "sha256": "2ee28f58a9e9bd78986e0b2aa5bd75cd1687a9f2700fbfee4964ffae1b7b6444",
+          "size": 8484
+        },
+        "manifest.json": {
+          "sha256": "c89d4420535a2afacfab37666e4c3b6bbcf57d3136f7a70467627b4c23e76b09",
+          "size": 233
+        },
+        "release.lua": {
+          "sha256": "e38e8691824ae3d25add252dd10ce18accd1fe74a8d140c14f91cdc594c850fb",
+          "size": 37
+        },
+        "src/card_draw.lua": {
+          "sha256": "01d2536dea6a4554f537714705505fd9997ea59172ac56b950f135aa66db7edc",
+          "size": 24767
+        },
+        "src/compat_0_9_8.lua": {
+          "sha256": "1f662e324616eb6a39bb7d0237b69a3d386b969f1868f1b2d250204bc2ef797a",
+          "size": 18070
+        },
+        "src/core.lua": {
+          "sha256": "1bec04d1c808657844b1610c8dad2237b670f68fd473f59fc00ea6c5359734e8",
+          "size": 1869
+        },
+        "src/crash_handler.lua": {
+          "sha256": "0baed4f8a390af1452014bffca3b34ef64b36b7b065046f3b535ad412225e3dd",
+          "size": 37261
+        },
+        "src/game_object.lua": {
+          "sha256": "162906bfd9c4185fb97477ec64f99cb47e1799b27dc30f2764a3279a73c04d5e",
+          "size": 171381
+        },
+        "src/game_objects/attributes.lua": {
+          "sha256": "49a6d6f8bb07c3f0784777a503fc057313aa10de4ba933a63632fe18942c623a",
+          "size": 12413
+        },
+        "src/index.lua": {
+          "sha256": "c9f63f93ca1e9d75bbae5d1e8ef39307361d9c26a63a7a60bfe10b82114034a2",
+          "size": 1413
+        },
+        "src/overrides.lua": {
+          "sha256": "63d89d4b7096bd20c10bf2f0e8d6491a51c16e9ae5503e36f46bf1057b636c44",
+          "size": 113016
+        },
+        "src/preflight/core.lua": {
+          "sha256": "bddf249973afbaf1e46e7e8050e36a3613db5e5b8a6efb82c3715f822fbf98eb",
+          "size": 5584
+        },
+        "src/preflight/loader.lua": {
+          "sha256": "54c0e14230705559543eb074e2a508ee5a03a240854d101ab86fd7fbf2e8ffdf",
+          "size": 39608
+        },
+        "src/preflight/logging.lua": {
+          "sha256": "93e64527342e9db9040a468ade614589d18da4fef9b55769d7a32686acc431f1",
+          "size": 1912
+        },
+        "src/preflight/main.lua": {
+          "sha256": "9695bf61ab24ad8853a5c35ddd5d6218ef11a299e374c9efafc62eb885f9dc9e",
+          "size": 2795
+        },
+        "src/preflight/sharedUI.lua": {
+          "sha256": "c5b8e51928a692467c368122c6eea8afc3ef013d067425f3aebc802d88008d21",
+          "size": 5926
+        },
+        "src/preflight/sharedUtil.lua": {
+          "sha256": "793d7e7e12cd7f849bfce7274beab0eb3334324cdd444f182b4a329d5469014d",
+          "size": 3298
+        },
+        "src/ui.lua": {
+          "sha256": "f23b3c45417ce97d382a5d47b50f4686f54ff127f3f7ab7793d0d4d92b0a675b",
+          "size": 132293
+        },
+        "src/utils.lua": {
+          "sha256": "b82a9a0713b313c3926716a41885977f8aaaa1618befaf977ac4ff8c2bd02c4c",
+          "size": 172037
+        },
+        "src/utils/weights.lua": {
+          "sha256": "d7a8a2d5e9899bd7f4c1a87070f63f29d0a67a0c2edc61f1ae9d6581cb02ff7f",
+          "size": 19130
+        },
+        "tk_debug_window.py": {
+          "sha256": "8d501f2442d143c3a5ef943eb78e75855c782aeb4dfdce77bf0e3f12eafc1589",
+          "size": 25829
+        },
+        "version.lua": {
+          "sha256": "e38e8691824ae3d25add252dd10ce18accd1fe74a8d140c14f91cdc594c850fb",
+          "size": 37
+        }
+      }
+    },
+    "Multiplayer": {
+      "path": "work/reference/certified-mods/Multiplayer",
+      "files": {
+        ".env.example": {
+          "sha256": "d4a6178d23c210ccc66442d37f6ec8bdf7588750758846a4ffda1dc7d8b34bee",
+          "size": 232
+        },
+        ".gitignore": {
+          "sha256": "21297e7e1bcacbc89965e19fd037b5eccc7468a2357bb5c1ad5134a440de34dd",
+          "size": 118
+        },
+        "CHANGELOG.md": {
+          "sha256": "73265eee12a00a5e755f71acf6e3e516f55a9df0d9527aec936179a44f37af7e",
+          "size": 2122
+        },
+        "CONTRIBUTING.md": {
+          "sha256": "dc3319a9b61a38d0763db58604782b9219344f467d47ee4a6d463e0597d8c429",
+          "size": 4233
+        },
+        "LICENSE.md": {
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "size": 35149
+        },
+        "Multiplayer.json": {
+          "sha256": "e838f6f6a4a7000ad996c3c97281128e232a591dcb3ba7c9d95921df977df55a",
+          "size": 630
+        },
+        "README.md": {
+          "sha256": "e9c010500b7984b3381439356d95a0d1ddf456053e8a1e5c0d867f510c3b94ad",
+          "size": 3345
+        },
+        "agents.md": {
+          "sha256": "d265076eb3c098793ba72af9db8ca4cd771de28753b55fd76a79dcd61fc52df6",
+          "size": 20547
+        },
+        "assets/1x/alt_mp_stakes.png": {
+          "sha256": "f2a9fb90e363ee72fae83a1349743baf31df1f95894d323e796ed2163c1983d5",
+          "size": 4248
+        },
+        "assets/1x/alt_stickers.png": {
+          "sha256": "591c8d5633b2c3ba8590cbac0fd4ed9cf8dad3ba76a835d6578c0ac165357d80",
+          "size": 1554
+        },
+        "assets/1x/b_heidelberg.png": {
+          "sha256": "7d06ecd9b7eec8f03abc83a30774d0738f3af4102edd550590af4b09b5b8e0fd",
+          "size": 1207
+        },
+        "assets/1x/blind_col.png": {
+          "sha256": "6a5f5be8f4541b99934d9494bd1bf630f1bd851e4623cd17c96ff0e00500222e",
+          "size": 105336
+        },
+        "assets/1x/c_asteroid.png": {
+          "sha256": "8c6b144ad08d68b78c0e8fb643fc76513a69908efe60265c4589d8e46edba990",
+          "size": 7052
+        },
+        "assets/1x/c_asteroid_ru.png": {
+          "sha256": "ab57c95097cbc52b5056ca6c371e5b5f323d5694a958710544328d036e0c2b49",
+          "size": 25245
+        },
+        "assets/1x/c_ouija_2.png": {
+          "sha256": "18f630ad5442e58f9b042752dbf2740e33fb616a9e934fae9f05f060245dc410",
+          "size": 1399
+        },
+        "assets/1x/deck_stickers.png": {
+          "sha256": "10ca9e263be3024325a6e89ea68d11328ccfe533dc46b6b8b8eeaf358de72234",
+          "size": 26626
+        },
+        "assets/1x/decks.png": {
+          "sha256": "48990963218fe3bb8e585977183cf9c8bffca966794bbe14d8f99fc0ddf40489",
+          "size": 26999
+        },
+        "assets/1x/ec_jokers_sandbox.png": {
+          "sha256": "0e876ff4a2b44aba45b729531e34780a48e5798aed1e647e62dd36ff1dedb068",
+          "size": 198298
+        },
+        "assets/1x/ec_other_sandbox.png": {
+          "sha256": "5d87d3614f36e499d8bc9b0944b80f2e398a991a5fc66f2965629ff1a6cdbc74",
+          "size": 105377
+        },
+        "assets/1x/j_ERROR_sandbox.png": {
+          "sha256": "2d9f58e95aae342a23be1b228b352384267cc7e8826b735e3d32a6e21d04be5c",
+          "size": 816
+        },
+        "assets/1x/j_baseball_sandbox.png": {
+          "sha256": "1d89cd2fe251c2d479578525f74dad80707fce3060dead04ff10013f1a0fb636",
+          "size": 10868
+        },
+        "assets/1x/j_bloodstone_sandbox.png": {
+          "sha256": "9780402981a5b86d8da04373cb54075ea39956c8afb6762bff066f1ddbb88fbe",
+          "size": 7034
+        },
+        "assets/1x/j_castle_sandbox.png": {
+          "sha256": "d6198bd21172f22f6f79a089ec555f0fc2baf00a3147e22a4bcc23344be96c12",
+          "size": 10214
+        },
+        "assets/1x/j_cloud_9_sandbox.png": {
+          "sha256": "15c556dd041db7faeebe6e36f6a9b77b69011770331169455c88cbf1fcd2c984",
+          "size": 8693
+        },
+        "assets/1x/j_conjoined_joker.png": {
+          "sha256": "7a39f04c3874167080210320cc280698e12fc7dfd12ef74f8b89fc46b794a902",
+          "size": 2922
+        },
+        "assets/1x/j_constellation_sandbox.png": {
+          "sha256": "7d366716c4b19eb47870ed374a1e04fdde1ce8e1ffed29fda4e215c083ad7187",
+          "size": 10737
+        },
+        "assets/1x/j_copycat.png": {
+          "sha256": "b7e19dd7bb7d80c7b05d821071a10702ef3f8128a820e6b2040940b9a1fbfd92",
+          "size": 6721
+        },
+        "assets/1x/j_defensive_joker.png": {
+          "sha256": "a81b51791179b279136a706ec0ae9cc49c3cbebc1cf542736b6dd082d0be55eb",
+          "size": 1968
+        },
+        "assets/1x/j_faceless_sandbox.png": {
+          "sha256": "9554c9b8d626fa90584e617fcbd43719bcbdf53f35a9bb0e407083716c6a2935",
+          "size": 6419
+        },
+        "assets/1x/j_hit_the_road_sandbox.png": {
+          "sha256": "a8193c319c9cef90d09f257fef1ea4551fd1ea38aea58e89111b64bfe3c05137",
+          "size": 11985
+        },
+        "assets/1x/j_idol_sandbox_bw.png": {
+          "sha256": "f2f4d21c5a30e9a70aeb1ad7ccc8d16e1004f79cfb8cc968445b87a296d08647",
+          "size": 2721
+        },
+        "assets/1x/j_idol_sandbox_color.png": {
+          "sha256": "56f65b2c7a3ca234b940fedf526c4d209de0c879c19bfebb629f63f1dcd89932",
+          "size": 5167
+        },
+        "assets/1x/j_juggler_sandbox.png": {
+          "sha256": "aa65c4748775556c62e111169b4a9cbd6bf7120654f6dc0cc66ef0d7f4f34b44",
+          "size": 8537
+        },
+        "assets/1x/j_lets_go_gambling.png": {
+          "sha256": "eb430cc03f5416769716853411419f305792738ddd5f967009a708582b182e6d",
+          "size": 3613
+        },
+        "assets/1x/j_loyalty_card_sandbox.png": {
+          "sha256": "ea6711465bb2d090befacde3ddb40bd4a56a24eb3b8eaeac648ca1e5b6320581",
+          "size": 9949
+        },
+        "assets/1x/j_lucky_cat_sandbox.png": {
+          "sha256": "e9c56dd5eaf7b0370857ea5c30041d2e12de37e218656ddfd5fe040364a0d015",
+          "size": 12501
+        },
+        "assets/1x/j_magnet.png": {
+          "sha256": "892f70e6d5d3ef31334bbd64bd9f77bf619dc542bf850fc209bac3eb29c777e5",
+          "size": 4795
+        },
+        "assets/1x/j_mail_sandbox.png": {
+          "sha256": "a3198e28537672199b8b690764837ae0b429ab7532235b84cfb3cd970081004d",
+          "size": 9128
+        },
+        "assets/1x/j_misprint_sandbox.png": {
+          "sha256": "e1bd14305bcfb84a285c7c421a1378b15f59c06a297c021f87dbfbab109db3d8",
+          "size": 4488
+        },
+        "assets/1x/j_order_sandbox.png": {
+          "sha256": "668758b25638598b2ad1164a66818b8d35bb17df109cce7f51f2837cb7e3bd36",
+          "size": 8611
+        },
+        "assets/1x/j_pacifist.png": {
+          "sha256": "728ceb412639946154e89fdb0c5638c5aecd24c4e87415dc6b4440da4b4d6637",
+          "size": 1985
+        },
+        "assets/1x/j_penny_pincher.png": {
+          "sha256": "c0a738a421c7ea59d57b634ff179926c43f984c439f474dde44b6fd897b625cf",
+          "size": 2295
+        },
+        "assets/1x/j_photograph_sandbox.png": {
+          "sha256": "d198717d2d0fee1fed014f58c76c1c56063d618c50b97188c04b340c51a88266",
+          "size": 10140
+        },
+        "assets/1x/j_pizza.png": {
+          "sha256": "1457f59bd0a75214edc2463fa4d409702cf979f44831395931472a8736de9e74",
+          "size": 3398
+        },
+        "assets/1x/j_ride_the_bus_sandbox.png": {
+          "sha256": "74658c863ec3332c273a0e8f15e67e3698f69a03a193f68f73a765a371e4bee8",
+          "size": 1744
+        },
+        "assets/1x/j_runner_sandbox.png": {
+          "sha256": "0ec113924240fe2a7f78ceb3b4c110da1b89c34e74d966520b4008075df03e2c",
+          "size": 6764
+        },
+        "assets/1x/j_satellite_sandbox.png": {
+          "sha256": "279042a1ac95793787caad0dd1344bb662706b38e82c52376e05413918e7c2bc",
+          "size": 7153
+        },
+        "assets/1x/j_skip_off.png": {
+          "sha256": "cfee39d7fe98a1cfc223280c1320875ad8ba12ea45afa829531acc4b72ebef91",
+          "size": 1796
+        },
+        "assets/1x/j_speedrun.png": {
+          "sha256": "09acf6a097a9b45a8fd29b52afcd9e064be2e876db84624effa576523ef32cf1",
+          "size": 615
+        },
+        "assets/1x/j_square_sandbox.png": {
+          "sha256": "94ac45b36e7f7b953b33bc9641071f2141343a36ffc8120691dff3dd0877834e",
+          "size": 4232
+        },
+        "assets/1x/j_steel_joker_sandbox.png": {
+          "sha256": "4d72990191dffe4ab313ff8e917327842c4662a722cff67c1b029591cc27a4a5",
+          "size": 6042
+        },
+        "assets/1x/j_taxes.png": {
+          "sha256": "e5691afcf3b0b4b92f1f247407091828e283b5efca3e71cacee9dbf0e807a4c8",
+          "size": 7041
+        },
+        "assets/1x/j_throwback_sandbox.png": {
+          "sha256": "6f86d5962c1984b5fb8413028b27361d49a550b26c64d51f762695a2c97deb66",
+          "size": 9785
+        },
+        "assets/1x/j_vampire_sandbox.png": {
+          "sha256": "70e4ba6eed9535a028bab9e9908af5b8ec56733c107e47ebc618334d52830637",
+          "size": 7104
+        },
+        "assets/1x/modicon.png": {
+          "sha256": "c0a8ac5f4674b6ec3f204042fdfd04f1f4ea30b65c6bb09f1efcd61f5e03dab5",
+          "size": 470
+        },
+        "assets/1x/player_blind_row.png": {
+          "sha256": "598c3ef949c1748961335cb2c6fa8348653ddaf2a3b7780e66ff4dcc510712e8",
+          "size": 1570
+        },
+        "assets/1x/release_jokers.png": {
+          "sha256": "ff2c8f2c1fd7313de4fe583dfa497a90d95ef306c23cbc6ffed1b7a38d80de40",
+          "size": 589298
+        },
+        "assets/1x/stakes-chips.png": {
+          "sha256": "dd72b7dc06cde78b3c372e83e12174bf31b9e076a2f0ba75724fac7c30fff671",
+          "size": 2030
+        },
+        "assets/1x/standard_giga.png": {
+          "sha256": "0d0126dbb626cec0ec8beb832f1b6d982ef2c36ff50501fae271865b7f10ac42",
+          "size": 3984
+        },
+        "assets/1x/sticker_balanced.png": {
+          "sha256": "cd77e87b6ab6d0106a9562eb9af11918467060221317cae979f3197e7c604c68",
+          "size": 4493
+        },
+        "assets/1x/sticker_nemesis.png": {
+          "sha256": "58cbf2a2cf08340428b15ba64fb5c15abbf127fe95860a54900e06272c03ab64",
+          "size": 562
+        },
+        "assets/1x/stickers.png": {
+          "sha256": "93df8127b01cef4f19ce0fe3863742aafadca9bf9ee63c4863542a38cd6708c1",
+          "size": 4384
+        },
+        "assets/1x/tag_gambling_sandbox.png": {
+          "sha256": "6577bbb1ff325eba41659b82ffa4e06997a5b12734a1cece2f1e3166855140c6",
+          "size": 1793
+        },
+        "assets/2x/alt_mp_stakes.png": {
+          "sha256": "4dc59b93b2071012719ca752fe94add15aa12e7894284ffc85895dc9855139cc",
+          "size": 22030
+        },
+        "assets/2x/alt_stickers.png": {
+          "sha256": "3b120fea830293d6a66b6e3f6a857fcf0aeee3b5c68fbefe24f32dae0ba37c03",
+          "size": 3468
+        },
+        "assets/2x/b_heidelberg.png": {
+          "sha256": "b5666c783545d7fefe52bdbb4dcb7110b8b0494a83d71dcc9ffa8714f7ce477d",
+          "size": 2503
+        },
+        "assets/2x/blind_col.png": {
+          "sha256": "3c664e068a4949e507da903e0da3fe3364537a4e3e91fed4f30566a0df357221",
+          "size": 192261
+        },
+        "assets/2x/c_asteroid.png": {
+          "sha256": "fa69cb5956b6fe2766f25ef8b65053b9cd8572cb57ae212c008de898fc52d8c9",
+          "size": 8218
+        },
+        "assets/2x/c_asteroid_ru.png": {
+          "sha256": "1dc677f280530cd378e602a744bc849065a5165928624d6a3dbc3d55e236bc74",
+          "size": 7712
+        },
+        "assets/2x/c_ouija_2.png": {
+          "sha256": "60eb902701ea5ea266ebb993a3c19e4f74799a5984a8e96c0d13bf9c21b03e58",
+          "size": 2939
+        },
+        "assets/2x/deck_stickers.png": {
+          "sha256": "4ea239325bf85df34a55108264868a8ee5cad2a1bc0a83d55476cab00cf0eed1",
+          "size": 41409
+        },
+        "assets/2x/decks.png": {
+          "sha256": "bb70e099469e96b3a4ad637c5c96b615e74ef10f08983cc36bf4dee85e004d6c",
+          "size": 50799
+        },
+        "assets/2x/ec_jokers_sandbox.png": {
+          "sha256": "d1bfc4468b80084b926b9be9221d79cdd922383caa4d5158a357da21334fc3bc",
+          "size": 261258
+        },
+        "assets/2x/ec_other_sandbox.png": {
+          "sha256": "20eedb7b1b4f776a50608b1e0bd51679c5d5a6377aaf3880de9eb6ab70b5c1b0",
+          "size": 57800
+        },
+        "assets/2x/j_ERROR_sandbox.png": {
+          "sha256": "709fb670f751dc57fea6805d0e00275d4cba978fbeb651475cb973abe2c419a7",
+          "size": 1654
+        },
+        "assets/2x/j_baseball_sandbox.png": {
+          "sha256": "396d24976d97d85e93c7d6a3e4c50761591754ec652ad977ceee6f131fead2a0",
+          "size": 27122
+        },
+        "assets/2x/j_bloodstone_sandbox.png": {
+          "sha256": "8fe43843a1d61956cb0e573ac499a52c182e275f2d6f2ee7a494a8e24393c3d3",
+          "size": 13342
+        },
+        "assets/2x/j_castle_sandbox.png": {
+          "sha256": "cedfac12ecbcf5424e5dd7214ed4370bc6806544e398d3b1518aaad20f3c3a69",
+          "size": 25098
+        },
+        "assets/2x/j_cloud_9_sandbox.png": {
+          "sha256": "1c5719a240cd2badda9bcd6b164eb49919566cf0197f7a4bd59e95653fa588d4",
+          "size": 22956
+        },
+        "assets/2x/j_conjoined_joker.png": {
+          "sha256": "bc203ed64f79efd07aa7ae522f2dd18148ce184c74347b739cd7d2fd72f1502c",
+          "size": 3202
+        },
+        "assets/2x/j_constellation_sandbox.png": {
+          "sha256": "ef271c16ca635b4e58ef05592a3509e7671509084ba8d11a8bee86058a2b1cd1",
+          "size": 25487
+        },
+        "assets/2x/j_copycat.png": {
+          "sha256": "a2c1b00952bbe660b508834019381aa1e136a04ed9f9bca3f6f22bdf1c22151d",
+          "size": 7529
+        },
+        "assets/2x/j_defensive_joker.png": {
+          "sha256": "750d9bd01f10cc22cadbf3d89004613e6201dce07ca47fd2f558e866e186b9a0",
+          "size": 2402
+        },
+        "assets/2x/j_faceless_sandbox.png": {
+          "sha256": "6c414f224c13abb584b64a2df5dae2d273bf390a1abc379d1dbf4e82f142eaf7",
+          "size": 15065
+        },
+        "assets/2x/j_hit_the_road_sandbox.png": {
+          "sha256": "5f0c86dbe2f9de4a10bbd34cf8495579d5cd3770d133dd284b7588402071233c",
+          "size": 29825
+        },
+        "assets/2x/j_idol_sandbox_bw.png": {
+          "sha256": "2e49f8e99acc093430371fcc794682d5467a0e350a6b56c36ff0ce7a1d93b85f",
+          "size": 10455
+        },
+        "assets/2x/j_idol_sandbox_color.png": {
+          "sha256": "4eee0aaa86204fa99276a8639aadaa4bbde6b71c1a8c419dbcda3c44353ebfaf",
+          "size": 10762
+        },
+        "assets/2x/j_juggler_sandbox.png": {
+          "sha256": "9d7a0dd0f3190585eaa193370219e3773e803abbc3ed87b08b0138a128d5b56d",
+          "size": 19254
+        },
+        "assets/2x/j_lets_go_gambling.png": {
+          "sha256": "90d7a566dc8f87892e9017fa4b56c425c9632da795516273508493191a6132f8",
+          "size": 3985
+        },
+        "assets/2x/j_loyalty_card_sandbox.png": {
+          "sha256": "cd051307b1214cc8c92eb63f0b41f80e6cbf7b6ab634f839463f73cb6c7d5758",
+          "size": 23262
+        },
+        "assets/2x/j_lucky_cat_sandbox.png": {
+          "sha256": "0d82774ee50b0b1b9e9da8621def8737dd3f29d5f40ee91dc9431643e1248f61",
+          "size": 41217
+        },
+        "assets/2x/j_magnet.png": {
+          "sha256": "4ece6e567d03c06ebf0ec82309f2f4d3915bfa09fbd162d7f45ea9af829097f4",
+          "size": 6172
+        },
+        "assets/2x/j_mail_sandbox.png": {
+          "sha256": "6ed836c7a8da32107504b1419b45e977765af19db8914cba18aa2409fad89235",
+          "size": 21966
+        },
+        "assets/2x/j_misprint_sandbox.png": {
+          "sha256": "548da3968203b2ef69ef5657b98d017813f8d4a31f912163f8a827139624bceb",
+          "size": 22137
+        },
+        "assets/2x/j_order_sandbox.png": {
+          "sha256": "b64dbf1ed5e116e6bd48cb48708806d27615e99e719280e77b943f4864497f13",
+          "size": 20372
+        },
+        "assets/2x/j_pacifist.png": {
+          "sha256": "e71f082e67e4245f3facf8a9749925dd3b0a562a99a4eb1eee76e09dbad5891f",
+          "size": 2501
+        },
+        "assets/2x/j_penny_pincher.png": {
+          "sha256": "23e359e028ce36eb056b96fc1eb14e6fc88d06e9cfada638660c5895296b2fd5",
+          "size": 2801
+        },
+        "assets/2x/j_photograph_sandbox.png": {
+          "sha256": "00448f08bfa308e5a7419ace80803759012ad5090bcabee2ddd6264a338dfe62",
+          "size": 25359
+        },
+        "assets/2x/j_pizza.png": {
+          "sha256": "4fb774fe1e9e8ae914d45ed0f86a3536eea71245fb060540742604cc80237a40",
+          "size": 4007
+        },
+        "assets/2x/j_ride_the_bus_sandbox.png": {
+          "sha256": "a96d9b1b23ffe2c4dd95c3e25b054086d798967cd4cb3f3dddba3f8a75f15e37",
+          "size": 5439
+        },
+        "assets/2x/j_runner_sandbox.png": {
+          "sha256": "7f77714b828d020a976c3e5cc27d01ef0241c241586ef12f070fe9971862fbed",
+          "size": 14907
+        },
+        "assets/2x/j_satellite_sandbox.png": {
+          "sha256": "429e34c528abd8227ea4f103e6223a49b1625a5abbdcd493babda3f695bf4cc9",
+          "size": 16082
+        },
+        "assets/2x/j_skip_off.png": {
+          "sha256": "0a0fc3992a8729e364a0049ae5f8d2919739801c0a18ca72f2aa1587fd6c8e84",
+          "size": 2176
+        },
+        "assets/2x/j_speedrun.png": {
+          "sha256": "6becd2fe61cde621c5a16f19d5263f431a73ef256355e4c62ace49f562a7d34c",
+          "size": 1284
+        },
+        "assets/2x/j_square_sandbox.png": {
+          "sha256": "25cb75413bb89e5f43472daebe926ef9bf4e8f8efb6bf62d1de7de55a244a64c",
+          "size": 9353
+        },
+        "assets/2x/j_steel_joker_sandbox.png": {
+          "sha256": "861ac734567400df03f47d68bce260db9c84490b94f5be66284e388006b3edec",
+          "size": 13209
+        },
+        "assets/2x/j_taxes.png": {
+          "sha256": "25b9d6188961d7f79f9931f5f719ef0e08dafa07f49ea7be2b8bebdf12e7a68c",
+          "size": 4093
+        },
+        "assets/2x/j_throwback_sandbox.png": {
+          "sha256": "9c1a154297b61034074e6c270f1079c0175476534d2b4a2da92a55dcea4998af",
+          "size": 23489
+        },
+        "assets/2x/j_vampire_sandbox.png": {
+          "sha256": "ada48b8f90cb777d5dab1d50cf65d70811f6bff8ccdf15e8785a12f9e6314750",
+          "size": 17308
+        },
+        "assets/2x/modicon.png": {
+          "sha256": "d64935b64c75fc3b4b52b64d2cf0f501fb90c1a2a09110a7ed95bcd91e8b9a0b",
+          "size": 703
+        },
+        "assets/2x/player_blind_row.png": {
+          "sha256": "8763349f1ae75e1b2411d1d248b93bd0e48304c1f55205c1cbe1d03801535802",
+          "size": 4278
+        },
+        "assets/2x/release_jokers.png": {
+          "sha256": "5174837b10049ff8416008a85f2e4537338f16d80c87175f8bb3a2fa3d3a5ee8",
+          "size": 864910
+        },
+        "assets/2x/stakes-chips.png": {
+          "sha256": "a7d4b687e0390d2ff71af13ea1d7ffd5a8f5ae7c30d40bbd96c0678f9bbd82f3",
+          "size": 8775
+        },
+        "assets/2x/standard_giga.png": {
+          "sha256": "0531f0594caee670ad59d8fe9b8ff96e41cb3da63183b9a05b5e458b743fb58e",
+          "size": 8438
+        },
+        "assets/2x/sticker_balanced.png": {
+          "sha256": "16df90adac986dd68c126a37b2fa6949dc62395c8c84936b03d79daf65d0c6d8",
+          "size": 1019
+        },
+        "assets/2x/sticker_nemesis.png": {
+          "sha256": "320a48dbca1ce9c758990dba491873ffe693cbc2232aace1122cbca08e60cbc5",
+          "size": 892
+        },
+        "assets/2x/tag_gambling_sandbox.png": {
+          "sha256": "0503b784e1a8b38a72e447868d7dd00abc13b73815d5729f36606e1e31b2448c",
+          "size": 703
+        },
+        "compatibility/AntePreview.lua": {
+          "sha256": "a9564eb91352d501abb8a279dfccb56ecc50a48c16a849d78f905173602be68c",
+          "size": 391
+        },
+        "compatibility/CodexArcanum.lua": {
+          "sha256": "96e99b1be4c38c9927a060841db37d2aa5c0c68e289b23f6e570ba8c322b1d63",
+          "size": 226
+        },
+        "compatibility/Cryptid.lua": {
+          "sha256": "0a4538dffba0fb613ad7865839eb4696a61c8b30e70573cb782cab6487d2d7e1",
+          "size": 1901
+        },
+        "compatibility/Distro.lua": {
+          "sha256": "40771a822e42e5ef75133f16a8ecfabb0713d45f972647968cb621a6c4e6ae81",
+          "size": 2736
+        },
+        "compatibility/ExtraCredit.lua": {
+          "sha256": "fa12e6086aca105acf44c89e03b675adb271188b2c8085575485a4d01e507b8d",
+          "size": 199
+        },
+        "compatibility/Handy.lua": {
+          "sha256": "d92fed6d9ee0d14ef2bc3ae00059ecfc5862fb36f62ad64492276dda85963b0f",
+          "size": 5142
+        },
+        "compatibility/HotPotato.lua": {
+          "sha256": "9de0e42e1ec59283b4317db4708de1cad90bfe451c6e76033a8d46967f945c13",
+          "size": 3813
+        },
+        "compatibility/Jen.lua": {
+          "sha256": "290d9c4539a2720306d9efa34fc78931fbfa4b511ab6e4c4d2bee931195b854a",
+          "size": 271
+        },
+        "compatibility/JokerDisplay.lua": {
+          "sha256": "d71e459aed1f5ab6b74ce8fc8660fefc9361910d8c5b6c65ae24bbb6052f1811",
+          "size": 8862
+        },
+        "compatibility/Ortalab.lua": {
+          "sha256": "6e15787e305408f9805c3d427b1368eb98cf864b13882ce29eb68ea90b83916b",
+          "size": 304
+        },
+        "compatibility/Pokermon.lua": {
+          "sha256": "9003b347fa62075277d614880200a620c6af5914b1ce24cf3cf52e82ef137889",
+          "size": 247
+        },
+        "compatibility/Preview/CorePreview.lua": {
+          "sha256": "60e602095d245048209cbe14499d36da4d3a59cd1accb66f5cc023daa01eab46",
+          "size": 9370
+        },
+        "compatibility/Preview/EngineSimulate.lua": {
+          "sha256": "0d8cd5faea5bf2a38205e4b31205c6367b2e88fccde4e4c2f57201dfd9c224eb",
+          "size": 16558
+        },
+        "compatibility/Preview/InitPreview.lua": {
+          "sha256": "37594f1054ccfe45405ec6de32b4e4450f966d7d37400bfee36c667f06c6c5fd",
+          "size": 4233
+        },
+        "compatibility/Preview/InitSimulate.lua": {
+          "sha256": "8b88926fd401fff618efd5b782334df46d98e629dfe6ff7074befcc9b1d836a0",
+          "size": 1012
+        },
+        "compatibility/Preview/InterfacePreview.lua": {
+          "sha256": "6ab1a3e096e4375c82de4a7ac1c37382635e10065db0af6e3165ba1064eb406d",
+          "size": 4946
+        },
+        "compatibility/Preview/Jokers/Multiplayer.lua": {
+          "sha256": "1e0ab6454d10175ab85d2d84c38f3a7e6bbe05c8d1e29f51d8516b5eb3fc5995",
+          "size": 2378
+        },
+        "compatibility/Preview/Jokers/_Vanilla.lua": {
+          "sha256": "037176355bf8bf943bcf66e0e54b85dd85823024353649f9c5a988f814715b86",
+          "size": 35849
+        },
+        "compatibility/Preview/UtilsPreview.lua": {
+          "sha256": "0273f605a461d42331f32b2fef0dc53c399acfba92b6474a6746d39b64de2b3a",
+          "size": 868
+        },
+        "compatibility/Preview/UtilsSimulate.lua": {
+          "sha256": "60ece27eaf34eb0b9ed27e85263741488dded5a35f09f1ee9bd724efb8e166d8",
+          "size": 7227
+        },
+        "compatibility/StrangePencil.lua": {
+          "sha256": "ea9165930bbb1fb36615dac15e7e97c62123938c25741a8d81aee57ea4494bb3",
+          "size": 627
+        },
+        "compatibility/Talisman.lua": {
+          "sha256": "5f7d28b18705020ad02da4d392c884ccce91fa70b559c26e6a28691b90f1a751",
+          "size": 48
+        },
+        "compatibility/TheOrder.lua": {
+          "sha256": "7e938d29334e399123143edd6635de99a562e61441f9a48a81a1b715cb424559",
+          "size": 24246
+        },
+        "compatibility/TooManyJokers.lua": {
+          "sha256": "022463dfe983f806a54831f2e44161caa18b6d89c61dd58c2876465390667def",
+          "size": 408
+        },
+        "compatibility/UpgradeMod.lua": {
+          "sha256": "08057d0bb9097afcf448afa99e8473bef992461b286906c316b6640a52c65826",
+          "size": 861
+        },
+        "compatibility/_compatibility.lua": {
+          "sha256": "802c4d71039b4cb0a80447f8824f9a6be8a2f7a3ce688ad7eebffadfa9e28ada",
+          "size": 1995
+        },
+        "config.lua": {
+          "sha256": "6befc0d392f8f4f3ac886f7b9792aa64358ecfdb7d855ca45d0d04af38745f23",
+          "size": 367
+        },
+        "core.lua": {
+          "sha256": "af9d042122d1f6530fb088f4edd467454c058abc2e4bfa25479751b38bbd5b08",
+          "size": 9299
+        },
+        "gamemodes/_gamemodes.lua": {
+          "sha256": "966d352a21c0da7ed571f5cc7a137ca4a859c949869eeeaf3d9bff3554809a38",
+          "size": 906
+        },
+        "gamemodes/attrition.lua": {
+          "sha256": "ff0c5485ba0e02463582f2e50afef8126151c38674b06d15eada6e1d835e97b1",
+          "size": 4284
+        },
+        "gamemodes/showdown.lua": {
+          "sha256": "70803ced0326d81c732f252e4c6619ecbc9bc593aa55b054c04d5a885611aca2",
+          "size": 4209
+        },
+        "gamemodes/survival.lua": {
+          "sha256": "a99b7b1e1ba401823bbb35efbf63097807d2b564167210ca4d15d3a45940b4a5",
+          "size": 2761
+        },
+        "layers/_layers.lua": {
+          "sha256": "bfa63651320e5c9203c774a32a1feaa4aa4a2da355a8b8df383b4a046559d7e2",
+          "size": 9042
+        },
+        "layers/ban_mutators.lua": {
+          "sha256": "7067206928f0f9d1ff42998bd1c407c5c8483389c1fa05e4a02f4c2060ff7e66",
+          "size": 651
+        },
+        "layers/classic.lua": {
+          "sha256": "e5b4672f9d3b518fd511d220fde62ab5e391fced6dec24376108d4713368709a",
+          "size": 99
+        },
+        "layers/economy_mutators.lua": {
+          "sha256": "081ce20ff32afb3589fb730c6e6f24dfc59d89bfd1a7fd48766d3285a526a61f",
+          "size": 1068
+        },
+        "layers/eeeee.lua": {
+          "sha256": "68ebc43c0f933da09decd4b63ec2075714134b33c315d0cf0c8929533142524e",
+          "size": 876
+        },
+        "layers/esoteric_mutators.lua": {
+          "sha256": "6d3a91f200285f2e7c33f7c821c266c8f1757f6c8335278d2ac6f8d3b029da2f",
+          "size": 399
+        },
+        "layers/experimental.lua": {
+          "sha256": "9654079f4fc066e9846aeb7ca958cc3f427c161ae48e4f7180bd3de54526110c",
+          "size": 2011
+        },
+        "layers/glass_cannon.lua": {
+          "sha256": "126c1e7125999f7fbdfab62b305e2ca0dab606b430505299a0be10b90bfe88b8",
+          "size": 788
+        },
+        "layers/glass_variants.lua": {
+          "sha256": "d1b6178b18b530920ad0d883b987100e421976e5d1ca60a46bb231e9ee709f51",
+          "size": 210
+        },
+        "layers/mutator_stubs.lua": {
+          "sha256": "f0535d3133d2f88512ac6b21967a24fc57413d5d69c2a3b10c61265d5efe1696",
+          "size": 254
+        },
+        "layers/no_anim_timer.lua": {
+          "sha256": "43c472e84b6c259556ba9451b1abbc8e362754e743313d7202c39d97d8299c4a",
+          "size": 138
+        },
+        "layers/no_red_seals.lua": {
+          "sha256": "d81b14c00493240d6de22a98c617b1b1de5b2653d3f93ab62c78f1c138fd3dd0",
+          "size": 946
+        },
+        "layers/polymorph_spam.lua": {
+          "sha256": "b0a845c7cf706f7d978dfec401e6f5b2d19d490c9cbcb0e41008f7518152a6a6",
+          "size": 4179
+        },
+        "layers/pressure_timer.lua": {
+          "sha256": "b5090e5f792531ea3a44ec7643facbc4a1e8ba9329cd8d561816029da93c9926",
+          "size": 532
+        },
+        "layers/pvp_timer.lua": {
+          "sha256": "bf6f55fe6c6444f13e377b080cf5e6985088e88da27de2b305cfd08895f200dc",
+          "size": 104
+        },
+        "layers/ranked.lua": {
+          "sha256": "5451f8f140116857f242157dff69e4111dc30aa2385a64e941d248228b1b0eda",
+          "size": 261
+        },
+        "layers/release.lua": {
+          "sha256": "04807e5255513736944ec96ec3832938152bbb84f73e5f784e0cd927a143d401",
+          "size": 91
+        },
+        "layers/sandbox.lua": {
+          "sha256": "3000392ae6012ae52ab9e0271528ebc7832af415b27c8ab396f92e1021aa3bd7",
+          "size": 8738
+        },
+        "layers/score_instability.lua": {
+          "sha256": "6d2c6799a0e33cd8fd77221560142abdc9eebea67ef4b3cb003b77e2fdf65eac",
+          "size": 2047
+        },
+        "layers/shared_pockets.lua": {
+          "sha256": "7b5198fd2d96d44f3c5b1e77fdc6080bf138ffb50f53b688a2ada2f95888124f",
+          "size": 2643
+        },
+        "layers/shop_mutators.lua": {
+          "sha256": "e1f92e694f15406db21a821c8533cf64d52820ef8e99a59ce30c1997d7861e23",
+          "size": 85
+        },
+        "layers/smallworld.lua": {
+          "sha256": "254733676ff7784467dc0edadff3d79b52f12da24746ccc873a1abb59b6dce83",
+          "size": 5107
+        },
+        "layers/speedlatro_timer.lua": {
+          "sha256": "91ecf17e1416cd5c1c1d5ba8368c03b63a517b0cbeba4d9a9874e314ea0e9688",
+          "size": 5232
+        },
+        "layers/standard.lua": {
+          "sha256": "5d04ddc0f27a4a00560f0a62a9510f67f0cc0d20d78e665ece63355ab87186a1",
+          "size": 556
+        },
+        "layers/wraith_rework.lua": {
+          "sha256": "8d533cc5b9e0b64f475d434b9f689b8539ae1be541c322bf3cd6fec5c6ddc14e",
+          "size": 194
+        },
+        "lib/_init.lua": {
+          "sha256": "85c9fc2cb5986f21f94a5a07f0478c2c1072182b295a97f3d5e4bdd614445241",
+          "size": 14
+        },
+        "lib/_table_utils.lua": {
+          "sha256": "2b1d1b021e621330bb0f08a98d02d9c3255aa8302db662dbf822002c0f916606",
+          "size": 1574
+        },
+        "lib/blind_utils.lua": {
+          "sha256": "aff5db6eb0f40763442d8c911060e5d694259ade851f1fd6c0b74867be03d1d5",
+          "size": 624
+        },
+        "lib/card_utils.lua": {
+          "sha256": "3494571062375f4e1478dd7550caf4763bbea1a52363278ff559dc76ba57161e",
+          "size": 6784
+        },
+        "lib/crypto.lua": {
+          "sha256": "7f3a50b6421efadc39a5b8b5c26f347d52b68781163e7512ba2cb939681b1fd7",
+          "size": 2168
+        },
+        "lib/debug_utils.lua": {
+          "sha256": "8e606b24723e65b035ff10eaeb57d478cffc5c4caee442016a52c1ee1fe9e1fc",
+          "size": 748
+        },
+        "lib/ghost_replay.lua": {
+          "sha256": "b6625b675ae8758580ffe7a9fb502443bd9ca636e3215f718d176f7ff7963c92",
+          "size": 12217
+        },
+        "lib/insane_int.lua": {
+          "sha256": "1360fe932b781123afd2947bcc45747f749c409fc7b2daa91b6e23be791d6092",
+          "size": 4179
+        },
+        "lib/joker_stats.lua": {
+          "sha256": "4ddee85c035b40e4a6f40bb0e8d08a9859338d86b31bc4d50943b594b67b78d8",
+          "size": 1271
+        },
+        "lib/log_parser.lua": {
+          "sha256": "6f60db4a03745fe37abe98cf7766392915c623a66ccede2de29fccd2a3bb012f",
+          "size": 13243
+        },
+        "lib/matchmaking.lua": {
+          "sha256": "74330fa47eb3fdb2ad920c4e730fa6f225233653f6096912f7d9419e39c39106",
+          "size": 9098
+        },
+        "lib/practice_mode.lua": {
+          "sha256": "fdb1849f172904e93bb621ecf3f87c7132465f3045b3bd7848302741e30ce527",
+          "size": 2090
+        },
+        "lib/replay_log.lua": {
+          "sha256": "e7dbc5285783b57c5db6455b2548c2b04a7df2e5408cef77f9d351593a9a2d04",
+          "size": 9525
+        },
+        "lib/ruleset_utils.lua": {
+          "sha256": "985d174d49ba6a001f2de30eb2494b431697903d9282ebb1c7cdc9e444f028f3",
+          "size": 2142
+        },
+        "lib/serialization.lua": {
+          "sha256": "5cef432a6b8351fbdba04163642cacf049e0468d2cd6b5cf8572b362464c59bf",
+          "size": 2799
+        },
+        "lib/settings_utils.lua": {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0
+        },
+        "lib/string_utils.lua": {
+          "sha256": "f030d759ca7cdec7b9746a276bfe9b0869cbb2c628100cf3798c748cf1ab15e2",
+          "size": 784
+        },
+        "lib/ui.lua": {
+          "sha256": "0c65f7c734aa5183e9bf73e7de15fdab4aaf926eae1c14680392264fb4cf1f0a",
+          "size": 3054
+        },
+        "localization/de.lua": {
+          "sha256": "b625269505130df01a4d2e60ea6ff1dcb5ea304f68d4584f185ea81253db62f3",
+          "size": 9018
+        },
+        "localization/en-us.lua": {
+          "sha256": "d4994601ead8d740f3e17025222cf2ecd5d7db7d65713aa5aafeb15876f8be3c",
+          "size": 51109
+        },
+        "localization/es_419.lua": {
+          "sha256": "c8004ff835790e488ac8553dd928a5476dbab3672842a074670632454d411edc",
+          "size": 36154
+        },
+        "localization/es_ES.lua": {
+          "sha256": "659a129998b363a8bee31b0ba343145da3d243561b1e175a30fc4def3d6eeac3",
+          "size": 12784
+        },
+        "localization/fr.lua": {
+          "sha256": "6bc5e8b8d2f9413113e8fade65a7f07b7081fba63c313e2702f78935ec3ccc4e",
+          "size": 13749
+        },
+        "localization/it.lua": {
+          "sha256": "1683f6124e698323064d8c8a9fb40ef61cb295fd1b04d6f82f988c80da036515",
+          "size": 27793
+        },
+        "localization/ja.lua": {
+          "sha256": "34a48adc7ff8fb9aab6587d683510a73469ba0a075290cc9125bf1aa707dedc5",
+          "size": 34256
+        },
+        "localization/ko.lua": {
+          "sha256": "0a2571f176defaa78835434a8c3d54b5f50db863df52a55da2a0906822b2d61c",
+          "size": 33406
+        },
+        "localization/mi.lua": {
+          "sha256": "385a105a2aba4ef597e21285826ad86439fd09c58d7da407c5e6e41af6074472",
+          "size": 10128
+        },
+        "localization/nl.lua": {
+          "sha256": "abd4174e1f5b10d327cbaeb289225686ad1fec12bac44c0327e2c8ecf96e2a8f",
+          "size": 13600
+        },
+        "localization/pl.lua": {
+          "sha256": "8a069a22112cdac65cc53f3556aaf5c33721ef76a8999960d7c3a81d258cee60",
+          "size": 12899
+        },
+        "localization/pt_BR.lua": {
+          "sha256": "c8edd77cf4675ec48884c469718653da28d2035a746487982cedfc1d1de94124",
+          "size": 14984
+        },
+        "localization/ru.lua": {
+          "sha256": "cdef6a74c2bf5163b3683f44c650fd914830bd86b8a41ff29ec62f53a0f5d4ee",
+          "size": 69036
+        },
+        "localization/stylua.toml": {
+          "sha256": "048ecb5be2f0dba98cf80eedf0ce3f4a6e14ffbfa873be436b7630acac9d218f",
+          "size": 134
+        },
+        "localization/vi.lua": {
+          "sha256": "ff9b0f050630f5b7bb556aff6a2db6cb2be54c3647c66a72b46d27af0600f5b3",
+          "size": 45643
+        },
+        "localization/zh_CN.lua": {
+          "sha256": "6a368cb9b91f9a4224626cbb3e16ce366754ac1970724834bf1b762ee9b3a2ba",
+          "size": 17391
+        },
+        "localization/zh_TW.lua": {
+          "sha256": "d02926a209f891f39ecd7d475fb490b431a2625d58a21bf29a4bbf57f442d955",
+          "size": 2922
+        },
+        "lovely/TheOrder.toml": {
+          "sha256": "4a0a31bcac3a81f5f5590f8863bb0b6a1723e166e1b4592337b3beb53d6860ed",
+          "size": 7915
+        },
+        "lovely/cards.toml": {
+          "sha256": "cc7252447ccf9e38e6b7a3d23485fab6cde1a4c2893fc28a0bedc585bc9a86e6",
+          "size": 2587
+        },
+        "lovely/ce.toml": {
+          "sha256": "2d4e6532d426ac6e011581fbbb068bc03868971bd764b03405a1767a58d3528a",
+          "size": 967
+        },
+        "lovely/challenges.toml": {
+          "sha256": "cc54d4bc268b0865956583bef380744d06cc950d22c8173da7c9138e05ba649a",
+          "size": 834
+        },
+        "lovely/compatibility.toml": {
+          "sha256": "a478e03b5d1c120b25a8ec3dd6fcff9e31603adaf2b6998546f7e51d6cd856bf",
+          "size": 611
+        },
+        "lovely/deck_select.toml": {
+          "sha256": "0d6df17073083c56382400a430e8f3ce366ba0b8c7877d1af0fcbca87300038e",
+          "size": 2826
+        },
+        "lovely/decks.toml": {
+          "sha256": "3ed4c505fd136cf437b374ac191a7c5ea41e49e9547d77a7156f6776e3351a36",
+          "size": 957
+        },
+        "lovely/double_emplace.toml": {
+          "sha256": "9eae4417e5cbd9254b4660cbc6b86a927b7f8235f37f0fb65136ae25f8f12d32",
+          "size": 1272
+        },
+        "lovely/end_round.toml": {
+          "sha256": "195369b52712f9692e59642313cfa920cabfab765ae380e6ca4e4e7eb9c09fcd",
+          "size": 5350
+        },
+        "lovely/game.toml": {
+          "sha256": "b1e3cd162143676fdb86151010b5b90c37713cd950c6581ad3d715e312543ad9",
+          "size": 5575
+        },
+        "lovely/hud.toml": {
+          "sha256": "8e6c602ea90d091528fc0eee0757f78b5b03c0f0341bf7866d5d783e63832edb",
+          "size": 3168
+        },
+        "lovely/misc.toml": {
+          "sha256": "735a7141c649efa2cda3db08218bc4499b9a0a4a24fcfcd6669ca884799f2f53",
+          "size": 6536
+        },
+        "lovely/pause.toml": {
+          "sha256": "f15129b6a9e2e125603a4b0cd27c478a8ba84e9a2445b6d329432da9a73084da",
+          "size": 1750
+        },
+        "lovely/practice.toml": {
+          "sha256": "25d2c6bbc5289b5f6510793d4172fea0a5282d8c1e811149cd9e2dff16e9965c",
+          "size": 3000
+        },
+        "lovely/preview.toml": {
+          "sha256": "4c1bcecd41e743fa07a064393f7dfa867a89079f4221352b5a8632767cea993d",
+          "size": 929
+        },
+        "lovely/rework-center.toml": {
+          "sha256": "128ec065b1db323716d9e51b65241d093d994b74b464fe1fa0bf14cf7cdbba9f",
+          "size": 1345
+        },
+        "lovely/shared_area.toml": {
+          "sha256": "8b924f0913a805fc8c5cb4b84e9ab9b82aa872667a5132218a89d021ecf1695a",
+          "size": 850
+        },
+        "lovely/stakes.toml": {
+          "sha256": "7dae0452f69a522a78f7fc74ddb4bc09fc6e99e9af91b5cc6d6067319284a741",
+          "size": 2326
+        },
+        "lovely/timer.toml": {
+          "sha256": "327bf7bd45bdb2aefcfb3ca52264dcc9d2552c0bdf880faf7081be38a31a0a43",
+          "size": 510
+        },
+        "lovely/view_deck.toml": {
+          "sha256": "c5f2825f29517eedef583b165284f7504201f5867f78398a43e8366a2f93c93f",
+          "size": 917
+        },
+        "networking/action_handlers.lua": {
+          "sha256": "3d3089af98c37bc04604bf8ff2eba48621ddc7a4851deaed06a9ec64cb06becb",
+          "size": 46881
+        },
+        "networking/socket.lua": {
+          "sha256": "86ec02006a3c2c360d9c1a7a4df3b1b2aab40d2c968f6df72d23ae613bb8d4ca",
+          "size": 6500
+        },
+        "objects/blinds/nemesis.lua": {
+          "sha256": "afba2d9993e97b63af0afa63c13cc1546e5aaaa16ad044f60b6357ad84f236bf",
+          "size": 753
+        },
+        "objects/boosters/standard_giga.lua": {
+          "sha256": "997e71dbe03f9366f3d0f1fb5d8c11910dccb5ad44b86cab8488e98f7c2801ec",
+          "size": 1185
+        },
+        "objects/challenges/all_must_go.lua": {
+          "sha256": "8a7d102a44ccf64753b7a6e16d77f589b03f387699356fe1d27d8ffdf72efc89",
+          "size": 188
+        },
+        "objects/challenges/bacon.lua": {
+          "sha256": "1938107fc5d2be24dcee53def5eae120a5f45d95fa993127f8b36f5adb8df88f",
+          "size": 1142
+        },
+        "objects/challenges/balancing_act.lua": {
+          "sha256": "a40ebaea99a17ac13d5a8c6f220b62ba43ce123928675bb575f00d41e7f4a95b",
+          "size": 507
+        },
+        "objects/challenges/chore_list.lua": {
+          "sha256": "f144f537205520fbdeeecd92d776ec12a3aa900d324d14dc0b9df61988ebae8c",
+          "size": 785
+        },
+        "objects/challenges/divination.lua": {
+          "sha256": "41f83aa6369f1d2a29c257bcc270052bae9e718e8a3faeee6dd5a138d417202c",
+          "size": 146
+        },
+        "objects/challenges/eeeee.lua": {
+          "sha256": "bb30ae86f0526f1a7b8882ecaa6864d8ab618d446f26416b5c03099d06212ef2",
+          "size": 226
+        },
+        "objects/challenges/high_hand.lua": {
+          "sha256": "6acc03cd69004e93237c0d3bfa49857ac8f1c24319a703774ac3683d571af983",
+          "size": 299
+        },
+        "objects/challenges/in_the_red.lua": {
+          "sha256": "66043ffeac79635135c1ee3643055097dfc170f4ddfc487e8135f742c4849169",
+          "size": 394
+        },
+        "objects/challenges/legendaries.lua": {
+          "sha256": "92c0154708f3616bc60445b65cd54ebcc42a67e3178400f393b985bfd92c1100",
+          "size": 615
+        },
+        "objects/challenges/lets_go_gambling.lua": {
+          "sha256": "5359afd2890de9aa4bc73f12aa8453d03ad5ff8f88ce946cc747be90d6278136",
+          "size": 1001
+        },
+        "objects/challenges/misprint_deck.lua": {
+          "sha256": "1f4332557637398be0261deb58f10ab2cea812d6e14993205a40bd156e149707",
+          "size": 237
+        },
+        "objects/challenges/oops_all_jokers.lua": {
+          "sha256": "d8eabddfd5375a9e16c7bf41d93da9659f4dce361f75cf9c85ba4edf9cc6ce08",
+          "size": 1202
+        },
+        "objects/challenges/planet_tycoon.lua": {
+          "sha256": "667aa2b65ff5fe6b30c06b4eec28c08468a334863b256513c5f7399905405130",
+          "size": 401
+        },
+        "objects/challenges/polymorph_spam.lua": {
+          "sha256": "d1036f7e9de3e2553a5efa96ff7f7be7583c786e5afa7e2138aa6867f521b6de",
+          "size": 673
+        },
+        "objects/challenges/psychosis.lua": {
+          "sha256": "a26a0074c0aff2387efbfd59e344d1c37336c589242f0df6a1ab27aeb95fb565",
+          "size": 144
+        },
+        "objects/challenges/salvaged_sibyl.lua": {
+          "sha256": "74774660b5f63aec3d5a8cff03d20b9dd2c28024e14288052bba137b5d94d2e0",
+          "size": 2080
+        },
+        "objects/challenges/scratch.lua": {
+          "sha256": "2e5ad6fac80a4cb743e499e4c674793c7f4ec12c6d9b3eebea0aa2896e5c39ad",
+          "size": 267
+        },
+        "objects/challenges/shared_pockets.lua": {
+          "sha256": "eedd5ef36a396e3d14f46cdd2dce7c972c02787af39cfd1141ac399254170a12",
+          "size": 374
+        },
+        "objects/challenges/skip_off.lua": {
+          "sha256": "5ec13e313e5167aac16e9f47252569e4250d37ad733069f4bc21446cf231bf4e",
+          "size": 189
+        },
+        "objects/challenges/speed.lua": {
+          "sha256": "528e8e1bc4c52ff31ae321c537d1d277e1292a95dd8b1b08a44650266317acb8",
+          "size": 239
+        },
+        "objects/challenges/twin_towers.lua": {
+          "sha256": "12fdcb2416b6f2f0c6b16895ae099ae6870330ff127bf4958ebe38b18bca88d6",
+          "size": 186
+        },
+        "objects/challenges/vantablack.lua": {
+          "sha256": "7c8da1b56c993f0cc6072d4053843eff7a781c6f4aa1d312f7fb35ffab1898f1",
+          "size": 368
+        },
+        "objects/consumables/asteroid.lua": {
+          "sha256": "eed471a4180290dfa2f53ff277da63c03e2817ffaf2ad0b1e3aa686636a90db5",
+          "size": 1450
+        },
+        "objects/consumables/judgement.lua": {
+          "sha256": "84130162ffff9b2661c7da096f9842090b66411b2e7602211fdeb3355413e81b",
+          "size": 2466
+        },
+        "objects/consumables/ouija.lua": {
+          "sha256": "a0028cdb25c3f870c9b8fc02d69a840368d2b7358303583cea53d8f0cb6e9343",
+          "size": 2519
+        },
+        "objects/consumables/sandbox/ectoplasm.lua": {
+          "sha256": "fbfa37650617fe63c0e6d6533e2854778d0cce3527d0ef9c2d0101c7b1027ea8",
+          "size": 1694
+        },
+        "objects/consumables/wraith.lua": {
+          "sha256": "298d68a547c9398ee948a962d6daa530f95a680d64fc28a1b0c0d71df8ce7540",
+          "size": 906
+        },
+        "objects/decks/00_violet.lua": {
+          "sha256": "6d885437c2ea4370b764fbbe163bc9e758657a40fe9849f97054c4524fc0a643",
+          "size": 831
+        },
+        "objects/decks/01_indigo.lua": {
+          "sha256": "96014472dac64bdf6095554236f974ffc9755bd946c1a86a129f3aeeb0cc2dc0",
+          "size": 3055
+        },
+        "objects/decks/02_orange.lua": {
+          "sha256": "3f700a8205821abccb8e30420eee16ed22c8db772924bc3b60269d0abc042b8b",
+          "size": 1271
+        },
+        "objects/decks/09_white.lua": {
+          "sha256": "31727f24ead6fa23df6c351f36039ee82e59b693c01677bb0d55b6db71c70e72",
+          "size": 986
+        },
+        "objects/decks/AA_oracle.lua": {
+          "sha256": "bf2f22b7fc58d636bc7d921df31902806b80ee78ddc1578cfd817aa44e06c789",
+          "size": 797
+        },
+        "objects/decks/BB_gradient.lua": {
+          "sha256": "053abbf5d8fdb4d751a5b2043459e610b34b0f2479d04bec8d285fb0aedaa96b",
+          "size": 5538
+        },
+        "objects/decks/CC_heidelberg.lua": {
+          "sha256": "c47a8092dc1a6924efa4a81e1676e14c19dca9062ed3da5682206e5be846ac35",
+          "size": 720
+        },
+        "objects/decks/EC_echo_deck.lua": {
+          "sha256": "3b3aa694b421d0813bc5a0d4ca8ac8d69fc986f7e10a8617225cf7b7a631a650",
+          "size": 1349
+        },
+        "objects/decks/ZZ_cocktail.lua": {
+          "sha256": "1116d6125cccb88212faefbd9a13a72a1d8f3ad79f80b267d68e7e4ef538e967",
+          "size": 19364
+        },
+        "objects/decks/_decks.lua": {
+          "sha256": "083172408ae472cafaeae404c024cdd8ec60c02eaa0f1adabfcbe3ffebe4b4a3",
+          "size": 1030
+        },
+        "objects/editions/phantom.lua": {
+          "sha256": "02b7b8738904b2618588a2d06438ca43d583843af233529a4df60acf50f3f15a",
+          "size": 1147
+        },
+        "objects/enhancements/mp_glass.lua": {
+          "sha256": "29e1116af0bd9727abeaac1d62247532329904bfac85e41b0e843f1d82645816",
+          "size": 207
+        },
+        "objects/jokers/conjoined_joker.lua": {
+          "sha256": "5814980af5d5621c9c036ad0d3f28ec32efb919f901111435abb1954146a891b",
+          "size": 1803
+        },
+        "objects/jokers/defensive_joker.lua": {
+          "sha256": "c2bff084fab0943961469b2ad133017129086880bc17c9aad1732b49b5c5a911",
+          "size": 1397
+        },
+        "objects/jokers/experimental/baron_uncommon.lua": {
+          "sha256": "15a68285c478a3c68b53609a8f1e4abb73fb4882ce0f11ddd1f325cd8bd68ac5",
+          "size": 727
+        },
+        "objects/jokers/experimental/idol_rare.lua": {
+          "sha256": "85ca570cc36a87765afcb4e63f13bf5fafe80ec44b5ff19385c2fd17ce2fec8d",
+          "size": 934
+        },
+        "objects/jokers/experimental/mime_rare.lua": {
+          "sha256": "31c4824b277c1c73203094bc97df6c6b7f82ac1bd4456dc14d1d504b45ba4ddf",
+          "size": 488
+        },
+        "objects/jokers/experimental/todo_list.lua": {
+          "sha256": "39221009fa105e81f5e6f328643d6e586759796cc1a34b8d8c56b977683d6b73",
+          "size": 1613
+        },
+        "objects/jokers/lets_go_gambling.lua": {
+          "sha256": "33d3a3d8fd3eafbbeefe1564d5a5e2945195177981b33f8e21483075ab02c5f3",
+          "size": 2285
+        },
+        "objects/jokers/pacifist.lua": {
+          "sha256": "49837685ae38bf56d1d3e31de948c9f98651d4105bf33b72a67d1f5da452da11",
+          "size": 812
+        },
+        "objects/jokers/penny_pincher.lua": {
+          "sha256": "b5c22ee174a3b37345966c138cc93764b150ee9904d5e996c86c3e1991a41183",
+          "size": 1126
+        },
+        "objects/jokers/pizza.lua": {
+          "sha256": "dbb902b6c17c8cb0d82856d73fafd6bfba6f1bc02b40e1ffb4cb747c361dca65",
+          "size": 1702
+        },
+        "objects/jokers/sandbox/baseball.lua": {
+          "sha256": "6b495628c60b3749d09a7ebb1025b2f3da41516bb10a17767e4c9a75980ba734",
+          "size": 852
+        },
+        "objects/jokers/sandbox/bloodstone.lua": {
+          "sha256": "2d5e3812ce5b12fdc72136f33b165a41f4a372463eb19833fc1bcd74e82c6e2a",
+          "size": 1107
+        },
+        "objects/jokers/sandbox/castle.lua": {
+          "sha256": "a06e981f375ae958386bc833393cc4f020d02003aea1569a230db606c9b23de7",
+          "size": 1475
+        },
+        "objects/jokers/sandbox/cloud_9.lua": {
+          "sha256": "6110b93a522175a4d0d5d675f45e672acbcced50b4bc52aaa52e75432fbf9abf",
+          "size": 1712
+        },
+        "objects/jokers/sandbox/constellation.lua": {
+          "sha256": "f759d4e139b2f86a9f29aa2fba6bedc7278f3c616f3bf4645f2ca872a45b6a37",
+          "size": 1615
+        },
+        "objects/jokers/sandbox/error.lua": {
+          "sha256": "3f92369daa6bc7a7dc209499c7a422273b79e36502f9eb4c2ad3d5f4211a9554",
+          "size": 4728
+        },
+        "objects/jokers/sandbox/extra-credit/_ec_atlas.lua": {
+          "sha256": "b1911a774a2436f260f53d447a9685ffac8eb2a7ccc10175b8d916a12ef1545a",
+          "size": 363
+        },
+        "objects/jokers/sandbox/extra-credit/_ec_utils.lua": {
+          "sha256": "02fd9031d1975dc9cb211fb609484cd0969c8c56cb9a14fd474464d4a34049c9",
+          "size": 3332
+        },
+        "objects/jokers/sandbox/extra-credit/alloy.lua": {
+          "sha256": "13557053f3821b20aa3fdfad091c2579d55ff9f65dbb31c3a8918f1890fb906a",
+          "size": 900
+        },
+        "objects/jokers/sandbox/extra-credit/ambrosia.lua": {
+          "sha256": "87de2bd416756a46bfc8c5c582d119c5a6ea4c6afbbd3ebebd42058f8a2260c7",
+          "size": 2228
+        },
+        "objects/jokers/sandbox/extra-credit/bobby.lua": {
+          "sha256": "6105947189fc916e766655f3d9ab8c886bf063d7b3216e572f057276bdb6ed0e",
+          "size": 1755
+        },
+        "objects/jokers/sandbox/extra-credit/candynecklace.lua": {
+          "sha256": "996b39ed4b205039b56918f90fbf124ccb448dedc9b5bb99b3dfc3063d3e2441",
+          "size": 1807
+        },
+        "objects/jokers/sandbox/extra-credit/chainlightning.lua": {
+          "sha256": "b32723c2f266e217f86be8c6e433277971d8c79c4d69a6dadc30b0fafa923796",
+          "size": 1484
+        },
+        "objects/jokers/sandbox/extra-credit/clowncar.lua": {
+          "sha256": "5fb22fe08aab1a2241f23bf6ccbce29206365def68973c2cb13ca80689a3dfcb",
+          "size": 998
+        },
+        "objects/jokers/sandbox/extra-credit/clowncollege.lua": {
+          "sha256": "be8d02f4402a0d219b9b4f83fe25bfe04fdcb01ca86fdf95fa0892f6ea5246f2",
+          "size": 1685
+        },
+        "objects/jokers/sandbox/extra-credit/couponsheet.lua": {
+          "sha256": "4126ef63511a3973a2fef2221b54af9345c7429d8072b8d3a47b5fd3bb6e6a21",
+          "size": 1723
+        },
+        "objects/jokers/sandbox/extra-credit/doublerainbow.lua": {
+          "sha256": "53f8c1ffe7a315dc87fe7dfdd6c7992b9c4e2cef80c5804059cf638f2e19580e",
+          "size": 1327
+        },
+        "objects/jokers/sandbox/extra-credit/espresso.lua": {
+          "sha256": "20f6b4cb733c8dd5568a1ed08feb3d8f7ef04074c02b0a1809b3ca567c000913",
+          "size": 2560
+        },
+        "objects/jokers/sandbox/extra-credit/farmer.lua": {
+          "sha256": "04b6634744bc2a66ba556efed03bd340a001347cdc5d0bd9060a9f5f41042224",
+          "size": 1138
+        },
+        "objects/jokers/sandbox/extra-credit/forklift.lua": {
+          "sha256": "8575da288fb6d64a6092c260501c7c1d7a51f0f7330f69f00cc91a894b058b41",
+          "size": 1159
+        },
+        "objects/jokers/sandbox/extra-credit/gofish.lua": {
+          "sha256": "d1766b9f03770138cef76e96cc8bd036f4c2387099a7571a12380d76a1fbae33",
+          "size": 1661
+        },
+        "objects/jokers/sandbox/extra-credit/hoarder.lua": {
+          "sha256": "3280d9921d1d2488ed663c6276fde40f1cf0dd16d96244568cc31ca3ff932f57",
+          "size": 588
+        },
+        "objects/jokers/sandbox/extra-credit/jokalisa.lua": {
+          "sha256": "a7444ff98904eb7dee6d1ace5318345b90634b7c1ae8231c6937c76f1fc1e9d2",
+          "size": 1738
+        },
+        "objects/jokers/sandbox/extra-credit/jokeroftheyear.lua": {
+          "sha256": "06f46414b57c85c48aae46d9ccbef5db8019e79893d310720283b30be77f7124",
+          "size": 833
+        },
+        "objects/jokers/sandbox/extra-credit/lucky7.lua": {
+          "sha256": "b3a55283df5e962c6a3872c934080123db35921dd43d6f83f9ac28227a349a63",
+          "size": 1534
+        },
+        "objects/jokers/sandbox/extra-credit/montehaul.lua": {
+          "sha256": "dabfc552d0a26f48d4a5341456b195c7c4153980dbc69a5ce4b9b780ca8496a8",
+          "size": 2132
+        },
+        "objects/jokers/sandbox/extra-credit/pocketaces.lua": {
+          "sha256": "6a9645186473f73dbe2aa5d4d0305908b86ff66ae5edfc11b878a5f2340378cb",
+          "size": 1220
+        },
+        "objects/jokers/sandbox/extra-credit/pyromancer.lua": {
+          "sha256": "101829691b42f04504de5af6dc45984b636451b7be229ed3791b0e74aa5908ad",
+          "size": 960
+        },
+        "objects/jokers/sandbox/extra-credit/shipoftheseus.lua": {
+          "sha256": "1ae787428b76034986eca7e72c82af52e530c959f1ad95c9fe1eb0a1634922cf",
+          "size": 2217
+        },
+        "objects/jokers/sandbox/extra-credit/starfruit.lua": {
+          "sha256": "8e83d3c9ae6cdd1d6d535528d0e494dead924eec6c51b593fe803aef156f5362",
+          "size": 2391
+        },
+        "objects/jokers/sandbox/extra-credit/trafficlight.lua": {
+          "sha256": "9c6cabb2656b8125de9f3e9fefb8e827c5a963e6d9649d3307b9245d54415d85",
+          "size": 1772
+        },
+        "objects/jokers/sandbox/extra-credit/tuxedo.lua": {
+          "sha256": "97180f8868b6cebc6a3a2d35e58debecc4e9c29d29f6f345c060f58703eff120",
+          "size": 1406
+        },
+        "objects/jokers/sandbox/extra-credit/warlock.lua": {
+          "sha256": "950fbab57ece155d65606785b1596f5d0226a5714967a256257f51eb29af8ea6",
+          "size": 2475
+        },
+        "objects/jokers/sandbox/extra-credit/werewolf.lua": {
+          "sha256": "c3672d7424ab1a73b17abac4080d0b9ad00b2f5c81945e6f361831aad03ac0e1",
+          "size": 1338
+        },
+        "objects/jokers/sandbox/faceless.lua": {
+          "sha256": "c22120adbe6a7271b5f2fcc87502a3dbab217b57f3c8ca3b8bebc0624cd41deb",
+          "size": 1407
+        },
+        "objects/jokers/sandbox/golden_ticket.lua": {
+          "sha256": "9d42e2fe452acf6446121635c876f6c96abc2b15db75c6251d05f93302972fb7",
+          "size": 1360
+        },
+        "objects/jokers/sandbox/hit_the_road.lua": {
+          "sha256": "cd175ea4ac614c170e0f29d5f4b14cc5c4769b099b65b0ec2290a2a43a162433",
+          "size": 1170
+        },
+        "objects/jokers/sandbox/idol.lua": {
+          "sha256": "e24076476edd7b81435734449618b7885e3b54d2e8a2ae8e2d26786a027b4982",
+          "size": 6407
+        },
+        "objects/jokers/sandbox/juggler.lua": {
+          "sha256": "f934f2e0e9f91190667ac81c2c2f8b938daf8bccda06da96523dbd88feaa0c74",
+          "size": 1821
+        },
+        "objects/jokers/sandbox/loyalty_card.lua": {
+          "sha256": "f1cc7b24a6fc89ab966a22f33531b82f40c6aeb4a77d34dda8ad9ea05ca5ed54",
+          "size": 2195
+        },
+        "objects/jokers/sandbox/lucky_cat.lua": {
+          "sha256": "1966a76b65fddf19b2f1fadba88ff5eb4de39c2e77789ea140e831d2efc3ae16",
+          "size": 1326
+        },
+        "objects/jokers/sandbox/magnet_sandbox.lua": {
+          "sha256": "9c31780e8986ff45ea83ce303d866b9c60a8a7a4ef37249ecc3012edcb731c57",
+          "size": 2916
+        },
+        "objects/jokers/sandbox/mail.lua": {
+          "sha256": "1fa9b98bbf6446b0f8983b273dd2920c938d608d5684aca96ad9702df5163b2c",
+          "size": 1559
+        },
+        "objects/jokers/sandbox/misprint.lua": {
+          "sha256": "ec251794a6493ea2e8719bbc89311fc8e97165eb33f0b82bc3ffabad7bb1b7fe",
+          "size": 1154
+        },
+        "objects/jokers/sandbox/order.lua": {
+          "sha256": "aa763a2c29404473b2e6c5a41fb1ce8ef393662b42a8fad77991a3ff3e3c5d24",
+          "size": 1359
+        },
+        "objects/jokers/sandbox/photograph.lua": {
+          "sha256": "d1b4293b221d7759c7cfe2bd9cec50864d868af2aad78a2e22eee00362d2327c",
+          "size": 1009
+        },
+        "objects/jokers/sandbox/ride_the_bus.lua": {
+          "sha256": "f290afc81ed69c0dc81be9ce6469308936459ab18276103d54440ecb53c8cc59",
+          "size": 1881
+        },
+        "objects/jokers/sandbox/runner.lua": {
+          "sha256": "a36499b2be94960a81622054d4ba7b03db8183282bdcc045be7b829b6d2a283b",
+          "size": 1084
+        },
+        "objects/jokers/sandbox/satellite.lua": {
+          "sha256": "573ac76cf91c2fd11bb9f7141aefc8c2884f88f1d9dd95368b41cab0c4fe4b22",
+          "size": 1531
+        },
+        "objects/jokers/sandbox/square.lua": {
+          "sha256": "f285cdeae3596ee472cdaad856658a5dcc1c491e79cd647b0e148d52dd03e974",
+          "size": 1124
+        },
+        "objects/jokers/sandbox/steel_joker.lua": {
+          "sha256": "7d680537cfeb23321136bf87cdeaf1169a515a35b88174041fe05c740cf7337f",
+          "size": 851
+        },
+        "objects/jokers/sandbox/throwback.lua": {
+          "sha256": "2720941e470fef19c7e0b09dad715c9d3a5a67cc26c0f259e91111628bd8678d",
+          "size": 2312
+        },
+        "objects/jokers/sandbox/vampire.lua": {
+          "sha256": "2c6cad816b773f528f5d0cb2814dd6ff90d3baca1a9d75c002220435cf7f70d0",
+          "size": 2192
+        },
+        "objects/jokers/skip_off.lua": {
+          "sha256": "27f8702678f1994aa2930ddb0ce1aed93952207ad882abe989835d24b2662e57",
+          "size": 1871
+        },
+        "objects/jokers/speedrun.lua": {
+          "sha256": "43a4ef6d8755609fa809c4b81e6d22dfb5fae1c8def14891104c14208309bae5",
+          "size": 1724
+        },
+        "objects/jokers/standard/bloodstone.lua": {
+          "sha256": "38d9aec8f70166c003b2c96dc7ab5b4897247b6b8d62a0cd5e1e19543109d48c",
+          "size": 2115
+        },
+        "objects/jokers/standard/hanging_chad.lua": {
+          "sha256": "ee8b04cce1e5565647322f46c224d8dc7b9980203554739e5f290a757877f992",
+          "size": 845
+        },
+        "objects/jokers/standard/ice_cream.lua": {
+          "sha256": "5c754d79ed541b3920fed2f9716f25a5335fe244d22c77c00fcf479a6ac79907",
+          "size": 1120
+        },
+        "objects/jokers/standard/seltzer.lua": {
+          "sha256": "9cdab88b859e12b59e1a4d7d6e757fd082f5e9049953bebf7116b2e78db4886e",
+          "size": 2217
+        },
+        "objects/jokers/standard/ticket.lua": {
+          "sha256": "84f8cede5f93e69abe994e66abbb889f22c053a9518683e7809a22ac7d424fec",
+          "size": 1887
+        },
+        "objects/jokers/standard/turtle_bean.lua": {
+          "sha256": "7e826b569d7bf236f1fa6098f1788f86382b05c17ebf30f583de8a3f6380c307",
+          "size": 1304
+        },
+        "objects/jokers/taxes.lua": {
+          "sha256": "191c09f09ea92e4b583b2a7122bd7efe22dd32a7f2825068dc6fefb7a00e830a",
+          "size": 1590
+        },
+        "objects/seals/mp_gold_seal.lua": {
+          "sha256": "bf16ec60124650736605c2770a1b8c649f49a51119a740580a2189519a946d0b",
+          "size": 299
+        },
+        "objects/stakes/00_planet.lua": {
+          "sha256": "81b3756e986297425fe327dcb88f393d7351be6558b6e7965b58cef352e59335",
+          "size": 681
+        },
+        "objects/stakes/01_spectral.lua": {
+          "sha256": "f0ab16f69a5b286234b086616aa4d7f73277134596b78559371f4f08c105e1a4",
+          "size": 409
+        },
+        "objects/stakes/02_spectralplus.lua": {
+          "sha256": "d3788a1cba9b2eb6e1580cd230e1170f4bf2cde706eff995a57dae0ca24beba0",
+          "size": 366
+        },
+        "objects/stakes/1_plastic.lua": {
+          "sha256": "9437a4790e86b5cc4ed3a399a1ea96ed1c9a0ac07d95d082513f0bcb338cb2eb",
+          "size": 2742
+        },
+        "objects/stakes/2_pebble.lua": {
+          "sha256": "2bfe083b391221a640dc6f391553609de56fc5d0253d56ae53e55d9f9910b240",
+          "size": 434
+        },
+        "objects/stakes/3_ferrite.lua": {
+          "sha256": "aa9b3194e3d9c0303b79e0aec580d857ee4aafd0525672a369ba4420a8dae5f1",
+          "size": 423
+        },
+        "objects/stakes/4_pyrite.lua": {
+          "sha256": "249f2f01421b9032bfcfe9e62d6450f54a66bdbe21c50c0e277c4d8cd7971a28",
+          "size": 990
+        },
+        "objects/stakes/5_jade.lua": {
+          "sha256": "e26909358c404efed004f15041f63a5f9c5100c4e95509866e7185748ff1112b",
+          "size": 428
+        },
+        "objects/stakes/6_crystal.lua": {
+          "sha256": "2fa3e936eebb56c4e49c2448570d19760223080e8fb70132ee87a7e00be12e00",
+          "size": 416
+        },
+        "objects/stakes/7_antimatter.lua": {
+          "sha256": "f8b4383750ca99b2f20ee73f6ccda67d1b8d1f71181053ec1e9c3e24c3b4ff9e",
+          "size": 426
+        },
+        "objects/stakes/atlas.lua": {
+          "sha256": "fb932f8869a9b7dd0a0898e99bb8bf0a119fe36512ce2ae3babab05d26035a74",
+          "size": 181
+        },
+        "objects/stickers/1_persistent.lua": {
+          "sha256": "ac376596ecc21b3b90209579f7ff119c83295d3b4fa1dc5f9d5bba524b072570",
+          "size": 4678
+        },
+        "objects/stickers/2_unreliable.lua": {
+          "sha256": "7a55ac6d23b4c84723dd7cb045c678ce27ebb5dbad277176d06934b191295b23",
+          "size": 482
+        },
+        "objects/stickers/3_draining.lua": {
+          "sha256": "4188d95443407e00964dfafe98ba516c8f07b7eeb8a836ef2e17fe3da9379726",
+          "size": 373
+        },
+        "objects/stickers/_stickers.lua": {
+          "sha256": "180a307bcbf1120fd56516b6826043ea92627d2c6a3599a0f06ce8cb12a27b69",
+          "size": 2659
+        },
+        "objects/stickers/balanced.lua": {
+          "sha256": "6081a9f20254055b64d68a48a6e663c18b25fa652a7a119396d7ef847e60c94b",
+          "size": 483
+        },
+        "objects/stickers/extra_credit.lua": {
+          "sha256": "1bdc1b8471b3822a1ece209e62919a036b0c7d17a240bcdc3038990c1a83e9d4",
+          "size": 214
+        },
+        "objects/stickers/nemesis.lua": {
+          "sha256": "2589b7843566c39615d7688a33189522e79fcd7305d632d4cac2d6c89cfffb37",
+          "size": 273
+        },
+        "objects/tags/gambling_sandbox.lua": {
+          "sha256": "8c5eea493139bb05b6fb1cd20a20782053cc225ed8686cb784a993c595e9f08a",
+          "size": 1802
+        },
+        "objects/tags/investment_sandbox.lua": {
+          "sha256": "aa24d068160cc272b2f63fe1305ac7c27222102f01b42bbb55c79215e3240e1b",
+          "size": 1104
+        },
+        "objects/tags/juggle_sandbox.lua": {
+          "sha256": "7e190939252903c8326e6494c080aff2650fa52b1a7218cfbed8a0496dd094d1",
+          "size": 636
+        },
+        "overrides/disable_restart.lua": {
+          "sha256": "e0b688407dc831fa867a5108bef70129e35f4713a569b54ff94597d5243a693e",
+          "size": 170
+        },
+        "overrides/game.lua": {
+          "sha256": "c7812ea507245f822133f41973203bd222ef10b472e24c8d508afc58a7910319",
+          "size": 6096
+        },
+        "overrides/hide_content.lua": {
+          "sha256": "b6943e431d5bd3e0d3f0adeacb5e56695ed15d95f2ef3a74e1772113072b2b20",
+          "size": 2222
+        },
+        "overrides/mod_badges.lua": {
+          "sha256": "a52b9e84575aaf9f83ec269da38378adcc6aa8ba886184c5ad6cad42674861f1",
+          "size": 2936
+        },
+        "replays/.gitkeep": {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0
+        },
+        "rulesets/_rulesets.lua": {
+          "sha256": "67a5bdcbf75373ecdddbefb1d8f1fad479b39768bf19a096a066878c6a97cb56",
+          "size": 11535
+        },
+        "rulesets/badlatro.lua": {
+          "sha256": "716ddc7cbb9690b10e686d090d586a75ada7162d9348fec21569cf8122b68a14",
+          "size": 1203
+        },
+        "rulesets/blitz.lua": {
+          "sha256": "c2498643af6510245d977ec03a5eec8693affbacf9aedd47876a24f00fc2c7c7",
+          "size": 67
+        },
+        "rulesets/chaos.lua": {
+          "sha256": "8ed87054297d00bbb29d8934c33d8a0ac14f122d4837cc0f3a10ab0dc62c6eb8",
+          "size": 116
+        },
+        "rulesets/experimental/experimental.lua": {
+          "sha256": "7116488bd6c08f18bc76a9cd2f4db9ced0a8a101592331c1cfe91d8a56835cda",
+          "size": 272
+        },
+        "rulesets/experimental/experimental_legacy.lua": {
+          "sha256": "9161b9160a682e5a1becd272c723775c08b6410e084e7b02b45c038518f2b98b",
+          "size": 645
+        },
+        "rulesets/legacy_ranked.lua": {
+          "sha256": "4ca191c809debe246b9a2e51772901fb29fa65414d8c954b2fd63083e357ce31",
+          "size": 128
+        },
+        "rulesets/majorleague.lua": {
+          "sha256": "bbe16ada0cb3122f95b6343247e487328a1d53b03c99b19744de253e1a20e315",
+          "size": 860
+        },
+        "rulesets/minorleague.lua": {
+          "sha256": "dbafe66256681792167adad88e0cf74984a74236de2bce4854ac92daa41df5a9",
+          "size": 613
+        },
+        "rulesets/ranked.lua": {
+          "sha256": "b05d5af0b930ac824e8cd165c08997a5793744daa9450e1ffe2b57e53674ca2f",
+          "size": 144
+        },
+        "rulesets/release.lua": {
+          "sha256": "74d4e5d845dd51973c0c1c5619aa6ed38dc2cf817b1b55f54129452812a19f4e",
+          "size": 21781
+        },
+        "rulesets/sandbox.lua": {
+          "sha256": "9ff8228be096afaebb733c1a20eb7ee7e2cf6569d3fe5f89fe97418d81152640",
+          "size": 273
+        },
+        "rulesets/smallworld.lua": {
+          "sha256": "7f511a2721f06d70c4a53cb42641e30aed0cdae7d5a9b6df532105e168a47fd2",
+          "size": 86
+        },
+        "rulesets/speedlatro.lua": {
+          "sha256": "81218800ade2afd1132200528282a4cda0a50a038f7efe453e80cf5e2948df86",
+          "size": 136
+        },
+        "rulesets/traditional.lua": {
+          "sha256": "081b38732d02ed0397a7e829a77edcc4df3ac5cdb18ab01b64aa789f1a432c94",
+          "size": 232
+        },
+        "rulesets/vanilla.lua": {
+          "sha256": "b96b68e63569dfdbd742155fffa196365c6dbcb9fcaf39583a33d6a9f07183a1",
+          "size": 359
+        },
+        "rulesets/wsob.lua": {
+          "sha256": "25efa1544f1a4f172e642a10664f8938e1b0855035beb7c5b5686c33c480f7ef",
+          "size": 772
+        },
+        "scripts/release.sh": {
+          "sha256": "973d0520d2cbcf376cdd17ad07aed869f0540b2741c1d1489affc490e4d9c886",
+          "size": 5873
+        },
+        "stylua.toml": {
+          "sha256": "32fce3b161d1958032ce9aee9e18219ebedf3e96a2f9c056fd26fd7fd3298e47",
+          "size": 353
+        },
+        "tests/readme.md": {
+          "sha256": "f69d5121c116a98de97dc351bff2272e74d815d4deee793fd0cbbca010d8c31b",
+          "size": 3222
+        },
+        "tests/ruleset_shape.snapshot.lua": {
+          "sha256": "9e386d58497aae7720487e2bb26dbde1fe32a766f796be1815cc8d3ab7fad0fd",
+          "size": 17792
+        },
+        "tests/test_rlog_checksum.lua": {
+          "sha256": "224d59c3866172285c7a08faf6faf7ee729ef6f537c955223173fd475fd62ac7",
+          "size": 2312
+        },
+        "tests/test_rlog_roundtrip.lua": {
+          "sha256": "a3810e79d74c329c8f002d2df614f0c32f716793cde0dab98c0da8a0f6b5eaa3",
+          "size": 5310
+        },
+        "tests/test_rlog_stream.lua": {
+          "sha256": "f5147f9b25af535b4c984bb645ff41825c9c08d21e0b72d7edce27773f752391",
+          "size": 3425
+        },
+        "tests/test_ruleset_shape.lua": {
+          "sha256": "51a41fdcee629bb85bf54e97cbfed3501310f2b61506074b2cf40b13e53ff642",
+          "size": 10997
+        },
+        "tests/test_serialization_guard.lua": {
+          "sha256": "eda8d9241341dd61a5506e52effeaa78bd469f2316fbd1a5fc06996e778d3cca",
+          "size": 2973
+        },
+        "ui/_common/background_grouping.lua": {
+          "sha256": "696d148fb329aee33809fafa1612d794b9e6b057afaa8cccbb5e01a2907dd32a",
+          "size": 575
+        },
+        "ui/_common/disableable_button.lua": {
+          "sha256": "276a45ebb6759dee13a742fbffe00eaa34464b22385808c56666f05004e91d8d",
+          "size": 877
+        },
+        "ui/_common/disableable_option_cycle.lua": {
+          "sha256": "62bcff934cd261294ae9097d2f8e3841811d18b5094e51a96f1cfda1d250cbe9",
+          "size": 343
+        },
+        "ui/_common/disableable_toggle.lua": {
+          "sha256": "26ea834218c21e560f3f154c1dec99d02ba3206d4503e2dfecb1007dbfb0a6e5",
+          "size": 662
+        },
+        "ui/_common/spacer.lua": {
+          "sha256": "e3f1b80889d348c8a5905aa065f2b0e24648b7e790f384e94bcfcee7876f5d58",
+          "size": 273
+        },
+        "ui/game/blind_chip_sprite.lua": {
+          "sha256": "a5edf73867ae379c8f6b45f3ad20b544d83b284ce16698cc1618934dba035f9b",
+          "size": 668
+        },
+        "ui/game/blind_choice.lua": {
+          "sha256": "10799f86137727c60a3e9e81c609c518a3edf2007034c4f17c965c79b666e6c2",
+          "size": 14408
+        },
+        "ui/game/blind_hud.lua": {
+          "sha256": "169279620a5c7c18754b02978f1c72712f4a943b5007d8f2ef076a6d740958a1",
+          "size": 10491
+        },
+        "ui/game/confirmation.lua": {
+          "sha256": "c9f42b863a2e12e527a702cefca6f07bba4b7e0158f2071bcef1984c34731ea3",
+          "size": 920
+        },
+        "ui/game/enemy_location.lua": {
+          "sha256": "03d9c5963d1cf0350e69cbf5beef0e5ca5c298004aa889430d402b33685323ec",
+          "size": 6791
+        },
+        "ui/game/functions.lua": {
+          "sha256": "79dacab51887f56a1ede0e0380b6f6a8b3f2dbffc057e3830117a892589f402b",
+          "size": 14763
+        },
+        "ui/game/game_end.lua": {
+          "sha256": "e2e6b667e76deb2d5c13b5f3be566a2a1b97112daeed58b9cb50ca45d09469fe",
+          "size": 17896
+        },
+        "ui/game/game_state.lua": {
+          "sha256": "c488edb7942465dcf9b6b797d681e3bde79eba2922b0e08b8b04a9d724705728",
+          "size": 19772
+        },
+        "ui/game/lobby_info.lua": {
+          "sha256": "db0a68a3f4d4cb0d4eaa410a86ee6dbdee089e250d27a4f7edbd2ec96e5f8bd9",
+          "size": 7825
+        },
+        "ui/game/round.lua": {
+          "sha256": "0262decae3c0a95ab075c2d8addbf0d4049245c3acedd06350b4acd1898d9ec5",
+          "size": 3089
+        },
+        "ui/game/ruleset_info_menu.lua": {
+          "sha256": "5ea63e19e9c543df395b8d2864c943ea45d7cd7933ba34b5b7eb1d7c0b27266d",
+          "size": 4198
+        },
+        "ui/game/timer.lua": {
+          "sha256": "28f398a663dcab1d3dc71dac262ec28ec1d36f7482e811f2f5dbf7b5e12009de",
+          "size": 19933
+        },
+        "ui/lobby/_lobby_options/advanced_tab.lua": {
+          "sha256": "6e78066727953213490d9fb1dc37af56695ecea86c37531c52080b67fec7ab43",
+          "size": 4652
+        },
+        "ui/lobby/_lobby_options/gameplay_tab.lua": {
+          "sha256": "5b86a5bbe9a39085669c4f78beed62e9617299cfd31301c44cc310bba060fe4a",
+          "size": 640
+        },
+        "ui/lobby/_lobby_options/main_options.lua": {
+          "sha256": "e488d8bf13ab7a8411968cd3ddbeee18b7d12510ac24f0e6b09eafe865f85f74",
+          "size": 3856
+        },
+        "ui/lobby/_lobby_options/modifiers_tab.lua": {
+          "sha256": "e9da98fcc5d30bac337b95418aadab32c704ff9d2a786a54811c1991ce927016",
+          "size": 3071
+        },
+        "ui/lobby/_lobby_options/options_tab.lua": {
+          "sha256": "d8d08020b96f23c6adc26f666aaf15f0565599044e0ad3f7209093dcab030dec",
+          "size": 2613
+        },
+        "ui/lobby/deck_stake_button.lua": {
+          "sha256": "562d63f9ec0f7c0d8f50d0b2260cbda5fe3cd3b16fd2fb1d6cf616e5d37b9777",
+          "size": 1167
+        },
+        "ui/lobby/leave_button.lua": {
+          "sha256": "fc4e9887fab73de56c2bf6152fa3be06e1febfbc562be2b4cc7f963fb48c0c4b",
+          "size": 303
+        },
+        "ui/lobby/lobby.lua": {
+          "sha256": "8253712f424a0a00e3afc57a7f916c36554099be1479846bd26a1ce2fdbc4243",
+          "size": 16838
+        },
+        "ui/lobby/lobby_code_buttons.lua": {
+          "sha256": "13594fe9fede7ec1dcbb94d2cbec19a2ed50d2e48cca42ae944bbe95f592a26d",
+          "size": 593
+        },
+        "ui/lobby/players_display.lua": {
+          "sha256": "9e94418546cfde4d303104dca0ce04578f2236ed8a0a8b1a35a21c7e5941f8c2",
+          "size": 1280
+        },
+        "ui/lobby/start_ready_button.lua": {
+          "sha256": "0a3f9ba4c74fef7e3f815c77a4f6447d5ccff651be4d1843f33240dd43d0e28b",
+          "size": 4426
+        },
+        "ui/lobby/version_mismatch_warning.lua": {
+          "sha256": "26b34da6c55aca86b170a10627d4ec82c37f832a65ff6af2241925ede5f05c91",
+          "size": 3570
+        },
+        "ui/main_menu/dev_warning.lua": {
+          "sha256": "9392429b970c4951cd15044f08a2ada7410dfd2f53fdcc007bdd98c841750ec2",
+          "size": 2240
+        },
+        "ui/main_menu/main_menu.lua": {
+          "sha256": "ab81c30eb6b85cce5b85389e9fd1e780613345389f479d88ac52d020b033a2ec",
+          "size": 2685
+        },
+        "ui/main_menu/play_button/_modifiers_overlay.lua": {
+          "sha256": "7feef29a241053785278df6f48e90e7841e5b761b1c97034e05c34531d674540",
+          "size": 2200
+        },
+        "ui/main_menu/play_button/_mutators_wall.lua": {
+          "sha256": "414da626d7535c0339d31db5fb01ecc0c9fa1298d93b1d5571de1a7e24efb48d",
+          "size": 15158
+        },
+        "ui/main_menu/play_button/_practice_options_overlay.lua": {
+          "sha256": "c40e5485049a7bcc57cac5dcebf5fc66baf8a4fc1ec699952e7155d00ed08722",
+          "size": 2210
+        },
+        "ui/main_menu/play_button/custom_ruleset_editor.lua": {
+          "sha256": "1c6525339bdddf64eaf07915cf646ece6d9558c10d63abda1313a7452cc8b3c6",
+          "size": 9339
+        },
+        "ui/main_menu/play_button/gamemode_selection.lua": {
+          "sha256": "157538cf05e7ebf83987ff271c03e41d046058ebdc67079bff1b39a4f2fda516",
+          "size": 4819
+        },
+        "ui/main_menu/play_button/ghost_replay_picker.lua": {
+          "sha256": "8669ffef633dd5467bb17b325da39a8484c0948913620b6336790c98feab9f02",
+          "size": 19526
+        },
+        "ui/main_menu/play_button/join_lobby_button.lua": {
+          "sha256": "17e8408e98c3b87c3b09ac834f59872cd9632f7370705c2e02e02e1d70f66345",
+          "size": 838
+        },
+        "ui/main_menu/play_button/play_button.lua": {
+          "sha256": "919d56cf5351d482ddc333123714cfe7dd3bb3a6e71b77187a9a4ed193c3987a",
+          "size": 1935
+        },
+        "ui/main_menu/play_button/play_button_callbacks.lua": {
+          "sha256": "0ed5c217be7f5d887c02d2d7e54526f6541b2de43bb1e7e4c2bca964dc1ae5ba",
+          "size": 4276
+        },
+        "ui/main_menu/play_button/ruleset_selection.lua": {
+          "sha256": "c2eb21a74afdd5ec852edffbb9c37f35a76c2b70d9edb028b103728cfe0aa1d0",
+          "size": 20474
+        },
+        "ui/main_menu/play_button/weekly_interrupt.lua": {
+          "sha256": "a8a71cfd0a2cd9ac72f2672b0e06091a1e16b8547dbd2c8411039be2157218f2",
+          "size": 972
+        },
+        "ui/main_menu/title_card.lua": {
+          "sha256": "8a60b72bc6a8935df82988a8e63866b7419268f9c595f90ca5c68c9b5d58f4eb",
+          "size": 3989
+        },
+        "ui/main_menu/version_display.lua": {
+          "sha256": "df5933ef573f56896dd2918b636bea1db6dad84a6a5ec4710139d9e2268a9300",
+          "size": 554
+        },
+        "ui/shortcuts_menu.lua": {
+          "sha256": "65f9298ec45b3d7d3bb27b5ccfcb6d758c219e03b643d830450a959887f5a92a",
+          "size": 5603
+        },
+        "ui/smods_menu/config_tab.lua": {
+          "sha256": "f39aaad38b8d5de8df5ad20453a90810a81d9fad112dbf110881f824e08457bf",
+          "size": 3576
+        },
+        "ui/smods_menu/credits_tab.lua": {
+          "sha256": "ab22657d3ef70724b100e6abf02b458a36a6f9cfbf9a5c1e760607a143888699",
+          "size": 1471
+        },
+        "ui/smods_menu/customization_tab.lua": {
+          "sha256": "78d650cad9dc252e05319dedaeb4636a2a8678bbfa80adcbbc6ce7b800c70660",
+          "size": 4694
+        },
+        "ui/smods_menu/smods_menu.lua": {
+          "sha256": "c23ee8315fd8be4cfaae94dfa38f95b30d53ef6a4687e44bee392ffa0094bd48",
+          "size": 1441
+        },
+        "ui/utils.lua": {
+          "sha256": "662ef1072d9fde7e8a3d150cb3e19b21d2cc46b6c21e543ea859a43aff838beb",
+          "size": 3354
+        }
+      }
+    }
+  },
+  "lovely_sha256": "ccfed59e4d245b7802c684fc86708e0a937f584d6e07d1ecc11e8eae22f9fc1a"
+}

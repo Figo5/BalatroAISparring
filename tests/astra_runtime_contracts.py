@@ -66,7 +66,8 @@ assert(d.is_started(),'AI failed to observe actual Multiplayer RUN stage')
 local Driver=dofile(ROOT..'/AISparring/integration/mp_driver.lua')
 local mp={LOBBY={config={ruleset='ruleset_mp_majorleague'}}}
 local forced=0
-local rules={forced_gamemode='gamemode_mp_attrition',force_lobby_options=function()
+local rules={forced_gamemode='gamemode_mp_attrition',is_disabled=function() return false end,
+force_lobby_options=function()
   forced=forced+1
   mp.LOBBY.config.timer_base_seconds=180
 end}
@@ -77,7 +78,10 @@ local funcs={start_lobby=function()
   mp.current_ruleset():force_lobby_options()
   mp.LOBBY.code='ABC12'
 end}
-local d=assert(Driver.factory({role='human',mp=mp,funcs=funcs}))
+-- A legacy Major League fixture opts into its own registry explicitly; the
+-- production default remains the Standard Ranked registry.
+local d=assert(Driver.factory({role='human',mp=mp,funcs=funcs,
+  ruleset_key='ruleset_mp_majorleague',ruleset_short='majorleague'}))
 local ok,code=d.host_start(nil)
 assert(ok==true and forced==1 and mp.LOBBY.config.timer_base_seconds==180,
   'real proxy force_lobby_options was skipped: '..tostring(code))

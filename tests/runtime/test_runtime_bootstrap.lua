@@ -117,6 +117,22 @@ return function(ctx)
 		return state
 	end
 
+	-- Generic fixtures explicitly choose the legacy Major League registry; the
+	-- production default Standard Ranked driver is exercised by the ranked tests
+	-- and the actual core boot fixture.
+	local LEGACY_RULESET = { ruleset_key = "ruleset_mp_majorleague", ruleset_short = "majorleague" }
+
+	local function legacy_bootstrap(overrides)
+		local merged = {}
+		for key, value in pairs(LEGACY_RULESET) do
+			merged[key] = value
+		end
+		for key, value in pairs(overrides or {}) do
+			merged[key] = value
+		end
+		return support.bootstrap(ctx.repo_root, merged)
+	end
+
 	local function setup_ok(bctx, setup_role)
 		support.inbound(bctx, {
 			ok = true,
@@ -141,7 +157,7 @@ return function(ctx)
 	end
 
 	test("human_prestart_unlock_overlay_is_dismissed_so_the_lobby_can_start", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		local instance, _, bctx = legacy_bootstrap({ role = "human" })
 		instance.install()
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -317,7 +333,7 @@ return function(ctx)
 
 	test("unlock_popup_gates_the_coordinator_but_not_the_prestart_deadline", function()
 		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", started = false })
+		local instance, _, bctx = legacy_bootstrap({ role = "human", started = false })
 		instance.install()
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -509,7 +525,7 @@ return function(ctx)
 	-- popup's grace) and the rest are dismissed promptly; a healthy chain never
 	-- trips the stuck bound and the lobby is created.
 	test("human_prestart_unlock_chain_is_dismissed_without_a_stuck_stop", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		local instance, _, bctx = legacy_bootstrap({ role = "human" })
 		instance.install()
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -527,7 +543,7 @@ return function(ctx)
 	end)
 
 	test("human_start_committed_but_not_yet_running_keeps_its_popup", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", deferred_code = true })
+		local instance, _, bctx = legacy_bootstrap({ role = "human", deferred_code = true })
 		-- Defence in depth, not an observed engine window: the real
 		-- host_start_game latches is_started() in the same call that commits the
 		-- start. Pin is_started() false so the `not start_committed` clause is
@@ -576,7 +592,7 @@ return function(ctx)
 	end)
 
 	test("ai_prestart_popup_blocks_ai_join_until_it_is_dismissed", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", started = false })
+		local instance, _, bctx = legacy_bootstrap({ role = "ai", started = false })
 		local state = install_unlock_overlay(bctx)
 		instance.install()
 		drain_envelopes(bctx)
@@ -641,7 +657,7 @@ return function(ctx)
 	end)
 
 	test("human_install_sends_hello_and_never_activates", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		local instance, _, bctx = legacy_bootstrap({ role = "human" })
 		local installed = instance.install()
 		ctx.is_true(installed)
 		local messages, by_op = drain_envelopes(bctx)
@@ -761,6 +777,279 @@ return function(ctx)
 		-- the sole seed source.
 		ctx.eq(by_op.status, nil)
 		ctx.eq(instance.status().decisions, 0)
+	end)
+
+	test("idle_cooldown_frames_do_not_inflate_rejected_receipts", function()
+		-- H3 regression: the runtime no longer counts every idle loop frame as a
+		-- rejection. A legitimate policy no-action backs the loop off; the
+		-- following cooldown frames are idle and must leave `rejected` at 0.
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		ctx.eq(instance.update(0.016), "active")
+		drain_envelopes(bctx)
+		-- A delivered, non-refusal answer (no-action) is not a rejected decision.
+		support.inbound(bctx, { ok = false, code = "policy_no_action" })
+		instance.update(0.016)
+		ctx.eq(instance.status().rejected, 0, "a no-action is not a refused decision")
+		for _ = 1, 30 do
+			instance.update(0.016)
+		end
+		ctx.eq(instance.status().rejected, 0, "idle cooldown frames are not rejections")
+		ctx.eq(instance.status().counter_version, 2, "versioned receipt-counter semantics")
+		instance.shutdown("test")
+	end)
+
+	-- Deliver a service decision reply on the fake worker channel. The transport
+	-- routes it to the owned decision by its ordered inflight slot.
+	local function decision_reply(fields)
+		local reply = { ok = true, code = "practice_decision_ready" }
+		for key, value in next, fields do
+			reply[key] = value
+		end
+		return reply
+	end
+
+	local function count_receipts(bctx)
+		local messages = support.drain_outbound(bctx)
+		local total, rejected = 0, 0
+		for _, message in ipairs(messages) do
+			if type(message) == "table" and message.op == "decision_result" then
+				total = total + 1
+				local observation = message.observation
+				if type(observation) == "table" and observation.accepted == false then
+					rejected = rejected + 1
+				end
+			end
+		end
+		return total, rejected
+	end
+
+	local function activate_ai(opts)
+		opts = opts or {}
+		local instance, _, bctx = legacy_bootstrap({
+			role = "ai",
+			lobby_code = "ABC12",
+			dwell = opts.dwell,
+			pacing = opts.pacing,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		ctx.eq(instance.update(0.016), "active")
+		drain_envelopes(bctx)
+		-- Confirm SETUP so the owned decision is the oldest inflight frame; a
+		-- delivered decision reply then routes to that decision rather than to a
+		-- preceding coordination op.
+		if (opts.pacing or "normal") == "normal" then
+			setup_ok(bctx, "ai")
+			instance.update(0.016)
+			drain_envelopes(bctx)
+		end
+		return instance, bctx
+	end
+
+	test("a_delivered_stale_decision_counts_once_despite_many_updates", function()
+		local instance, bctx = activate_ai()
+		-- The loop issued a decision and captured at the current epoch; move the
+		-- engine state so the delivered action can no longer be valid.
+		bctx.engine.G.GAME.dollars = 999
+		support.inbound(bctx, decision_reply({ action = { type = "SELECT_BLIND", id = "b1" }, reason = "r" }))
+		instance.update(0.016)
+		ctx.eq(instance.status().rejected, 1, "the delivered stale is counted once")
+		local total, rejected = count_receipts(bctx)
+		ctx.eq(rejected, 1, "exactly one rejection receipt")
+		-- A hundred-plus further idle/dwell/transient updates must not re-count it.
+		for _ = 1, 120 do
+			instance.update(0.016)
+		end
+		ctx.eq(instance.status().rejected, 1, "no re-count through repeated updates")
+		local _, more_rejected = count_receipts(bctx)
+		ctx.eq(more_rejected, 0, "no further rejection receipt")
+		instance.shutdown("test")
+	end)
+
+	test("a_dispatch_failed_decision_counts_once", function()
+		local instance, bctx = activate_ai()
+		-- A delivered action that is not a current candidate fails validation.
+		support.inbound(bctx, decision_reply({ action = { type = "SELECT_BLIND", id = "bogus" }, reason = "r" }))
+		instance.update(0.016)
+		ctx.eq(instance.status().rejected, 1, "dispatch failure counted once")
+		local total, rejected = count_receipts(bctx)
+		ctx.eq(rejected, 1)
+		instance.shutdown("test")
+	end)
+
+	test("a_response_rejected_decision_counts_once", function()
+		local instance, bctx = activate_ai()
+		support.inbound(bctx, { ok = false, code = "practice_bad_payload" })
+		instance.update(0.016)
+		ctx.eq(instance.status().rejected, 1, "response rejection counted once")
+		local total, rejected = count_receipts(bctx)
+		ctx.eq(rejected, 1)
+		instance.shutdown("test")
+	end)
+
+	test("an_out_of_order_decision_code_is_not_counted", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		-- Unsolicited decision reply with no owned inflight slot.
+		support.inbound(bctx, { ok = true, code = "practice_decision_ready", action = { type = "SELECT_BLIND", id = "b1" } })
+		instance.update(0.016)
+		for _ = 1, 20 do
+			instance.update(0.016)
+		end
+		ctx.eq(instance.status().rejected, 0, "an out-of-order reply is never a counted refusal")
+		instance.shutdown("test")
+	end)
+
+	test("the_final_refusal_before_a_stop_is_still_counted_once", function()
+		-- Default max_consecutive_errors is 3: three delivered dispatch failures
+		-- reach the stop. The third still counts and is receipted (L3), even
+		-- though the loop returns "stopped" rather than "idle". Auto-coordination
+		-- is off so the only coordination frame is the single startup heartbeat and
+		-- the owned decision is the oldest inflight frame at each delivery.
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai",
+			lobby_code = "ABC12",
+			auto_coordinate = false,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		ctx.eq(instance.update(0.016), "active")
+		drain_envelopes(bctx)
+		local reply = decision_reply({ action = { type = "SELECT_BLIND", id = "bogus" }, reason = "r" })
+		support.inbound(bctx, reply)
+		instance.update(0.016)
+		ctx.eq(instance.status().rejected, 1)
+		-- Re-issue, then clear the heartbeat and the previous receipt's inflight
+		-- slot ahead of the next decision (with auto-coordination off these are
+		-- the only coordination/result frames).
+		instance.update(0.016)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		support.inbound(bctx, reply)
+		instance.update(0.016)
+		ctx.eq(instance.status().rejected, 2)
+		-- Re-issue and deliver the refusal that exhausts the error budget.
+		instance.update(0.016)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		support.inbound(bctx, reply)
+		ctx.eq(instance.update(0.016), "stopped", "the third refusal stops the loop")
+		ctx.eq(instance.status().rejected, 3, "the final refusal is counted once")
+		local _, rejected = count_receipts(bctx)
+		ctx.eq(rejected, 3, "three rejection receipts")
+		instance.shutdown("test")
+	end)
+
+	test("bootstrap_wires_the_readiness_probe_only_with_dwell", function()
+		local dwell = { blind = 2, card = 4, pvp = 4, shop = 6, shop_first = 8, booster = 4, control = 0 }
+		local normal, _ = activate_ai({ dwell = dwell })
+		ctx.eq(normal.describe().loop_has_readiness, true, "Normal + dwell wires the probe")
+		normal.shutdown("test")
+		local instant, _ = activate_ai({ dwell = dwell, pacing = "instant" })
+		ctx.eq(instant.describe().loop_has_readiness, false, "Instant never wires the probe")
+		instant.shutdown("test")
+		local legacy, _ = activate_ai({})
+		ctx.eq(legacy.describe().loop_has_readiness, false, "no dwell port keeps the legacy path")
+		legacy.shutdown("test")
+	end)
+
+	test("a_locked_decision_gives_full_thinking_time_after_readiness", function()
+		local dwell = { blind = 2, card = 4, pvp = 4, shop = 6, shop_first = 8, booster = 4, control = 0 }
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12", dwell = dwell })
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		-- The decision is live (BLIND_SELECTION) but the engine is mid-animation:
+		-- the controller is locked from before activation. No capture and no
+		-- decision may be issued, and the thinking clock must not run.
+		bctx.engine.G.CONTROLLER.locked = true
+		ctx.eq(instance.update(0.016), "active")
+		drain_envelopes(bctx)
+		for _ = 1, 20 do
+			instance.update(0.016)
+			bctx.clock.advance(0.25) -- five seconds of animation
+		end
+		local _, locked_ops = drain_envelopes(bctx)
+		ctx.eq(locked_ops.decide_begin, nil, "no decision while locked")
+		ctx.eq(instance.status().decisions, 0)
+		-- Readiness arrives: the full 2 s blind dwell starts now, not earlier.
+		bctx.engine.G.CONTROLLER.locked = false
+		instance.update(0.016)
+		local _, first = drain_envelopes(bctx)
+		ctx.eq(first.decide_begin, nil, "the dwell starts at readiness, not an immediate issue")
+		bctx.clock.advance(1.9)
+		instance.update(0.016)
+		local _, mid = drain_envelopes(bctx)
+		ctx.eq(mid.decide_begin, nil, "still inside the 2s dwell")
+		bctx.clock.advance(0.2)
+		instance.update(0.016)
+		local _, ready_ops = drain_envelopes(bctx)
+		ctx.is_true(ready_ops.decide_begin ~= nil, "issues only after the full dwell from readiness")
+		instance.shutdown("test")
+	end)
+
+	test("a_persistent_overlay_never_stops_or_leaves_the_lobby", function()
+		-- A1: an informational Multiplayer overlay (e.g. "Reconnected!") the AI
+		-- cannot dismiss must gate the thinking clock only. It must never end the
+		-- match, even after 120 s. A decision phase with no legal candidate (an
+		-- empty hand) isolates the overlay hold from request timeouts, and the
+		-- ordered responder completes the pre-start coordination so the only
+		-- deadline in play is the overlay hold itself.
+		local dwell = { blind = 2, card = 4, pvp = 4, shop = 6, shop_first = 8, booster = 4, control = 0 }
+		local engine_support = support.engine_support(ctx.repo_root)
+		local engine = support.engine(ctx.repo_root, { state = engine_support.STATES.SELECTING_HAND })
+		support.shape_mp(engine, { code = "ABC12", ruleset_key = "ruleset_mp_majorleague", ruleset_short = "majorleague" })
+		engine.MP.LOBBY.config.timer_base_seconds = 180
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", engine = engine, dwell = dwell,
+			ruleset_key = "ruleset_mp_majorleague", ruleset_short = "majorleague",
+		})
+		local function respond_all()
+			for _, message in ipairs(support.drain_outbound(bctx)) do
+				local op = message.op
+				if op == "setup" then
+					support.inbound(bctx, {
+						ok = true, code = "practice_ok", role = "ai",
+						ruleset_id = "ruleset_mp_majorleague", gamemode = "gamemode_mp_attrition",
+						forced_options = { "timer_base_seconds" }, difficulty = "competitive",
+						mode = "normal", pacing = "normal",
+					})
+				elseif op == "join_code" then
+					support.inbound(bctx, { ok = true, code = "practice_ok", lobby_code = "ABC12" })
+				else
+					support.inbound(bctx, { ok = true, code = "practice_ok", role = "ai", started = true })
+				end
+			end
+		end
+		ctx.is_true(instance.install())
+		step(instance, bctx)
+		respond_all()
+		for _ = 1, 60 do
+			step(instance, bctx)
+			respond_all()
+			if instance.describe().coordinated then
+				break
+			end
+		end
+		ctx.is_true(instance.describe().coordinated, "pre-start coordination completed")
+		bctx.engine.G.OVERLAY_MENU = { id = "mp_info" }
+		for _ = 1, 130 do
+			bctx.clock.advance(1)
+			instance.update(0.016)
+		end
+		ctx.eq(instance.state(), "active", "a persistent overlay must not stop the runtime")
+		ctx.eq(instance.status().last_error, nil, "no loop_not_ready under an overlay")
+		local stats = instance.describe().loop_stats
+		ctx.is_true(stats ~= nil and stats.not_ready == 0, "soft frames never count toward the fatal window")
+		ctx.is_true(stats ~= nil and stats.overlay_idle > 0, "the overlay gated the thinking clock")
+		ctx.is_true(stats ~= nil and stats.empty > 0, "the AI acted under the overlay after the grace")
+		instance.shutdown("test")
 	end)
 
 	test("ai_activation_wires_wait_state_and_revision_and_a_15s_loop_timeout", function()
@@ -960,8 +1249,129 @@ return function(ctx)
 		ctx.eq(instance.status().decisions, 0)
 	end)
 
+	test("terminal_late_success_replies_never_rearm_or_teardown", function()
+		local original_send = function()
+			return true
+		end
+		local client = { send = original_send }
+		local leave_calls = 0
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai",
+			client = client,
+			terminal_probe = function()
+				return "win"
+			end,
+		})
+		bctx.engine.MP.LOBBY.code = "ABC12"
+		bctx.engine.MP.ACTIONS.leave_lobby = function()
+			leave_calls = leave_calls + 1
+		end
+		instance.install()
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		ctx.eq(instance.update(0.016), "terminal")
+		drain_envelopes(bctx)
+		ctx.is_true(client.send ~= original_send, "send guard installed for the terminal run")
+		local guard = client.send
+
+		local late = {
+			{ op = "hello", ok = true, code = "practice_ok" },
+			{
+				op = "setup", ok = true, code = "practice_ok",
+				ruleset_id = "ruleset_mp_standard_ranked", gamemode = "gamemode_mp_attrition",
+				forced_options = { "timer_base_seconds" }, role = "ai",
+				difficulty = "competitive", mode = "normal", pacing = "normal",
+			},
+			{ op = "ready", ok = true, code = "practice_ok" },
+			{ op = "start", ok = true, code = "practice_ok" },
+			{ op = "join_code", ok = true, code = "practice_ok", lobby_code = "ABC12" },
+			{ op = "lobby_code", ok = false, code = "practice_bad_payload" },
+			{ op = "heartbeat", ok = true, code = "practice_ok", aborted = true },
+		}
+		for _, reply in ipairs(late) do
+			-- CLOSED then a successful reply in the same batch, then across updates.
+			support.inbound(bctx, { op = "status", ok = false, code = "practice_closed" })
+			support.inbound(bctx, reply)
+			bctx.clock.advance(1)
+			ctx.eq(instance.update(0.016), "terminal")
+		end
+		for _, code in ipairs({ "practice_closed", "practice_ended", "practice_aborted" }) do
+			support.inbound(bctx, { op = "status", ok = false, code = code })
+			bctx.clock.advance(1)
+			ctx.eq(instance.update(0.016), "terminal")
+		end
+		ctx.eq(instance.state(), "terminal", "terminal state remains sticky")
+		ctx.eq(instance.status().decisions, 0, "no decisions after terminal")
+		ctx.eq(#support.drain_outbound(bctx), 0, "no frames after terminal")
+		ctx.eq(client.send, guard, "send guard retained")
+		ctx.eq(leave_calls, 0, "leave_local/host teardown never called")
+		ctx.eq(bctx.engine.MP.LOBBY.code, "ABC12", "lobby left untouched")
+		ctx.eq(instance.status().errors, 0, "dropped terminal replies are not failures")
+		instance.shutdown("test")
+	end)
+
+	test("terminal_owned_late_hello_ack_never_rearms", function()
+		-- Terminal can precede the original owned HELLO ack. The real in-memory
+		-- worker channel then delivers it through the genuine inflight routing.
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai",
+			terminal_probe = function()
+				return "win"
+			end,
+		})
+		instance.install()
+		local requests = support.drain_outbound(bctx)
+		ctx.eq(requests[1].op, "hello")
+		ctx.eq(instance.update(0.016), "terminal")
+		support.drain_outbound(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		bctx.clock.advance(1)
+		ctx.eq(instance.update(0.016), "terminal")
+		ctx.eq(instance.state(), "terminal", "owned late HELLO ack never re-arms")
+		ctx.eq(instance.status().decisions, 0)
+		instance.shutdown("test")
+	end)
+
+	test("terminal_end_ack_consumed_and_timeout_recorded_once", function()
+		local acked, _, acked_ctx = support.bootstrap(ctx.repo_root, {
+			role = "ai",
+			terminal_probe = function()
+				return "win"
+			end,
+		})
+		acked.install()
+		drain_envelopes(acked_ctx)
+		support.inbound(acked_ctx, { ok = true, code = "practice_ok" })
+		ctx.eq(acked.update(0.016), "terminal")
+		drain_envelopes(acked_ctx)
+		support.inbound(acked_ctx, { op = "end", ok = true, code = "practice_ok" })
+		acked_ctx.clock.advance(121)
+		ctx.eq(acked.update(0.016), "terminal")
+		ctx.eq(acked.status().errors, 0, "an acked END records no timeout")
+		acked.shutdown("test")
+
+		local silent, _, silent_ctx = support.bootstrap(ctx.repo_root, {
+			role = "ai",
+			terminal_probe = function()
+				return "win"
+			end,
+		})
+		silent.install()
+		drain_envelopes(silent_ctx)
+		support.inbound(silent_ctx, { ok = true, code = "practice_ok" })
+		ctx.eq(silent.update(0.016), "terminal")
+		drain_envelopes(silent_ctx)
+		silent_ctx.clock.advance(121)
+		ctx.eq(silent.update(0.016), "terminal")
+		ctx.eq(silent.status().errors, 1, "a missing END ack records exactly one timeout")
+		silent_ctx.clock.advance(121)
+		ctx.eq(silent.update(0.016), "terminal")
+		ctx.eq(silent.status().errors, 1, "the timeout is never re-recorded")
+		silent.shutdown("test")
+	end)
+
 	test("human_host_start_is_not_resent_while_the_lobby_code_is_async", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", deferred_code = true })
+		local instance, _, bctx = legacy_bootstrap({ role = "human", deferred_code = true })
 		instance.install()
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -1000,7 +1410,7 @@ return function(ctx)
 		local logger = { record = function(fields)
 			records[#records + 1] = fields
 		end }
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", deferred_code = true, logger = logger })
+		local instance, _, bctx = legacy_bootstrap({ role = "human", deferred_code = true, logger = logger })
 		instance.install()
 		drain_envelopes(bctx)
 		support.inbound(bctx, { ok = true, code = "practice_ok" })
@@ -1172,7 +1582,7 @@ return function(ctx)
 	end)
 
 	test("host_create_failure_is_fatal_and_never_recreated", function()
-		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human" })
+		local instance, _, bctx = legacy_bootstrap({ role = "human" })
 		-- Break the real forcing *before* the driver snapshots the callbacks:
 		-- the lobby is created but no config keys are recorded. Once the create
 		-- callback ran, this must be fatal, never a re-armed second createLobby.
@@ -1270,11 +1680,14 @@ return function(ctx)
 				blind_pvp = pvp or nil,
 				blind_key = pvp and "bl_mp_nemesis" or "bl_small",
 			})
-			support.shape_mp(engine, { code = "ABC12" })
+			support.shape_mp(engine, { code = "ABC12", ruleset_key = "ruleset_mp_majorleague", ruleset_short = "majorleague" })
 			-- The guest applies the host's lobby configuration locally; the AI's
 			-- source-derived digest reads these live values.
 			engine.MP.LOBBY.config.timer_base_seconds = 180
-			return support.bootstrap(ctx.repo_root, { role = "ai", engine = engine })
+			return support.bootstrap(ctx.repo_root, {
+				role = "ai", engine = engine,
+				ruleset_key = "ruleset_mp_majorleague", ruleset_short = "majorleague",
+			})
 		end
 
 		-- Ordered mini-responder: every pushed frame gets exactly one reply so
@@ -1376,5 +1789,687 @@ return function(ctx)
 		restore()
 		owner.combine(1, 1)
 		ctx.eq(bumps, 1, "restored original no longer bumps")
+	end)
+
+	test("state_edge_observer_is_honest_sampled_diagnostic", function()
+		local RuntimeBootstrap = support.mod(ctx.repo_root, "AISparring/integration/runtime_bootstrap.lua")
+		local stages = { MAIN_MENU = 1, RUN = 2 }
+		local observed = nil
+		local function observe(connected, enemy_countdown, self_countdown, stage, started)
+			local mp = {
+				LOBBY = { connected = connected, code = "ABC12" },
+				enemy_disconnect_countdown = enemy_countdown,
+				self_reconnect_countdown = self_countdown,
+			}
+			local g = { STAGES = stages, STAGE = stage }
+			local next_state = RuntimeBootstrap.observe_state_edges(observed, mp, g, started)
+			local delta = {
+				enemy = next_state.enemy_edge,
+				reconnect = next_state.reconnect_edge,
+				stop = next_state.stop_edge,
+			}
+			observed = next_state
+			return delta
+		end
+
+		local delta = observe(true, nil, nil, stages.RUN, true)
+		ctx.eq(delta.enemy, 0)
+		ctx.eq(delta.reconnect, 0)
+		ctx.eq(delta.stop, 0)
+
+		delta = observe(true, { end_time = 5 }, nil, stages.RUN, true)
+		ctx.eq(delta.enemy, 1)
+		delta = observe(true, { end_time = 5 }, nil, stages.RUN, true)
+		ctx.eq(delta.enemy, 0)
+		delta = observe(true, nil, nil, stages.RUN, true)
+		ctx.eq(delta.enemy, 0)
+
+		delta = observe(false, nil, { end_time = 6 }, stages.RUN, true)
+		ctx.eq(delta.reconnect, 1)
+		delta = observe(false, nil, { end_time = 6 }, stages.RUN, true)
+		ctx.eq(delta.reconnect, 0)
+		delta = observe(true, nil, nil, stages.RUN, true)
+		ctx.eq(delta.reconnect, 0)
+
+		delta = observe(true, nil, nil, stages.MAIN_MENU, true)
+		ctx.eq(delta.stop, 1)
+		delta = observe(true, nil, nil, stages.MAIN_MENU, true)
+		ctx.eq(delta.stop, 0)
+
+		-- A manual start/normal terminal (RUN stage retained) never produces an edge.
+		local state = RuntimeBootstrap.observe_state_edges(nil, { LOBBY = { connected = true, code = "ABC12" } }, { STAGES = stages, STAGE = stages.RUN }, true)
+		ctx.eq(state.match, true)
+		local next_state = RuntimeBootstrap.observe_state_edges(state, { LOBBY = { connected = true, code = "ABC12" } }, { STAGES = stages, STAGE = stages.RUN }, true)
+		ctx.eq(next_state.stop_edge, 0)
+		local idle = RuntimeBootstrap.observe_state_edges(nil, { LOBBY = { connected = true, code = "ABC12" } }, { STAGES = stages, STAGE = stages.RUN }, false)
+		ctx.eq(idle.match, false)
+		ctx.eq(idle.stop_edge, 0)
+		local nomp = RuntimeBootstrap.observe_state_edges(nil, nil, { STAGES = stages, STAGE = stages.RUN }, true)
+		ctx.eq(nomp.enemy_edge, 0)
+		ctx.eq(nomp.reconnect_edge, 0)
+		ctx.eq(nomp.stop_edge, 0)
+	end)
+
+	test("inbound_tap_counts_actual_parsed_actions_and_is_human_only", function()
+		-- The unattended AI runtime never installs the observer tap.
+		local ai = support.bootstrap(ctx.repo_root, { role = "ai" })
+		ai.install()
+		ctx.eq(AISP_INBOUND_TAP, nil, "AI runtime leaves the tap nil")
+		ai.shutdown("test")
+
+		local human = support.bootstrap(ctx.repo_root, { role = "human" })
+		human.install()
+		ctx.is_true(type(AISP_INBOUND_TAP) == "function", "human runtime installs the observer tap")
+		-- The tap receives only an action name, returns nothing, counts each
+		-- occurrence of exactly the three known real actions, and keeps a bounded
+		-- total of every parsed action string (liveness, incl. innocuous traffic).
+		ctx.eq(AISP_INBOUND_TAP("enemyDisconnected"), nil)
+		AISP_INBOUND_TAP("enemyDisconnected")
+		AISP_INBOUND_TAP("stopGame")
+		AISP_INBOUND_TAP("reconnecting")
+		AISP_INBOUND_TAP("keepAlive")
+		AISP_INBOUND_TAP("enemyInfo")
+		AISP_INBOUND_TAP("somethingElse")
+		AISP_INBOUND_TAP(nil)
+		local status = human.status()
+		local events = status.inbound_events
+		ctx.eq(events.enemyDisconnected, 2)
+		ctx.eq(events.stopGame, 1)
+		ctx.eq(events.reconnecting, 1)
+		ctx.eq(events.somethingElse, nil)
+		ctx.eq(status.inbound_seen, 7, "total observed strings (nil and empty never count)")
+		ctx.eq(status.inbound_tap, true)
+		local described = human.describe()
+		ctx.eq(described.inbound_events.enemyDisconnected, 2)
+		ctx.eq(described.inbound_seen, 7)
+		ctx.eq(described.inbound_tap, true)
+		ctx.is_true(described.state_edges ~= nil and described.state_edges.enemy_disconnected == 0)
+		human.shutdown("test")
+		ctx.eq(AISP_INBOUND_TAP, nil, "tap is cleared on shutdown")
+	end)
+
+	test("inbound_tap_shutdown_preserves_a_foreign_replacement", function()
+		local human = support.bootstrap(ctx.repo_root, { role = "human" })
+		human.install()
+		local foreign = function()
+			return "not ours"
+		end
+		AISP_INBOUND_TAP = foreign
+		human.shutdown("test")
+		ctx.eq(AISP_INBOUND_TAP, foreign, "a foreign replacement is never deleted by our shutdown")
+		AISP_INBOUND_TAP = nil
+	end)
+
+	test("inbound_snapshot_survives_real_logger_and_brackets_retention", function()
+		local Logger = support.mod(ctx.repo_root, "AISparring/src/logger.lua")
+		local lines = {}
+		local real = Logger.new(function(_, line)
+			lines[#lines + 1] = line
+		end)
+		-- The production core-shaped bridge: record -> inner:log(level, event, fields).
+		local bridge = {
+			record = function(fields)
+				return real:log("info", fields.event or "companion", fields)
+			end,
+		}
+		-- A directly controllable monotonic clock so nonfinite times can be driven.
+		local clock_state = { t = 1000 }
+		local clock = {
+			now = function()
+				return clock_state.t
+			end,
+		}
+		local terminal = false
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "human",
+			logger = bridge,
+			clock = clock,
+			terminal_probe = function()
+				if terminal then
+					return "win"
+				end
+			end,
+		})
+		instance.install()
+		ctx.is_true(type(AISP_INBOUND_TAP) == "function")
+
+		local function snapshot_lines(from)
+			local found = {}
+			for i = from or 1, #lines do
+				if lines[i]:find('event="mp_inbound_snapshot"', 1, true) then
+					found[#found + 1] = lines[i]
+				end
+			end
+			return found
+		end
+		local function value_for(group, action)
+			for _, line in ipairs(group) do
+				if line:find('action="' .. action .. '"', 1, true) then
+					return line
+				end
+			end
+			return nil
+		end
+
+		-- (a) installed before any dispatch: owned + unseen.
+		local installed = snapshot_lines(1)
+		local installed_observer = value_for(installed, "observer")
+		ctx.is_true(
+			installed_observer ~= nil
+				and installed_observer:find('status="installed"', 1, true) ~= nil
+				and installed_observer:find('count="0"', 1, true) ~= nil,
+			"installed snapshot is owned+unseen"
+		)
+
+		-- (b) alive after actual observed traffic.
+		AISP_INBOUND_TAP("keepAlive")
+		AISP_INBOUND_TAP("enemyInfo")
+		AISP_INBOUND_TAP("enemyDisconnected")
+		support.drain_outbound(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		terminal = true
+		ctx.eq(instance.update(0.016), "terminal")
+		local open = {}
+		for _, line in ipairs(snapshot_lines(1)) do
+			if line:find('phase="open"', 1, true) then
+				open[#open + 1] = line
+			end
+		end
+		local enemy = value_for(open, "enemyDisconnected")
+		ctx.is_true(enemy ~= nil and enemy:find('count="1"', 1, true) ~= nil, "enemyDisconnected=1 survived")
+		local stop = value_for(open, "stopGame")
+		ctx.is_true(stop ~= nil and stop:find('count="0"', 1, true) ~= nil, "zero counts survive serialization")
+		local observer = value_for(open, "observer")
+		ctx.is_true(
+			observer ~= nil
+				and observer:find('status="alive"', 1, true) ~= nil
+				and observer:find('count="3"', 1, true) ~= nil
+				and observer:find('seconds="1000"', 1, true) ~= nil,
+			"observer alive + finite total seen"
+		)
+
+		-- (c) nonfinite clocks are never serialized and never poison the cadence.
+		local anchor = #lines
+		clock_state.t = math.huge
+		ctx.eq(instance.update(0.016), "terminal")
+		clock_state.t = -math.huge
+		ctx.eq(instance.update(0.016), "terminal")
+		for i = anchor + 1, #lines do
+			ctx.is_true(lines[i]:find('seconds="inf"', 1, true) == nil, "no +inf seconds")
+			ctx.is_true(lines[i]:find('seconds="-inf"', 1, true) == nil, "no -inf seconds")
+			ctx.is_true(lines[i]:find('seconds="nan"', 1, true) == nil, "no nan seconds")
+		end
+		-- back to finite time: honest cadence resumes from the finite anchor.
+		clock_state.t = 1030
+		ctx.eq(instance.update(0.016), "terminal")
+		local resumed = false
+		for i = anchor + 1, #lines do
+			if lines[i]:find('phase="retained"', 1, true) and lines[i]:find('seconds="1030"', 1, true) then
+				resumed = true
+			end
+		end
+		ctx.is_true(resumed, "finite clock resumes periodic snapshots")
+		local quiet = #lines
+		instance.update(0.016)
+		ctx.eq(#lines, quiet, "no per-frame snapshot flood")
+
+		-- (d) a displaced tap freezes counters and is reported displaced.
+		local foreign = function()
+			return "not ours"
+		end
+		AISP_INBOUND_TAP = foreign
+		ctx.eq(instance.status().inbound_tap, false, "status reflects actual owned identity")
+		ctx.eq(instance.describe().inbound_tap, false, "describe reflects actual owned identity")
+		clock_state.t = 1061
+		ctx.eq(instance.update(0.016), "terminal")
+		local displaced = false
+		for i = quiet + 1, #lines do
+			if lines[i]:find('phase="retained"', 1, true) and lines[i]:find('status="displaced"', 1, true) then
+				displaced = true
+			end
+		end
+		ctx.is_true(displaced, "displaced tap reported, not alive")
+
+		-- (e) shutdown preserves the foreign tap and serializes absent + final.
+		instance.shutdown("test")
+		ctx.eq(AISP_INBOUND_TAP, foreign, "foreign replacement preserved on shutdown")
+		local final, closed = false, false
+		for _, line in ipairs(lines) do
+			if line:find('event="mp_inbound_snapshot"', 1, true) then
+				if line:find('phase="final"', 1, true) then
+					final = true
+				end
+				if line:find('phase="closed"', 1, true) and line:find('status="absent"', 1, true) then
+					closed = true
+				end
+			end
+		end
+		ctx.is_true(final, "final snapshot survives shutdown")
+		ctx.is_true(closed, "absent status serialized after shutdown")
+		AISP_INBOUND_TAP = nil
+	end)
+
+	-- Ranked effective-config contract carried through Setup/Ready.
+
+	local RANKED_SCHEMA = "aisparring.ranked_effective_config.v1"
+	local RANKED_SELECTION = {
+		schema = "aisparring.ranked_selection.v1",
+		deck_key = "red", back_key = "b_red", back_name = "Red Deck",
+		stake_key = "white", stake_index = 1,
+	}
+	-- A fixture readiness port simulating later verified facts (unavailable to a
+	-- menu/service actor). The real readers are covered by the driver tests.
+	local READINESS_OK = {}
+	for _, key in ipairs({
+		"unlock_check", "all_unlocked", "advertised_unlocked", "advertised_preview",
+		"advertised_preview_valid", "live_preview", "preview_consistent",
+		"peer_unlocked", "peer_cached", "banned_mods_empty", "mods_approved",
+		"release_mode", "game_speed_ok", "debug_disabled", "animations_normal", "handy_disabled",
+	}) do
+		READINESS_OK[key] = true
+	end
+
+	-- The dedicated completed-draft commitment, matching RANKED_SELECTION's
+	-- final option ("red~white" -> Red Deck / White Stake). It is mandatory
+	-- under the Ranked schema.
+	local RANKED_DRAFT = {
+		schema = "aisparring.ranked_draft.v1",
+		profile_id = "aisparring.ranked_draft_profile.standard_1_2_2.v1",
+		first_actor = "human",
+		pool = {
+			"blue~green", "blue~black", "green~green", "green~black", "yellow~green",
+			"red~white", "black~green", "black~black", "yellow~black",
+		},
+		transcript = {
+			{ actor = "human", operation = "ban", option_ids = { "blue~green" } },
+			{ actor = "ai", operation = "ban", option_ids = { "blue~black", "green~green" } },
+			{ actor = "human", operation = "ban", option_ids = { "green~black", "yellow~green" } },
+			{ actor = "ai", operation = "select", option_ids = { "red~white" } },
+		},
+		final = "red~white",
+	}
+
+	local function ranked_setup(bctx, extra)
+		local response = {
+			op = "setup", ok = true, code = "practice_ok", role = "ai",
+			ruleset_id = "ruleset_mp_standard_ranked", gamemode = "gamemode_mp_attrition",
+			config_schema = RANKED_SCHEMA,
+			-- The Ranked path carries no forced-keyset; the runtime reads the
+			-- actual layered configuration itself.
+			forced_options = {},
+			-- The validated host-owned selection and its completed draft
+			-- commitment are both mandatory under Ranked.
+			selection = RANKED_SELECTION,
+			draft = RANKED_DRAFT,
+			-- A deliberately wrong service expected digest: the runtime must
+			-- never echo it as its own binding.
+			expected_config_digest = "deadbeef",
+			difficulty = "competitive", mode = "normal", pacing = "normal",
+		}
+		for key, value in pairs(extra or {}) do
+			response[key] = value
+		end
+		support.inbound(bctx, response)
+	end
+
+	test("ranked_ready_carries_schema_and_independent_digest", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		-- The guest receives the forced config on join; this is the actual live
+		-- configuration the runtime must bind.
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		ranked_setup(bctx)
+		step(instance, bctx)
+		local _, by_op = drain_envelopes(bctx)
+		ctx.is_true(by_op.ready ~= nil, "READY is sent under the ranked contract")
+		local ready_payload = by_op.ready.observation
+		ctx.eq(ready_payload.config_schema, RANKED_SCHEMA)
+		ctx.is_true(type(ready_payload.config_digest) == "string" and #ready_payload.config_digest == 8,
+			tostring(ready_payload.config_digest))
+		ctx.is_true(ready_payload.config_digest ~= "deadbeef",
+			"the runtime never echoes the service expected digest")
+		ctx.is_true(type(ready_payload.readiness) == "table", "the readiness record is carried")
+		ctx.eq(ready_payload.readiness.unlock_check, true)
+		instance.shutdown("test")
+	end)
+
+	test("ranked_ready_is_withheld_when_a_readiness_fact_is_not_true", function()
+		local not_ready = {}
+		for key, value in pairs(READINESS_OK) do
+			not_ready[key] = value
+		end
+		not_ready.debug_disabled = "unknown"
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = not_ready,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		ranked_setup(bctx)
+		step(instance, bctx)
+		local _, by_op = drain_envelopes(bctx)
+		ctx.eq(by_op.ready, nil, "READY is withheld while a fact is not true")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_setup_without_ranked_config_fails_immediately", function()
+		local codec = support.mod(ctx.repo_root, "AISparring/ai/codec.lua")
+		local MPDriver = support.mod(ctx.repo_root, "AISparring/integration/mp_driver.lua")
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "human",
+			modules = { codec = codec, MPDriver = MPDriver },
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		step(instance, bctx)
+		drain_envelopes(bctx)
+		-- Ranked SETUP arrives, but the shared parity module was never supplied.
+		support.inbound(bctx, {
+			op = "setup", ok = true, code = "practice_ok", role = "human",
+			ruleset_id = "ruleset_mp_standard_ranked", gamemode = "gamemode_mp_attrition",
+			config_schema = "aisparring.ranked_effective_config.v1", forced_options = {},
+			difficulty = "competitive", mode = "normal", pacing = "normal",
+		})
+		ctx.eq(instance.update(0.016), "stopped")
+		ctx.eq(instance.status().last_error, "boot_bad_modules")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_ready_then_mutation_fails_before_actuation", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		ranked_setup(bctx)
+		step(instance, bctx)
+		local _, by_op = drain_envelopes(bctx)
+		ctx.is_true(by_op.ready ~= nil, "READY was sent")
+		-- Mutate the actual config after READY, before the readiness commit.
+		bctx.engine.MP.LOBBY.config.timer_base_seconds = 151
+		for _ = 1, 8 do
+			if instance.state() == "stopped" then
+				break
+			end
+			-- Ack every coordination frame so the READY ack reaches the recheck
+			-- regardless of heartbeat interleaving.
+			for _, message in ipairs(support.drain_outbound(bctx)) do
+				if type(message.op) == "string" then
+					support.inbound(bctx, { ok = true, code = "practice_ok" })
+				end
+			end
+			step(instance, bctx)
+		end
+		ctx.eq(instance.state(), "stopped", "the post-READY mutation is refused")
+		ctx.eq(instance.status().last_error, "boot_config_mismatch")
+		-- No actuator ran: the guest ready callback never toggled the lobby.
+		ctx.eq(bctx.engine.MP.LOBBY.ready_to_start, false, "no actuator mutation on refusal")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_setup_wrong_ruleset_id_fails_closed", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		-- A legacy ruleset id cannot be carried under the Ranked schema.
+		ranked_setup(bctx, { ruleset_id = "ruleset_mp_majorleague" })
+		ctx.eq(instance.update(0.016), "stopped")
+		ctx.eq(instance.status().last_error, "boot_config_mismatch")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_unknown_schema_fails_closed_before_ready", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "ai", lobby_code = "ABC12" })
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		ranked_setup(bctx, { config_schema = "aisparring.ranked_effective_config.v2" })
+		local status = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(instance.status().last_error, "boot_config_mismatch")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_post_start_wrong_deck_aborts_before_policy", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		-- The actual initialized run selected a different Back than the draft.
+		bctx.engine.G.GAME.selected_back = { effect = { center = { key = "b_blue" } } }
+		bctx.engine.G.GAME.stake = 1
+		ranked_setup(bctx, { selection = RANKED_SELECTION })
+		for _ = 1, 8 do
+			if instance.state() == "stopped" then
+				break
+			end
+			step(instance, bctx)
+		end
+		ctx.eq(instance.state(), "stopped", "a real deck mismatch aborts")
+		ctx.eq(instance.status().last_error, "boot_selection_mismatch")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_post_start_matching_deck_does_not_abort", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		bctx.engine.G.GAME.selected_back = { effect = { center = { key = "b_red" } } }
+		bctx.engine.G.GAME.stake = 1
+		ranked_setup(bctx, { selection = RANKED_SELECTION })
+		for _ = 1, 6 do
+			step(instance, bctx)
+		end
+		ctx.is_true(instance.state() ~= "stopped", "a matching selection does not abort")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_ready_carries_the_draft_commitment_digest", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		ranked_setup(bctx, { draft = RANKED_DRAFT })
+		step(instance, bctx)
+		local _, by_op = drain_envelopes(bctx)
+		ctx.is_true(by_op.ready ~= nil, "READY is sent with a bound draft")
+		local ready_payload = by_op.ready.observation
+		ctx.is_true(type(ready_payload.draft_digest) == "string" and #ready_payload.draft_digest == 8,
+			tostring(ready_payload.draft_digest))
+		-- The runtime derives the digest itself; it is not supplied by SETUP.
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local expected = ranked_config.draft_commitment_digest(
+			RANKED_DRAFT.profile_id, RANKED_DRAFT.first_actor,
+			RANKED_DRAFT.pool, RANKED_DRAFT.transcript, RANKED_DRAFT.final
+		)
+		ctx.eq(ready_payload.draft_digest, expected, "independently derived draft digest")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_setup_tampered_draft_fails_closed", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		local tampered = {}
+		for key, value in pairs(RANKED_DRAFT) do
+			tampered[key] = value
+		end
+		tampered.transcript = {
+			{ actor = "ai", operation = "ban", option_ids = { "blue~green" } },
+			RANKED_DRAFT.transcript[2],
+			RANKED_DRAFT.transcript[3],
+			RANKED_DRAFT.transcript[4],
+		}
+		ranked_setup(bctx, { draft = tampered })
+		ctx.eq(instance.update(0.016), "stopped")
+		ctx.eq(instance.status().last_error, "boot_setup_failed")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_setup_without_draft_fails_closed", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		-- Ranked SETUP with a valid schema + selection but NO completed draft
+		-- commitment: fail closed. There is no selection-only Ranked launch.
+		support.inbound(bctx, {
+			op = "setup", ok = true, code = "practice_ok", role = "ai",
+			ruleset_id = "ruleset_mp_standard_ranked", gamemode = "gamemode_mp_attrition",
+			config_schema = RANKED_SCHEMA, forced_options = {},
+			selection = RANKED_SELECTION,
+			difficulty = "competitive", mode = "normal", pacing = "normal",
+		})
+		ctx.eq(instance.update(0.016), "stopped")
+		ctx.eq(instance.status().last_error, "boot_setup_failed")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_setup_final_selection_mismatch_fails_closed", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		-- A legal transcript whose final option is "blue~white" while the
+		-- mandatory selection is Red Deck / White Stake.
+		local mismatched = {
+			schema = "aisparring.ranked_draft.v1",
+			profile_id = "aisparring.ranked_draft_profile.standard_1_2_2.v1",
+			first_actor = "human",
+			pool = {
+				"green~green", "green~black", "yellow~green", "yellow~black", "black~green",
+				"blue~white", "black~black", "red~black", "red~white",
+			},
+			transcript = {
+				{ actor = "human", operation = "ban", option_ids = { "green~green" } },
+				{ actor = "ai", operation = "ban", option_ids = { "green~black", "yellow~green" } },
+				{ actor = "human", operation = "ban", option_ids = { "yellow~black", "black~green" } },
+				{ actor = "ai", operation = "select", option_ids = { "blue~white" } },
+			},
+			final = "blue~white",
+		}
+		ranked_setup(bctx, { draft = mismatched })
+		ctx.eq(instance.update(0.016), "stopped")
+		ctx.eq(instance.status().last_error, "boot_config_mismatch")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_setup_underscore_deck_key_binds_final_option", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		-- A deck key that contains an underscore must parse identically in Lua
+		-- (`%w` alone excludes `_`) and bind to the selection.
+		local underscore_selection = {
+			schema = "aisparring.ranked_selection.v1",
+			deck_key = "fixture_deck", back_key = "b_fixture_deck", back_name = "Fixture Deck",
+			stake_key = "white", stake_index = 1,
+		}
+		local underscore_draft = {
+			schema = "aisparring.ranked_draft.v1",
+			profile_id = "aisparring.ranked_draft_profile.standard_1_2_2.v1",
+			first_actor = "human",
+			pool = {
+				"fixture_deck~white", "fixture_deck~green", "blue~white", "blue~green", "yellow~white",
+				"yellow~green", "green~white", "black~white", "black~green",
+			},
+			transcript = {
+				{ actor = "human", operation = "ban", option_ids = { "black~green" } },
+				{ actor = "ai", operation = "ban", option_ids = { "green~white", "black~white" } },
+				{ actor = "human", operation = "ban", option_ids = { "yellow~white", "yellow~green" } },
+				{ actor = "ai", operation = "select", option_ids = { "fixture_deck~white" } },
+			},
+			final = "fixture_deck~white",
+		}
+		ranked_setup(bctx, { selection = underscore_selection, draft = underscore_draft })
+		for _ = 1, 4 do
+			step(instance, bctx)
+		end
+		ctx.is_true(instance.state() ~= "stopped", "an underscore deck key must not abort SETUP")
+		instance.shutdown("test")
+	end)
+
+	test("ranked_setup_without_selection_fails_closed", function()
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, {
+			role = "ai", lobby_code = "ABC12", readiness_override = READINESS_OK,
+		})
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		instance.update(0.016)
+		drain_envelopes(bctx)
+		bctx.engine.MP.ACTIONS.join_lobby("ABC12")
+		-- Ranked SETUP with no validated selection: fail closed, no fallback deck.
+		support.inbound(bctx, {
+			op = "setup", ok = true, code = "practice_ok", role = "ai",
+			ruleset_id = "ruleset_mp_standard_ranked", gamemode = "gamemode_mp_attrition",
+			config_schema = RANKED_SCHEMA, forced_options = {},
+			difficulty = "competitive", mode = "normal", pacing = "normal",
+		})
+		local status = instance.update(0.016)
+		ctx.eq(status, "stopped")
+		ctx.eq(instance.status().last_error, "boot_setup_failed")
+		instance.shutdown("test")
 	end)
 end

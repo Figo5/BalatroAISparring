@@ -27,12 +27,16 @@ MPDriver.CODE = {
 	BAD_ROLE = "driver_bad_role",
 	BAD_ENGINE = "driver_bad_engine",
 	BAD_SEED = "driver_bad_seed",
+	BAD_SELECTION = "driver_bad_selection",
 	BAD_CODE = "driver_bad_code",
 	BAD_STATE = "driver_bad_state",
 	BAD_DIGEST = "driver_bad_digest",
 	FORCE_FAILED = "driver_force_failed",
 	NO_RULESET = "driver_no_ruleset",
 	NO_FORCED_MODE = "driver_no_forced_gamemode",
+	NO_DISABLED = "driver_no_is_disabled",
+	RULESET_DISABLED = "driver_ruleset_disabled",
+	POST_START = "driver_post_start_selection",
 	MISSING_CALLBACK = "driver_missing_callback",
 	MISSING_ACTION = "driver_missing_action",
 	MISSING_ELEMENT = "driver_missing_element",
@@ -63,10 +67,42 @@ MPDriver.READY_ELEMENT_ID = "lobby_menu_start"
 MPDriver.UNLOCK_BACK_ID = "overlay_menu_back_button"
 MPDriver.UNLOCK_BUTTON = "continue_unlock"
 
-MPDriver.RULESET_KEY = "ruleset_mp_majorleague"
-MPDriver.RULESET_SHORT = "majorleague"
+-- Production practice ruleset: the real Multiplayer Standard Ranked registry.
+MPDriver.RULESET_KEY = "ruleset_mp_standard_ranked"
+MPDriver.RULESET_SHORT = "standard_ranked"
 MPDriver.AI_NAME = "BALATRO AI"
 MPDriver.FORCED_MODE = "gamemode_mp_attrition"
+
+-- The exact readiness record keys (primitives only). Every safety predicate must
+-- be the boolean true; the raw Preview evidence booleans may legitimately be
+-- true or false, and an unverified fact is the string "unknown".
+MPDriver.READINESS_KEYS = {
+	"unlock_check",
+	"all_unlocked",
+	"advertised_unlocked",
+	"advertised_preview",
+	"advertised_preview_valid",
+	"live_preview",
+	"preview_consistent",
+	"peer_unlocked",
+	"peer_cached",
+	"banned_mods_empty",
+	"mods_approved",
+	"release_mode",
+	"game_speed_ok",
+	"debug_disabled",
+	"animations_normal",
+	"handy_disabled",
+}
+
+-- Raw integration evidence booleans: allowed to be false; a separate predicate
+-- must be true. All other keys must be exactly true.
+MPDriver.READINESS_EVIDENCE_KEYS = {
+	advertised_preview = true,
+	live_preview = true,
+}
+
+MPDriver.MAX_MOD_STRING = 4096
 
 MPDriver.LIMITS = {
 	max_token = 64,
@@ -317,6 +353,23 @@ function MPDriver.factory(ports)
 	if type(rget(mp, "LOBBY")) ~= "table" then
 		return nil, CODE.BAD_ENGINE
 	end
+	-- The registry key defaults to the production Standard Ranked ruleset. A
+	-- fixture may select the legacy Major League registry explicitly; the
+	-- production bootstrap never overrides it.
+	local ruleset_key = rawget(ports, "ruleset_key")
+	if ruleset_key == nil then
+		ruleset_key = MPDriver.RULESET_KEY
+	end
+	if type(ruleset_key) ~= "string" or #ruleset_key == 0 or #ruleset_key > MPDriver.LIMITS.max_token then
+		return nil, CODE.BAD_PORTS
+	end
+	local ruleset_short = rawget(ports, "ruleset_short")
+	if ruleset_short == nil then
+		ruleset_short = string.gsub(ruleset_key, "^ruleset_mp_", "")
+	end
+	if type(ruleset_short) ~= "string" or #ruleset_short == 0 then
+		return nil, CODE.BAD_PORTS
+	end
 	local element_for = rawget(ports, "element_for")
 	if element_for ~= nil and type(element_for) ~= "function" then
 		return nil, CODE.BAD_PORTS
@@ -330,6 +383,22 @@ function MPDriver.factory(ports)
 	local actions = rawget(ports, "actions") or rget(mp, "ACTIONS")
 	local client = rawget(ports, "client")
 	local G = rawget(ports, "G")
+	local ranked_config = rawget(ports, "ranked_config")
+	if ranked_config ~= nil and type(ranked_config) ~= "table" then
+		return nil, CODE.BAD_PORTS
+	end
+	-- Readiness producers. `release_mode` is the real `_RELEASE_MODE` global
+	-- supplied by the entrypoint; `approved_mods` is the reviewed permitted
+	-- dependency inventory (unavailable until the deployment slice provisions
+	-- it). Both are optional: an absent producer yields an honest unknown.
+	local release_mode = rawget(ports, "release_mode")
+	local approved_mods = rawget(ports, "approved_mods")
+	-- Fixture-only override for the readiness record (a test port; unavailable to
+	-- a menu/service actor). The real readers below remain the production path.
+	local readiness_override = rawget(ports, "readiness_override")
+	if readiness_override ~= nil and type(readiness_override) ~= "table" then
+		return nil, CODE.BAD_PORTS
+	end
 	local hash_string = rawget(ports, "hash_string")
 	if hash_string ~= nil and type(hash_string) ~= "function" then
 		return nil, CODE.BAD_PORTS
@@ -462,9 +531,9 @@ function MPDriver.factory(ports)
 		if type(rulesets) ~= "table" then
 			return nil
 		end
-		local entry = rulesets[MPDriver.RULESET_KEY]
+		local entry = rulesets[ruleset_key]
 		if entry == nil then
-			entry = rulesets[MPDriver.RULESET_SHORT]
+			entry = rulesets[ruleset_short]
 		end
 		if type(entry) ~= "table" then
 			return nil
@@ -481,7 +550,13 @@ function MPDriver.factory(ports)
 		if type(gamemode) ~= "string" or #gamemode == 0 then
 			return nil, CODE.NO_FORCED_MODE
 		end
-		return { key = MPDriver.RULESET_KEY, gamemode = gamemode, forced_lobby_options = rget(entry, "forced_lobby_options") }
+		return { key = ruleset_key, gamemode = gamemode, forced_lobby_options = rget(entry, "forced_lobby_options") }
+	end
+
+	-- The registry key this driver was configured with (production default
+	-- Standard Ranked). Used to require the trusted SETUP ruleset id to match.
+	function instance.ruleset_key_value()
+		return ruleset_key
 	end
 
 	function instance.lobby_code()
@@ -594,10 +669,625 @@ function MPDriver.factory(ports)
 			return false, CODE.NO_FORCED_MODE
 		end
 		local config = rpath(mp, "LOBBY", "config")
-		if type(config) ~= "table" or rawget(config, "ruleset") ~= MPDriver.RULESET_KEY then
+		if type(config) ~= "table" or rawget(config, "ruleset") ~= ruleset_key then
 			return false, CODE.BAD_STATE
 		end
 		return true, CODE.OK
+	end
+
+	-- The real registry `is_disabled` gate. The pinned ranked layer exposes an
+	-- `is_disabled` function; the entry is a metatable-backed GameObject, so the
+	-- field is resolved with protected normal indexing, never rawget. Both roles
+	-- must call this and require `false` before create/join. A missing or
+	-- non-boolean result fails closed.
+	function instance.ruleset_disabled()
+		local entry = lookup_ruleset()
+		if entry == nil then
+			return nil, CODE.NO_RULESET
+		end
+		local ok_get, fn = pcall(function()
+			return entry.is_disabled
+		end)
+		if not ok_get or type(fn) ~= "function" then
+			return nil, CODE.NO_DISABLED
+		end
+		local ok_call, result = pcall(fn, entry)
+		if not ok_call then
+			return nil, CODE.NO_DISABLED
+		end
+		if type(result) == "boolean" then
+			return result, CODE.OK
+		end
+		-- The pinned ranked layer's `is_disabled` returns a localized reason
+		-- string when disabled; any non-false reason means the ruleset is
+		-- disabled (never reported as a missing callback).
+		if type(result) == "string" or type(result) == "table" or type(result) == "number" then
+			return true, CODE.OK
+		end
+		return nil, CODE.NO_DISABLED
+	end
+
+	-- The actual initialized run state for the post-start selection check:
+	-- `selected_back.effect.center.key` and `G.GAME.stake`. Values are read with
+	-- protected normal indexing (real center/effect objects inherit through
+	-- metatables); an uninitialized loading frame yields nils, which the caller
+	-- treats as a bounded retry, never a mismatch.
+	function instance.post_start_selection_state()
+		local game = rget(G, "GAME")
+		if type(game) ~= "table" then
+			return nil, nil
+		end
+		local key = nil
+		local back = rget(game, "selected_back")
+		if type(back) == "table" then
+			local ok_effect, effect = pcall(function()
+				return back.effect
+			end)
+			if ok_effect and type(effect) == "table" then
+				local ok_center, center = pcall(function()
+					return effect.center
+				end)
+				if ok_center and type(center) == "table" then
+					local ok_key, value = pcall(function()
+						return center.key
+					end)
+					if ok_key and type(value) == "string" then
+						key = value
+					end
+				end
+			end
+		end
+		local stake = rget(game, "stake")
+		if stake ~= nil and not is_int(stake) then
+			stake = nil
+		end
+		return key, stake
+	end
+
+	-- Post-start selection check against the completed draft selection. Returns
+	-- `ok, code, retry`; `retry` is true only for an uninitialized loading frame.
+	function instance.check_post_start_selection(selection)
+		if type(ranked_config) ~= "table"
+			or type(rawget(ranked_config, "check_post_start_selection")) ~= "function" then
+			return nil, CODE.BAD_DIGEST
+		end
+		local key, stake = instance.post_start_selection_state()
+		local ok, code, retry = ranked_config.check_post_start_selection(selection, key, stake)
+		if ok == nil then
+			return nil, code
+		end
+		return ok, code, retry
+	end
+
+	-- Whether the shared typed Ranked parity module was supplied. The Ranked
+	-- SETUP path requires it; a missing module is an immediate module fault, not
+	-- a bounded readiness wait.
+	function instance.has_ranked_config()
+		if type(ranked_config) ~= "table" then
+			return false
+		end
+		return type(rawget(ranked_config, "canonical_bytes")) == "function"
+			and type(rawget(ranked_config, "digest")) == "function"
+	end
+
+	-- Parse exactly one bounded `preview=true|false` token from the once-boot
+	-- advertised `MP.MOD_STRING`. The pinned `generate_hash` writes this token but
+	-- `parse_Hash` does not extract it, so it is read directly. Missing, duplicate
+	-- or malformed tokens are "unknown"; the hash is never regenerated.
+	local function advertised_preview_token(mod_string)
+		if type(mod_string) ~= "string" or #mod_string == 0 or #mod_string > MPDriver.MAX_MOD_STRING then
+			return "unknown"
+		end
+		local found = 0
+		local value = nil
+		for part in string.gmatch(mod_string, "([^;]+)") do
+			-- Lua patterns have no alternation, so match the value generically
+			-- and validate it explicitly.
+			local token_value = string.match(part, "^preview=(%a+)$")
+			if token_value ~= nil then
+				if token_value ~= "true" and token_value ~= "false" then
+					return "unknown"
+				end
+				found = found + 1
+				value = token_value == "true"
+			elseif string.sub(part, 1, 8) == "preview=" then
+				-- A malformed preview token (e.g. preview=yes / preview=) is unknown.
+				return "unknown"
+			end
+		end
+		if found ~= 1 then
+			return "unknown"
+		end
+		return value
+	end
+
+	-- Exact mod-inventory equality (same keys and versions).
+	local function mods_equal(a, b)
+		if type(a) ~= "table" or type(b) ~= "table" then
+			return false
+		end
+		for key, value in next, a do
+			if rawget(b, key) ~= value then
+				return false
+			end
+		end
+		for key in next, b do
+			if rawget(a, key) == nil then
+				return false
+			end
+		end
+		return true
+	end
+
+	-- Read-only readiness facts. Primitives only: booleans for every reviewed
+	-- producer and the string "unknown" for a fact with no reviewed producer yet.
+	-- This never mutates G/MP and never enters AIObservation; the record travels
+	-- only over the authenticated control channel.
+	function instance.readiness_facts()
+		if type(readiness_override) == "table" then
+			local out = {}
+			for i = 1, #MPDriver.READINESS_KEYS do
+				local key = MPDriver.READINESS_KEYS[i]
+				local value = rawget(readiness_override, key)
+				if MPDriver.READINESS_EVIDENCE_KEYS[key] == true then
+					if type(value) ~= "boolean" then
+						return nil, CODE.BAD_PORTS
+					end
+				elseif type(value) ~= "boolean" and value ~= "unknown" then
+					return nil, CODE.BAD_PORTS
+				end
+				out[key] = value
+			end
+			return out, CODE.OK
+		end
+		local facts = {}
+		local utils = rget(mp, "UTILS")
+		-- Own fully-unlocked check (MP.UTILS.unlock_check): true == fully unlocked.
+		if type(utils) == "table" and type(rget(utils, "unlock_check")) == "function" then
+			local ok, value = pcall(rget(utils, "unlock_check"))
+			facts.unlock_check = ok and value == true or false
+		else
+			facts.unlock_check = "unknown"
+		end
+		-- Own profile all_unlocked.
+		local settings = rget(G, "SETTINGS")
+		local profiles = rget(G, "PROFILES")
+		local profile = nil
+		if type(settings) == "table" and type(profiles) == "table" then
+			local index = rawget(settings, "profile")
+			if index ~= nil and type(rawget(profiles, index)) == "table" then
+				profile = rawget(profiles, index)
+			end
+		end
+		if profile ~= nil then
+			facts.all_unlocked = rawget(profile, "all_unlocked") == true
+		else
+			facts.all_unlocked = "unknown"
+		end
+		-- Own advertised unlocked from MP.MOD_STRING via the real parse_Hash.
+		local mod_string = rget(mp, "MOD_STRING")
+		local parsed_mods = nil
+		if type(utils) == "table"
+			and type(rget(utils, "parse_Hash")) == "function"
+			and type(mod_string) == "string" and #mod_string > 0 then
+			local ok, parsed = pcall(rget(utils, "parse_Hash"), mod_string)
+			if ok and type(parsed) == "table" then
+				facts.advertised_unlocked = rawget(parsed, "unlocked") == true
+				parsed_mods = rawget(parsed, "Mods")
+			else
+				facts.advertised_unlocked = "unknown"
+			end
+		else
+			facts.advertised_unlocked = "unknown"
+		end
+		-- Advertised Preview: the cached once-boot token in MP.MOD_STRING, never
+		-- the live setting (which may legitimately differ). Preview is optional,
+		-- so the raw boolean may be false; the validity/consistency predicates
+		-- below must be true.
+		local advertised_preview = advertised_preview_token(mod_string)
+		facts.advertised_preview = advertised_preview
+		facts.advertised_preview_valid = type(advertised_preview) == "boolean"
+		-- Live Preview integration fact: the actual MP.INTEGRATIONS.Preview
+		-- boolean, reported separately from the cached advertised token. There is
+		-- deliberately no fallback to the mod config's integrations.Preview, which
+		-- is load-time metadata and not the same evidence.
+		local live_preview = nil
+		local mp_integrations = rget(mp, "INTEGRATIONS")
+		if type(mp_integrations) == "table" and type(rawget(mp_integrations, "Preview")) == "boolean" then
+			live_preview = rawget(mp_integrations, "Preview")
+		end
+		if live_preview == nil then
+			facts.live_preview = "unknown"
+		else
+			facts.live_preview = live_preview
+		end
+		facts.preview_consistent = type(advertised_preview) == "boolean"
+			and type(live_preview) == "boolean"
+			and advertised_preview == live_preview
+		-- Peer unlocked/cached at post-join ready.
+		local lobby = rget(mp, "LOBBY")
+		local peer = nil
+		if type(lobby) == "table" then
+			peer = rawget(lobby, "is_host") == true and rawget(lobby, "guest") or rawget(lobby, "host")
+		end
+		if type(peer) == "table" then
+			local peer_config = rawget(peer, "config")
+			if type(peer_config) == "table" then
+				facts.peer_unlocked = rawget(peer_config, "unlocked") == true
+			else
+				facts.peer_unlocked = "unknown"
+			end
+			facts.peer_cached = rawget(peer, "cached") ~= false
+		else
+			facts.peer_unlocked = "unknown"
+			facts.peer_cached = "unknown"
+		end
+		-- Banned mods empty for both roles. A peer whose Mods table is missing is
+		-- unknown, never "no banned mods": get_banned_mods(nil) returns {} in the
+		-- pinned source, so passing nil would silently read as empty-safe.
+		local function player_mods(player)
+			if type(player) ~= "table" then
+				return nil
+			end
+			local config = rawget(player, "config")
+			return type(config) == "table" and rawget(config, "Mods") or nil
+		end
+		if type(utils) == "table" and type(rget(utils, "get_banned_mods")) == "function" and type(lobby) == "table" then
+			local host_mods = player_mods(rawget(lobby, "host"))
+			local guest_mods = player_mods(rawget(lobby, "guest"))
+			if type(host_mods) ~= "table" or type(guest_mods) ~= "table" then
+				facts.banned_mods_empty = "unknown"
+			else
+				local ok_h, host_banned = pcall(rget(utils, "get_banned_mods"), host_mods)
+				local ok_g, guest_banned = pcall(rget(utils, "get_banned_mods"), guest_mods)
+				if ok_h and ok_g and type(host_banned) == "table" and type(guest_banned) == "table" then
+					facts.banned_mods_empty = #host_banned == 0 and #guest_banned == 0
+				else
+					facts.banned_mods_empty = "unknown"
+				end
+			end
+		else
+			facts.banned_mods_empty = "unknown"
+		end
+		-- Parsed own Mods and every available peer packet Mods must equal the
+		-- reviewed approved inventory (port; unknown until provisioned). A
+		-- missing/malformed inventory or a missing peer Mods is unknown, never
+		-- empty-safe.
+		if type(approved_mods) ~= "table" then
+			facts.mods_approved = "unknown"
+		elseif type(parsed_mods) ~= "table" then
+			facts.mods_approved = "unknown"
+		elseif not mods_equal(parsed_mods, approved_mods) then
+			facts.mods_approved = false
+		else
+			local mismatch = false
+			local unknown_peer = false
+			if type(lobby) == "table" then
+				-- Inspect both entries explicitly: `ipairs({host, guest})` would
+				-- silently skip the guest when `host` is nil. A nil peer is
+				-- unknown, never an approved empty inventory.
+				local peers = { rawget(lobby, "host"), rawget(lobby, "guest") }
+				for i = 1, 2 do
+					local player = peers[i]
+					if type(player) == "table" then
+						local player_config = rawget(player, "config")
+						local player_mods = type(player_config) == "table" and rawget(player_config, "Mods") or nil
+						if type(player_mods) ~= "table" then
+							unknown_peer = true
+						elseif not mods_equal(player_mods, approved_mods) then
+							mismatch = true
+						end
+					else
+						unknown_peer = true
+					end
+				end
+			end
+			if mismatch then
+				facts.mods_approved = false
+			elseif unknown_peer then
+				facts.mods_approved = "unknown"
+			else
+				facts.mods_approved = true
+			end
+		end
+		-- Release mode (entrypoint global). A real `false` stays `false` (the
+		-- Lua `and/or` idiom would misreport it as unknown); only a non-boolean
+		-- producer is unknown.
+		if type(release_mode) == "boolean" then
+			facts.release_mode = release_mode
+		else
+			facts.release_mode = "unknown"
+		end
+		-- Game speed finite positive <= 4.
+		local speed = type(settings) == "table" and rawget(settings, "GAMESPEED") or nil
+		if type(speed) == "number" and speed == speed and speed > 0 and speed ~= math.huge then
+			facts.game_speed_ok = speed <= 4
+		else
+			facts.game_speed_ok = "unknown"
+		end
+		-- Read-only facts from the exact minimal staged generation. Missing or
+		-- faulting producers remain unknown and block READY.
+		facts.debug_disabled = "unknown"
+		facts.animations_normal = "unknown"
+		facts.handy_disabled = "unknown"
+		local producer = rawget(ports, "ranked_profile_facts")
+		if type(producer) == "function" then
+			local ok, actual = pcall(producer)
+			if ok and type(actual) == "table" then
+				for _, key in ipairs({ "debug_disabled", "animations_normal", "handy_disabled" }) do
+					local value = rawget(actual, key)
+					if type(value) == "boolean" then facts[key] = value end
+				end
+				if rawget(actual, "content_unlocked") ~= true or rawget(actual, "tutorial_ready") ~= true then
+					facts.all_unlocked = false
+				end
+			end
+		end
+		return facts, CODE.OK
+	end
+
+	-- Every reviewed readiness fact must be exactly true.
+	function instance.readiness_ok()
+		local facts = instance.readiness_facts()
+		if type(facts) ~= "table" then
+			return false, CODE.BAD_PORTS
+		end
+		for i = 1, #MPDriver.READINESS_KEYS do
+			local key = MPDriver.READINESS_KEYS[i]
+			local value = facts[key]
+			if MPDriver.READINESS_EVIDENCE_KEYS[key] == true then
+				-- Raw evidence boolean: may be true or false, but not unknown.
+				if type(value) ~= "boolean" then
+					return false, key
+				end
+			elseif value ~= true then
+				return false, key
+			end
+		end
+		return true, CODE.OK
+	end
+
+	-- Protected normal indexing for the real `MP.current_ruleset()` proxy (it
+	-- answers every field through a metatable, so rawget never resolves it).
+	-- A present-but-faulting proxy field is malformed (returned with `true`), not
+	-- silently absent: an indexing error must refuse the digest rather than fall
+	-- back to a registry scalar.
+	local function proxy_field(proxy, name)
+		if type(proxy) ~= "table" then
+			return nil, false
+		end
+		local ok, value = pcall(function()
+			return proxy[name]
+		end)
+		if not ok then
+			return nil, true
+		end
+		return value, false
+	end
+
+	-- Resolve the real engine function on MP (active_layer_chain / current_ruleset)
+	-- with protected normal indexing. Absent in synthetic fixtures.
+	local function engine_function(name)
+		if type(mp) ~= "table" then
+			return nil
+		end
+		local ok, fn = pcall(function()
+			return mp[name]
+		end)
+		if ok and type(fn) == "function" then
+			return fn
+		end
+		return nil
+	end
+
+	-- The real engine's resolved timer value (MP.UTILS.timer_base /
+	-- pvp_timer_base), or nil when the producer is unavailable. An engine value
+	-- that is present but malformed is a hard refusal, never silently faked.
+	local function engine_timer(name)
+		local utils = rget(mp, "UTILS")
+		if type(utils) ~= "table" then
+			return nil, false
+		end
+		local ok_fn, fn = pcall(function()
+			return utils[name]
+		end)
+		if not ok_fn or type(fn) ~= "function" then
+			return nil, false
+		end
+		local ok_call, value = pcall(fn)
+		if not ok_call then
+			-- A real producer that throws is malformed, never an absent producer:
+			-- the caller must refuse rather than substitute a registry value.
+			return nil, true
+		end
+		if not is_int(value) then
+			return nil, true
+		end
+		return value, false
+	end
+
+	-- Source-pinned Ranked canonical digest. Reads the *actual* live
+	-- `MP.LOBBY.config` (binding the actual lobby gamemode and refusing any raw
+	-- key outside the enumerated canonical fields plus ruleset/gamemode), the
+	-- real resolved ruleset/chain/timers and the real modifier list, then binds
+	-- them through the typed parity module. It never echoes a service-provided
+	-- expected digest and never discards an injected unknown field.
+	function instance.ranked_config_digest()
+		if type(ranked_config) ~= "table" or type(rawget(ranked_config, "digest")) ~= "function" then
+			return nil, CODE.BAD_DIGEST
+		end
+		local config = rpath(mp, "LOBBY", "config")
+		if type(config) ~= "table" then
+			return nil, CODE.BAD_DIGEST
+		end
+		if rawget(config, "ruleset") ~= ruleset_key then
+			return nil, CODE.BAD_STATE
+		end
+		local entry = lookup_ruleset()
+		if entry == nil then
+			return nil, CODE.NO_RULESET
+		end
+		local disabled, disabled_code = instance.ruleset_disabled()
+		if disabled == nil then
+			return nil, disabled_code
+		end
+		-- Raw config key allowlist: the enumerated canonical fields plus the two
+		-- source-justified engine keys ruleset/gamemode. Any other raw key is an
+		-- injected field and is refused rather than silently dropped.
+		local allowed = { ruleset = true, gamemode = true }
+		for i = 1, #ranked_config.LOBBY_ORDER do
+			allowed[ranked_config.LOBBY_ORDER[i]] = true
+		end
+		for key in next, config do
+			if type(key) ~= "string" or allowed[key] ~= true then
+				return nil, CODE.BAD_DIGEST
+			end
+		end
+		-- Bind the ACTUAL live gamemode and require it to equal the registry's
+		-- forced gamemode; a lobby running another mode is a fidelity failure.
+		local live_gamemode = rawget(config, "gamemode")
+		local registry_gamemode = rget(entry, "forced_gamemode")
+		if type(live_gamemode) ~= "string" or live_gamemode ~= registry_gamemode then
+			return nil, CODE.BAD_STATE
+		end
+		local nil_marker = ranked_config.NIL
+		local lobby = {}
+		for i = 1, #ranked_config.LOBBY_ORDER do
+			local field = ranked_config.LOBBY_ORDER[i]
+			local value = rawget(config, field)
+			if value == nil then
+				value = nil_marker
+			end
+			lobby[field] = value
+		end
+		-- Declared layers come from the real registry entry (the ruleset's own
+		-- `_layer_order`), which is source data, not an invented chain.
+		local declared = {}
+		local order = rget(entry, "_layer_order")
+		if type(order) ~= "table" or #order == 0 then
+			return nil, CODE.BAD_DIGEST
+		end
+		for i = 1, #order do
+			if type(order[i]) ~= "string" or #order[i] == 0 then
+				return nil, CODE.BAD_DIGEST
+			end
+			declared[i] = order[i]
+		end
+		-- The active chain uses the real engine `MP.active_layer_chain()` when
+		-- available; absent in synthetic fixtures, fall back to the registry
+		-- declared order + ruleset self + real modifiers (never a fabricated
+		-- chain beyond that source data).
+		local chain
+		local active_chain = engine_function("active_layer_chain")
+		if active_chain ~= nil then
+			local ok_chain, value = pcall(active_chain)
+			if not ok_chain or type(value) ~= "table" then
+				return nil, CODE.BAD_DIGEST
+			end
+			chain = {}
+			for i = 1, #value do
+				if type(value[i]) ~= "string" or #value[i] == 0 then
+					return nil, CODE.BAD_DIGEST
+				end
+				chain[i] = value[i]
+			end
+		else
+			chain = {}
+			for i = 1, #declared do
+				chain[i] = declared[i]
+			end
+			chain[#chain + 1] = ruleset_short
+		end
+		local modifier_list = {}
+		local modifiers = rget(mp, "MODIFIERS")
+		if type(modifiers) == "table" then
+			for i = 1, #modifiers do
+				if type(modifiers[i]) ~= "string" or #modifiers[i] == 0 then
+					return nil, CODE.BAD_DIGEST
+				end
+				modifier_list[i] = modifiers[i]
+				if active_chain == nil then
+					chain[#chain + 1] = modifiers[i]
+				end
+			end
+		end
+		-- Resolved multiplier: prefer the real resolved ruleset view. A present
+		-- engine producer that throws or returns a malformed value is a fault, not
+		-- a fallback; only an absent producer (fixture) uses the registry scalar,
+		-- and only a genuinely absent scalar defaults to 1.
+		local current = engine_function("current_ruleset")
+		local multiplier = nil
+		if current ~= nil then
+			local ok_view, value = pcall(current)
+			if not ok_view or type(value) ~= "table" then
+				return nil, CODE.BAD_DIGEST
+			end
+			local proxy_malformed
+			multiplier, proxy_malformed = proxy_field(value, "timer_base_multiplier")
+			if proxy_malformed or (multiplier ~= nil and not is_int(multiplier)) then
+				return nil, CODE.BAD_DIGEST
+			end
+		end
+		if multiplier == nil then
+			multiplier = rget(entry, "timer_base_multiplier")
+		end
+		if multiplier == nil then
+			multiplier = 1
+		end
+		if not is_int(multiplier) then
+			return nil, CODE.BAD_DIGEST
+		end
+		-- Effective ordinary timer: the real engine `MP.UTILS.timer_base()` when
+		-- available, else the actual lobby base times the resolved multiplier.
+		local effective, timer_malformed = engine_timer("timer_base")
+		if timer_malformed then
+			return nil, CODE.BAD_DIGEST
+		end
+		if effective == nil then
+			local base = rawget(config, "timer_base_seconds")
+			if not is_int(base) then
+				return nil, CODE.BAD_DIGEST
+			end
+			effective = base * multiplier
+		end
+		local pvp_base, pvp_malformed = engine_timer("pvp_timer_base")
+		if pvp_malformed then
+			return nil, CODE.BAD_DIGEST
+		end
+		if pvp_base == nil then
+			local base = rget(entry, "pvp_timer_base_seconds")
+			if base == nil then
+				base = rawget(config, "pvp_timer_base_seconds")
+			end
+			if not is_int(base) then
+				return nil, CODE.BAD_DIGEST
+			end
+			pvp_base = base
+		end
+		local pvp_increment = rget(entry, "pvp_timer_hand_played_increment_seconds")
+		if pvp_increment == nil then
+			pvp_increment = rawget(config, "pvp_timer_hand_played_increment_seconds")
+		end
+		local resolved = {
+			ruleset_key = ruleset_short,
+			ruleset_id = ruleset_key,
+			forced_gamemode = live_gamemode,
+			declared_layers = declared,
+			active_layer_chain = chain,
+			standard = rget(entry, "standard"),
+			multiplayer_content = rget(entry, "multiplayer_content"),
+			modifier_list = modifier_list,
+			pvp_timer_base_seconds_resolved = pvp_base,
+			pvp_timer_hand_played_increment_seconds_resolved = pvp_increment,
+			effective_timer_base_seconds = effective,
+			timer_base_multiplier_resolved = multiplier,
+			is_disabled = disabled,
+		}
+		local digest = ranked_config.digest(lobby, resolved)
+		if digest == nil then
+			return nil, CODE.BAD_DIGEST
+		end
+		return digest, CODE.OK
 	end
 
 	-- Forced config keys recorded from the real registry `force_lobby_options`.
@@ -639,7 +1329,9 @@ function MPDriver.factory(ports)
 		if type(config) ~= "table" then
 			return nil, CODE.BAD_DIGEST
 		end
-		if rawget(config, "ruleset") ~= MPDriver.RULESET_KEY then
+		-- The live config must be the same ruleset the trusted SETUP named; this
+		-- is the source of truth for the legacy forced-key digest.
+		if rawget(config, "ruleset") ~= ruleset_id then
 			return nil, CODE.BAD_STATE
 		end
 		-- Bytewise ascending key order; copy first so the caller's array is
@@ -670,8 +1362,11 @@ function MPDriver.factory(ports)
 	end
 
 	-- Human host. `seed` is trusted setup data (gauntlet, human-only) and may be
-	-- nil for a normal random match; it is never derived from policy.
-	function instance.host_start(seed)
+	-- nil for a normal random match; it is never derived from policy. `selection`
+	-- is the host-owned completed-draft binding (actual Back NAME and stake
+	-- INDEX); it is applied after the real reset and before the original
+	-- force/send so the first lobby-options packet already carries it.
+	function instance.host_start(seed, selection)
 		if role ~= "human" then
 			return nil, CODE.WRONG_ROLE
 		end
@@ -682,6 +1377,15 @@ function MPDriver.factory(ports)
 		local gamemode = rget(ruleset, "forced_gamemode")
 		if type(gamemode) ~= "string" or #gamemode == 0 then
 			return nil, CODE.NO_FORCED_MODE
+		end
+		-- The real registry `is_disabled()` gate must pass before create. A
+		-- disabled or unreadable gate fails closed; it is never bypassed.
+		local disabled, disabled_code = instance.ruleset_disabled()
+		if disabled == nil then
+			return nil, disabled_code
+		end
+		if disabled == true then
+			return nil, CODE.RULESET_DISABLED
 		end
 		if type(originals.start_lobby) ~= "function" then
 			return nil, CODE.MISSING_CALLBACK
@@ -697,8 +1401,19 @@ function MPDriver.factory(ports)
 				return nil, CODE.BAD_SEED
 			end
 		end
+		local bounded_selection = nil
+		if selection ~= nil then
+			if type(ranked_config) ~= "table"
+				or type(rawget(ranked_config, "selection_valid")) ~= "function" then
+				return nil, CODE.BAD_SELECTION
+			end
+			if ranked_config.selection_valid(selection) ~= true then
+				return nil, CODE.BAD_SELECTION
+			end
+			bounded_selection = selection
+		end
 
-		mp.LOBBY.config.ruleset = MPDriver.RULESET_KEY
+		mp.LOBBY.config.ruleset = ruleset_key
 		mp.LOBBY.config.gamemode = gamemode
 
 		local previous = current_ruleset
@@ -708,9 +1423,19 @@ function MPDriver.factory(ports)
 				__index = function(_, key)
 					if key == "force_lobby_options" then
 						return function()
-							-- After the reset, before the original options call.
+							-- After the reset, before the original options call:
+							-- the trusted gauntlet seed and the completed-draft
+							-- Back NAME / stake INDEX land before the first
+							-- lobby-options packet, so it never carries the
+							-- default Red/White selection.
 							if bounded_seed ~= nil then
 								mp.LOBBY.config.custom_seed = bounded_seed
+							end
+							if bounded_selection ~= nil then
+								mp.LOBBY.config.back = bounded_selection.back_name
+								mp.LOBBY.config.stake = bounded_selection.stake_index
+								mp.LOBBY.config.different_decks = false
+								mp.LOBBY.config.random_loadout = false
 							end
 							-- The real `MP.current_ruleset()` is an empty
 							-- metatable proxy that answers every field through
@@ -779,6 +1504,15 @@ function MPDriver.factory(ports)
 		end
 		if type(actions) ~= "table" or type(rget(actions, "join_lobby")) ~= "function" then
 			return nil, CODE.MISSING_ACTION
+		end
+		-- Both roles call the real registry `is_disabled()` before join; a
+		-- disabled or unreadable gate fails closed.
+		local disabled, disabled_code = instance.ruleset_disabled()
+		if disabled == nil then
+			return nil, disabled_code
+		end
+		if disabled == true then
+			return nil, CODE.RULESET_DISABLED
 		end
 		mp.LOBBY.username = MPDriver.AI_NAME
 		if type(rget(actions, "set_username")) == "function" then
@@ -1028,13 +1762,15 @@ function MPDriver.factory(ports)
 		local ruleset = lookup_ruleset()
 		return {
 			role = role,
-			ruleset_key = MPDriver.RULESET_KEY,
+			ruleset_key = ruleset_key,
 			ruleset_present = ruleset ~= nil,
 			ruleset_ready = instance.ruleset_ready() == true,
 			connected = instance.connected(),
 			main_menu_ready = instance.main_menu_ready(),
 			has_forced_keys = forced_keys ~= nil,
 			has_hash = type(hash_string) == "function",
+			has_ranked_config = type(ranked_config) == "table",
+			ruleset_disabled = instance.ruleset_disabled(),
 			ready_element_id = MPDriver.READY_ELEMENT_ID,
 			ai_name = MPDriver.AI_NAME,
 			has_lobby = instance.lobby_code() ~= nil,

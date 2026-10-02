@@ -9,6 +9,17 @@ return function(ctx)
 		local MP
 		local ruleset = {
 			forced_gamemode = "gamemode_mp_attrition",
+			standard = true,
+			multiplayer_content = true,
+			pvp_timer_base_seconds = 60,
+			pvp_timer_hand_played_increment_seconds = 10,
+			_layer_order = { "standard", "ranked", "pvp_timer" },
+			is_disabled = function()
+				if opts.disabled == true then
+					return true
+				end
+				return false
+			end,
 			force_lobby_options = function()
 				calls[#calls + 1] = { name = "force_lobby_options", custom_seed = MP.LOBBY.config.custom_seed }
 				MP.LOBBY.config.timer_base_seconds = 180
@@ -24,9 +35,44 @@ return function(ctx)
 				ready_to_start = opts.ready_to_start or false,
 				connected = true,
 				username = "Guest",
-				config = { custom_seed = "random", ruleset = "ruleset_mp_majorleague" },
+				-- The reviewed `reset_lobby_config` defaults; the actual-config
+				-- Ranked digest requires every field to carry its real type.
+				config = {
+					ruleset = "ruleset_mp_standard_ranked",
+					gamemode = "gamemode_mp_attrition",
+					gold_on_life_loss = true,
+					no_gold_on_round_loss = false,
+					death_on_round_loss = true,
+					different_seeds = false,
+					the_order = true,
+					starting_lives = 4,
+					pvp_start_round = 2,
+					timer_base_seconds = 150,
+					timer_increment_seconds = 60,
+					pvp_countdown_seconds = 3,
+					showdown_starting_antes = 3,
+					custom_seed = "random",
+					different_decks = false,
+					random_loadout = false,
+					back = "Red Deck",
+					sleeve = "sleeve_casl_none",
+					stake = 1,
+					challenge = "",
+					cocktail = "1H",
+					multiplayer_jokers = true,
+					timer = true,
+					timer_forgiveness = 0,
+					forced_config = true,
+					preview_disabled = false,
+					legacy_smallworld = false,
+					hide_score_until_played = true,
+					enemy_location_disabled = false,
+					timer_display_threshold = 0,
+					modifier_layers = "",
+					disable_live_and_timer_hud = false,
+				},
 			},
-			Rulesets = { ruleset_mp_majorleague = ruleset },
+			Rulesets = { ruleset_mp_standard_ranked = ruleset },
 			ACTIONS = {
 				join_lobby = function(code)
 					calls[#calls + 1] = { name = "join_lobby", code = code }
@@ -75,7 +121,7 @@ return function(ctx)
 		ctx.eq(code, nil)
 		local ok = driver.host_start("AISP0003")
 		ctx.is_true(ok)
-		ctx.eq(MP.LOBBY.config.ruleset, "ruleset_mp_majorleague")
+		ctx.eq(MP.LOBBY.config.ruleset, "ruleset_mp_standard_ranked")
 		ctx.eq(MP.LOBBY.config.gamemode, "gamemode_mp_attrition")
 		ctx.eq(MP.LOBBY.config.custom_seed, "AISP0003")
 		local saw_seed = false
@@ -845,6 +891,440 @@ return function(ctx)
 		driver.install_send_guard()
 		client.send({ action = "handyMPExtensionDisable" })
 		ctx.eq(#records, 1, "a fresh install logs the first suppression again")
+	end)
+
+	-- Ranked contract: the real registry `is_disabled()` gate and the typed
+	-- canonical digest read from the actual live configuration.
+
+	local function ranked_engine(opts)
+		opts = opts or {}
+		local MP, funcs = fake_engine(opts)
+		MP.MODIFIERS = {}
+		if opts.no_is_disabled then
+			MP.Rulesets.ruleset_mp_standard_ranked.is_disabled = nil
+		end
+		return MP, funcs
+	end
+
+	test("ruleset_disabled_calls_the_real_registry_function", function()
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local disabled, code = driver.ruleset_disabled()
+		ctx.eq(disabled, false)
+		ctx.eq(code, "driver_ok")
+		local disabled_engine, disabled_funcs = ranked_engine({ disabled = true })
+		local disabled_driver = MPDriver.factory({ role = "ai", mp = disabled_engine, funcs = disabled_funcs })
+		ctx.eq(disabled_driver.ruleset_disabled(), true)
+	end)
+
+	test("both_roles_refuse_create_and_join_when_the_ruleset_is_disabled", function()
+		local MP, funcs = ranked_engine({ disabled = true })
+		local human = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local ok, code = human.host_start(nil)
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_ruleset_disabled")
+		local ai = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		local joined, join_code = ai.ai_join("abc12")
+		ctx.eq(joined, nil)
+		ctx.eq(join_code, "driver_ruleset_disabled")
+	end)
+
+	test("missing_is_disabled_fails_closed_before_create_join", function()
+		local MP, funcs = ranked_engine({ no_is_disabled = true })
+		local human = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local ok, code = human.host_start(nil)
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_no_is_disabled")
+		local ai = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
+		local joined, join_code = ai.ai_join("abc12")
+		ctx.eq(joined, nil)
+		ctx.eq(join_code, "driver_no_is_disabled")
+	end)
+
+	test("ranked_config_digest_reads_actual_config_and_is_sensitive", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config,
+		})
+		MP.LOBBY.config.timer_base_seconds = 150
+		local digest, code = driver.ranked_config_digest()
+		ctx.eq(code, "driver_ok")
+		ctx.is_true(type(digest) == "string" and #digest == 8, tostring(digest))
+		-- The digest is exactly the typed canonical binding over the actual
+		-- config; a real config change moves it.
+		MP.LOBBY.config.timer_base_seconds = 151
+		local moved = driver.ranked_config_digest()
+		ctx.is_true(moved ~= digest, "a changed actual config value moves the digest")
+		-- The override fields are nil-only: any injected real value is refused
+		-- outright (no digest), not merely a different binding.
+		MP.LOBBY.config.normal_bosses = "bl_mp_nemesis"
+		local refused = driver.ranked_config_digest()
+		ctx.eq(refused, nil, "an injected override is refused")
+		MP.LOBBY.config.normal_bosses = false
+		ctx.eq(driver.ranked_config_digest(), nil, "a boolean override is refused")
+		MP.LOBBY.config.normal_bosses = nil
+		ctx.is_true(driver.ranked_config_digest() ~= nil, "clearing the override restores the digest")
+	end)
+
+	test("post_start_selection_state_reads_the_actual_initialized_run", function()
+		local MP, funcs = ranked_engine()
+		local G = { GAME = {} }
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G })
+		local key, stake = driver.post_start_selection_state()
+		ctx.eq(key, nil)
+		ctx.eq(stake, nil)
+		G.GAME.selected_back = { effect = { center = { key = "b_red" } } }
+		G.GAME.stake = 1
+		key, stake = driver.post_start_selection_state()
+		ctx.eq(key, "b_red")
+		ctx.eq(stake, 1)
+	end)
+
+	test("host_start_applies_selected_back_and_stake_before_force", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = fake_engine()
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config })
+		local selection = {
+			schema = "aisparring.ranked_selection.v1",
+			deck_key = "blue", back_key = "b_blue", back_name = "Blue Deck",
+			stake_key = "green", stake_index = 2,
+		}
+		ctx.is_true(driver.host_start(nil, selection))
+		ctx.eq(MP.LOBBY.config.back, "Blue Deck", "selected Back NAME applied")
+		ctx.eq(MP.LOBBY.config.stake, 2, "selected stake INDEX applied")
+		ctx.eq(MP.LOBBY.config.different_decks, false)
+		ctx.eq(MP.LOBBY.config.random_loadout, false)
+	end)
+
+	test("host_start_refuses_a_malformed_selection", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = fake_engine()
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config })
+		local ok, code = driver.host_start(nil, { deck_key = "blue" })
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_bad_selection")
+	end)
+
+	test("host_start_restores_ruleset_and_config_proxy_on_create_fault", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = fake_engine()
+		local original_ruleset = MP.current_ruleset
+		funcs.start_lobby = function()
+			error("synthetic create fault")
+		end
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config })
+		local selection = {
+			schema = "aisparring.ranked_selection.v1",
+			deck_key = "blue", back_key = "b_blue", back_name = "Blue Deck",
+			stake_key = "green", stake_index = 2,
+		}
+		local ok, code = driver.host_start(nil, selection)
+		ctx.eq(ok, nil)
+		ctx.eq(code, "driver_start_lobby_failed")
+		ctx.eq(MP.current_ruleset, original_ruleset, "the ruleset proxy is restored")
+		ctx.is_true(getmetatable(MP.LOBBY.config) == nil, "the temporary config proxy is restored")
+	end)
+
+	-- B3: the actual lobby gamemode is bound and unknown raw keys are refused.
+
+	test("ranked_digest_refuses_unknown_raw_config_keys", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config,
+		})
+		ctx.is_true(driver.ranked_config_digest() ~= nil, "baseline digest")
+		MP.LOBBY.config.injected_extra = 1
+		ctx.eq(driver.ranked_config_digest(), nil, "an unknown raw key is refused, not dropped")
+		MP.LOBBY.config.injected_extra = nil
+		ctx.is_true(driver.ranked_config_digest() ~= nil, "removing it restores the digest")
+	end)
+
+	test("ranked_digest_binds_the_actual_lobby_gamemode", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config,
+		})
+		ctx.is_true(driver.ranked_config_digest() ~= nil, "attrition gamemode binds")
+		MP.LOBBY.config.gamemode = "gamemode_mp_showdown"
+		ctx.eq(driver.ranked_config_digest(), nil, "a mismatched live gamemode is refused")
+	end)
+
+	test("ranked_digest_uses_the_real_engine_chain_and_timers", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config,
+		})
+		local baseline = driver.ranked_config_digest()
+		ctx.is_true(baseline ~= nil)
+		-- The real engine producer is preferred when present.
+		MP.active_layer_chain = function()
+			return { "standard", "ranked", "pvp_timer", "standard_ranked" }
+		end
+		MP.UTILS = {
+			timer_base = function() return 150 end,
+			pvp_timer_base = function() return 60 end,
+		}
+		ctx.eq(driver.ranked_config_digest(), baseline, "the real engine chain/timers agree")
+		-- A real chain that differs from the registry is bound, not faked.
+		MP.active_layer_chain = function()
+			return { "standard", "ranked", "pvp_timer", "standard_ranked", "pressure_timer" }
+		end
+		ctx.is_true(driver.ranked_config_digest() ~= baseline, "a changed real chain changes the digest")
+	end)
+
+	test("ruleset_disabled_reports_a_localized_reason_as_disabled", function()
+		local MP, funcs = ranked_engine()
+		MP.Rulesets.ruleset_mp_standard_ranked.is_disabled = function()
+			return "k_ruleset_disabled_smods_version"
+		end
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		local disabled, code = driver.ruleset_disabled()
+		ctx.eq(disabled, true)
+		ctx.eq(code, "driver_ok")
+		local ok, host_code = driver.host_start(nil)
+		ctx.eq(ok, nil)
+		ctx.eq(host_code, "driver_ruleset_disabled")
+	end)
+
+	-- B6: the real readiness producers and the fixture override.
+
+	test("readiness_facts_read_real_producers", function()
+		local MP, funcs = ranked_engine()
+		MP.UTILS = {
+			unlock_check = function() return true end,
+			parse_Hash = function(text)
+				return { unlocked = text:find("unlocked=true", 1, true) ~= nil, Mods = { Multiplayer = "0.5.5" } }
+			end,
+			get_banned_mods = function() return {} end,
+		}
+		MP.MOD_STRING = "preview=true;unlocked=true;Multiplayer-0.5.5"
+		-- The live fact is the actual MP.INTEGRATIONS table, not the mod config.
+		MP.INTEGRATIONS = { Preview = true }
+		MP.config = { integrations = { Preview = true } }
+		MP.LOBBY.is_host = true
+		-- A real lobbyInfo carries both entries; check both explicitly.
+		MP.LOBBY.host = { cached = true, config = { unlocked = true, Mods = { Multiplayer = "0.5.5" } } }
+		MP.LOBBY.guest = { cached = true, config = { unlocked = true, Mods = { Multiplayer = "0.5.5" } } }
+		local G = {
+			SETTINGS = { profile = 1, GAMESPEED = 1 },
+			PROFILES = { { all_unlocked = true } },
+		}
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, G = G,
+			release_mode = true,
+			approved_mods = { Multiplayer = "0.5.5" },
+		})
+		local facts = driver.readiness_facts()
+		ctx.eq(facts.unlock_check, true)
+		ctx.eq(facts.all_unlocked, true)
+		ctx.eq(facts.advertised_unlocked, true)
+		ctx.eq(facts.advertised_preview, true)
+		ctx.eq(facts.advertised_preview_valid, true)
+		ctx.eq(facts.live_preview, true)
+		ctx.eq(facts.preview_consistent, true)
+		ctx.eq(facts.peer_unlocked, true)
+		ctx.eq(facts.peer_cached, true)
+		ctx.eq(facts.banned_mods_empty, true)
+		ctx.eq(facts.mods_approved, true)
+		ctx.eq(facts.release_mode, true)
+		ctx.eq(facts.game_speed_ok, true)
+		-- No reviewed producer yet: honest unknown.
+		ctx.eq(facts.debug_disabled, "unknown")
+		ctx.eq(facts.animations_normal, "unknown")
+		ctx.eq(facts.handy_disabled, "unknown")
+		-- Unknown facts refuse readiness; no caller flag can make it pass.
+		ctx.eq(driver.readiness_ok(), false)
+		-- A too-fast game speed is refused.
+		G.SETTINGS.GAMESPEED = 5
+		ctx.eq(driver.readiness_facts().game_speed_ok, false)
+	end)
+
+	test("advertised_preview_reads_the_cached_once_boot_token", function()
+		local function facts_for(mod_string, live)
+			local MP, funcs = ranked_engine()
+			MP.UTILS = {
+				unlock_check = function() return true end,
+				parse_Hash = function() return { unlocked = true, Mods = { Multiplayer = "0.5.5" } } end,
+				get_banned_mods = function() return {} end,
+			}
+			MP.MOD_STRING = mod_string
+			-- Only the actual MP.INTEGRATIONS.Preview is live evidence.
+			MP.INTEGRATIONS = { Preview = live }
+			MP.config = { integrations = { Preview = not live } }
+			MP.LOBBY.is_host = true
+			MP.LOBBY.guest = { cached = true, config = { unlocked = true, Mods = { Multiplayer = "0.5.5" } } }
+			local driver = MPDriver.factory({
+				role = "human", mp = MP, funcs = funcs,
+				G = { SETTINGS = { profile = 1, GAMESPEED = 1 }, PROFILES = { { all_unlocked = true } } },
+				release_mode = true, approved_mods = { Multiplayer = "0.5.5" },
+			})
+			return driver.readiness_facts()
+		end
+		-- Cached false beats the live true setting.
+		local cached_false = facts_for("preview=false;unlocked=true;Multiplayer-0.5.5", true)
+		ctx.eq(cached_false.advertised_preview, false)
+		ctx.eq(cached_false.advertised_preview_valid, true)
+		ctx.eq(cached_false.live_preview, true)
+		ctx.eq(cached_false.preview_consistent, false)
+		-- Cached true beats the live false setting.
+		local cached_true = facts_for("preview=true;unlocked=true;Multiplayer-0.5.5", false)
+		ctx.eq(cached_true.advertised_preview, true)
+		ctx.eq(cached_true.live_preview, false)
+		ctx.eq(cached_true.preview_consistent, false)
+		-- Missing token is unknown, never defaulted.
+		local missing = facts_for("unlocked=true;Multiplayer-0.5.5", false)
+		ctx.eq(missing.advertised_preview, "unknown")
+		ctx.eq(missing.advertised_preview_valid, false)
+		-- Duplicate token is unknown.
+		local duplicate = facts_for("preview=true;preview=false;unlocked=true", false)
+		ctx.eq(duplicate.advertised_preview, "unknown")
+		-- Malformed token is unknown.
+		local malformed = facts_for("preview=yes;unlocked=true", false)
+		ctx.eq(malformed.advertised_preview, "unknown")
+	end)
+
+	test("optional_disabled_preview_is_a_positive_control", function()
+		local MP, funcs = ranked_engine()
+		local ok_facts = {}
+		for _, key in ipairs(MPDriver.READINESS_KEYS) do
+			ok_facts[key] = true
+		end
+		-- Preview is optional: both raw booleans false, predicates true.
+		ok_facts.advertised_preview = false
+		ok_facts.live_preview = false
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, readiness_override = ok_facts,
+		})
+		ctx.eq(driver.readiness_ok(), true)
+		-- Unknown evidence refuses even when predicates are true.
+		ok_facts.advertised_preview = "unknown"
+		local unknown = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, readiness_override = ok_facts,
+		})
+		ctx.eq(unknown.readiness_facts(), nil, "evidence keys must be booleans")
+	end)
+
+	test("readiness_override_is_a_fixture_only_port", function()
+		local MP, funcs = ranked_engine()
+		local ok_facts = {}
+		for _, key in ipairs(MPDriver.READINESS_KEYS) do
+			ok_facts[key] = true
+		end
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, readiness_override = ok_facts,
+		})
+		ctx.eq(driver.readiness_ok(), true)
+		-- A malformed override is refused.
+		local bad = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, readiness_override = { unlock_check = "yes" },
+		})
+		ctx.eq(bad.readiness_facts(), nil)
+	end)
+
+	-- Nonblocking hardening negative controls.
+
+	test("config_only_preview_is_not_live_evidence", function()
+		local MP, funcs = ranked_engine()
+		MP.UTILS = {
+			unlock_check = function() return true end,
+			parse_Hash = function() return { unlocked = true, Mods = { Multiplayer = "0.5.5" } } end,
+			get_banned_mods = function() return {} end,
+		}
+		MP.MOD_STRING = "preview=true;unlocked=true;Multiplayer-0.5.5"
+		MP.LOBBY.is_host = true
+		MP.LOBBY.guest = { cached = true, config = { unlocked = true, Mods = { Multiplayer = "0.5.5" } } }
+		local G = { SETTINGS = { profile = 1, GAMESPEED = 1 }, PROFILES = { { all_unlocked = true } } }
+		-- Load-time config metadata must NOT be read as the live integration fact.
+		MP.config = { integrations = { Preview = true } }
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, G = G,
+			release_mode = true, approved_mods = { Multiplayer = "0.5.5" },
+		})
+		local facts = driver.readiness_facts()
+		ctx.eq(facts.live_preview, "unknown", "config integrations is not live evidence")
+		ctx.eq(facts.preview_consistent, false, "a missing live fact is never consistent")
+	end)
+
+	test("release_mode_false_stays_false", function()
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, release_mode = false })
+		ctx.eq(driver.readiness_facts().release_mode, false, "false is reported as false, not unknown")
+		local missing = MPDriver.factory({ role = "human", mp = MP, funcs = funcs })
+		ctx.eq(missing.readiness_facts().release_mode, "unknown", "a missing producer is unknown")
+	end)
+
+	test("ranked_profile_producer_is_primitive_and_fault_closed", function()
+		local MP, funcs = ranked_engine()
+		local G = { SETTINGS = { profile = 1, GAMESPEED = 1 }, PROFILES = { { all_unlocked = true } } }
+		for _, producer in ipairs({
+			function() error("producer fault") end,
+			function() return { debug_disabled = "true", animations_normal = 1, handy_disabled = {} } end,
+		}) do
+			local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G,
+				ranked_profile_facts = producer })
+			local facts = driver.readiness_facts()
+			ctx.eq(facts.debug_disabled, "unknown")
+			ctx.eq(facts.animations_normal, "unknown")
+			ctx.eq(driver.readiness_ok(), false)
+		end
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G,
+			ranked_profile_facts = function() return { debug_disabled = false, animations_normal = true,
+				handy_disabled = true, content_unlocked = false } end })
+		ctx.eq(driver.readiness_facts().debug_disabled, false)
+		ctx.eq(driver.readiness_facts().all_unlocked, false)
+		ctx.eq(driver.readiness_ok(), false)
+	end)
+
+	test("missing_peer_mods_is_unknown_not_empty_safe", function()
+		local MP, funcs = ranked_engine()
+		MP.UTILS = {
+			unlock_check = function() return true end,
+			parse_Hash = function() return { unlocked = true, Mods = { Multiplayer = "0.5.5" } } end,
+			get_banned_mods = function(mods) return {} end,
+		}
+		MP.MOD_STRING = "unlocked=true;Multiplayer-0.5.5"
+		MP.INTEGRATIONS = { Preview = true }
+		MP.LOBBY.is_host = true
+		-- A peer packet with no Mods table must be unknown, never "no banned mods".
+		MP.LOBBY.guest = { cached = true, config = { unlocked = true } }
+		local G = { SETTINGS = { profile = 1, GAMESPEED = 1 }, PROFILES = { { all_unlocked = true } } }
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, G = G,
+			release_mode = true, approved_mods = { Multiplayer = "0.5.5" },
+		})
+		local facts = driver.readiness_facts()
+		ctx.eq(facts.banned_mods_empty, "unknown", "missing Mods is unknown")
+		ctx.eq(facts.mods_approved, "unknown", "missing Mods is never an approved empty inventory")
+	end)
+
+	test("faulting_timer_and_proxy_producers_refuse", function()
+		local ranked_config = support.mod(ctx.repo_root, "AISparring/integration/ranked_config.lua")
+		local MP, funcs = ranked_engine()
+		local driver = MPDriver.factory({
+			role = "human", mp = MP, funcs = funcs, ranked_config = ranked_config,
+		})
+		ctx.is_true(driver.ranked_config_digest() ~= nil, "baseline digest")
+		-- A real producer that throws is malformed, never an absent fallback.
+		MP.UTILS = { timer_base = function() error("boom") end, pvp_timer_base = function() return 60 end }
+		ctx.eq(driver.ranked_config_digest(), nil, "a throwing timer_base refuses")
+		MP.UTILS = nil
+		ctx.is_true(driver.ranked_config_digest() ~= nil, "removing the faulty producer restores the digest")
+		-- A present proxy whose field indexing errors refuses too.
+		MP.current_ruleset = function()
+			return setmetatable({}, {
+				__index = function(_, key)
+					if key == "timer_base_multiplier" then
+						error("proxy fault")
+					end
+					return nil
+				end,
+			})
+		end
+		ctx.eq(driver.ranked_config_digest(), nil, "a faulting proxy field refuses")
 	end)
 end
 

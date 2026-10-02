@@ -317,6 +317,43 @@ local function engine_pvp_boss(G)
 	return nil
 end
 
+-- The pinned opponent-score visibility rule, shared by the pre-reader view and
+-- the revision signature so a masked score can never reach either surface.
+--
+-- Multiplayer masks the opponent's rendered score while the AI has not yet
+-- played a hand in a PvP blind (`ui/game/blind_hud.lua:203-216`), and the reader
+-- separately refuses to project a masked `score_text` (`state_reader.lua`). If
+-- `decision_signature` or `build_opponent` read the raw `score_text` first, a
+-- masked score change would move the epoch and leak into the canonical string
+-- even though the final observation omits it.
+--
+-- This mirrors the reader's exact rule, conservatively staying masked whenever a
+-- factor is unreadable:
+--   * `hide_score_until_played == false` never masks;
+--   * a non-boolean value is treated as masking;
+--   * with a numeric `hands_played == 0` the score is shown only for a proven
+--     non-PvP phase and a proven non-PvP engine blind.
+local function opponent_score_presentable(G, MP, phase)
+	local hide_score = rpath(MP, "LOBBY", "config", "hide_score_until_played")
+	if hide_score == false then
+		return true
+	end
+	if hide_score ~= true then
+		return false
+	end
+	local hands_played = rpath(G, "GAME", "current_round", "hands_played")
+	if not is_int(hands_played) or hands_played < 0 then
+		return false
+	end
+	if hands_played > 0 then
+		return true
+	end
+	if phase == "MULTIPLAYER_PVP" then
+		return false
+	end
+	return engine_pvp_boss(G) == false
+end
+
 local function derive_engine_symbol(G)
 	local states = rget(G, "STATES")
 	if type(states) ~= "table" then
@@ -341,6 +378,113 @@ local function derive_engine_symbol(G)
 		return nil, CODE.UNSUPPORTED_STATE
 	end
 	return found
+end
+
+-- Whether the AI's OWN visible countdown is actually ticking. This mirrors the
+-- pinned Multiplayer timer gating (ui/game/timer.lua:400-475) rather than a
+-- generic flag:
+--   * under `pvp_timer` (Ranked, a PvP boss) the own timer ticks only while the
+--     OPPONENT is timering the AI (`nemesis_timer_started`); `timer_started`
+--     (the AI timering the opponent) must NOT start the cap;
+--   * a PvP blind under any other timer does not run the own countdown at all;
+--   * otherwise the own timer runs while `timer_started or nemesis_timer_started`.
+-- It reads only the AI's own public flags; it never reads the opponent timer and
+-- never modifies any timer.
+local function own_timer_active(G, MP)
+	local game = rget(MP, "GAME")
+	local nemesis = rget(game, "nemesis_timer_started") == true
+	local started = rget(game, "timer_started") == true
+	if engine_pvp_boss(G) == true then
+		local is_layer = rget(MP, "is_layer_active")
+		local pvp_timer = true
+		if type(is_layer) == "function" then
+			local ok, value = pcall(is_layer, "pvp_timer")
+			if ok and type(value) == "boolean" then
+				pvp_timer = value
+			end
+		end
+		if pvp_timer then
+			return nemesis
+		end
+		return false
+	end
+	return started or nemesis
+end
+
+-- The AI's OWN visible active countdown, or nil when the AI's own timer is not
+-- ticking. `MP.GAME.timer` is the exact number the local timer HUD shows; the
+-- opponent timer (`MP.GAME.enemy.*`) is never read and no timer is modified.
+local function own_timer_remaining(G, MP)
+	local game = rget(MP, "GAME")
+	if type(game) ~= "table" then
+		return nil
+	end
+	if not own_timer_active(G, MP) then
+		return nil
+	end
+	local timer = rget(game, "timer")
+	if type(timer) ~= "number" or timer ~= timer or timer == math.huge or timer == -math.huge then
+		return nil
+	end
+	if timer <= 0 then
+		return 0
+	end
+	local floored = math.floor(timer)
+	if floored < 0 then
+		floored = 0
+	end
+	if floored > 2147483647 then
+		floored = 2147483647
+	end
+	return floored
+end
+
+-- The engine readiness gate, split into two kinds. It is a pure read: it never
+-- captures, advances the revision or builds policy data.
+--
+-- HARD: the exact action gates the executor already enforces
+-- (`production_executor.gates_clear`: `G.GAME.STOP_USE`, `G.CONTROLLER.locked`,
+-- an in-flight `G.play.cards` animation) plus an unrecognised state. These mean
+-- the AI genuinely cannot act yet; the loop bounds them with its transient window.
+--
+-- SOFT: pause and an open overlay. These do NOT stop the Multiplayer timer: the
+-- pinned `ui/game/timer.lua:454-465` only pauses while animations play AND
+-- `interactive` is false AND there is no menu/pause. A recovered network blip
+-- shows a Multiplayer informational overlay ("Reconnected…", "Opponent
+-- reconnected…", a server error) that the AI cannot dismiss, so treating it as a
+-- fatal hold would wrongly abort the match. Soft states gate the AI's visible
+-- THINKING time only (the loop freezes the dwell and, after a bounded grace, acts
+-- under the overlay).
+--
+-- A hard gate always wins over a soft one, so an overlay can never hide a genuine
+-- stuck lock.
+local function readiness_gate(G)
+	local stop_use = rpath(G, "GAME", "STOP_USE")
+	if is_int(stop_use) and stop_use > 0 then
+		return "hard"
+	end
+	local locked = rget(rget(G, "CONTROLLER"), "locked")
+	if locked ~= nil and locked ~= false then
+		return "hard"
+	end
+	local play = rpath(G, "play", "cards")
+	local play_count = dense_count(play, LIMITS.scan)
+	if play_count == nil then
+		if rget(G, "play") ~= nil then
+			return "hard"
+		end
+		play_count = 0
+	end
+	if play_count > 0 then
+		return "hard"
+	end
+	if rget(rget(G, "SETTINGS"), "paused") == true then
+		return "soft"
+	end
+	if rget(G, "OVERLAY_MENU") ~= nil then
+		return "soft"
+	end
+	return "ready"
 end
 
 local function spendable_of(G)
@@ -512,6 +656,36 @@ local function redacted()
 	return { face_down = true }
 end
 
+-- M4: the effective public X-multiplier of an OWN playing-card enhancement, as
+-- an integer in hundredths (100..10000). The engine stores it on
+-- `card.ability.x_mult`, copied from `center.config.Xmult` by
+-- `Card:set_ability` (pinned card.lua:288), so Standard's reworked Glass (1.5)
+-- and vanilla/Major League Glass (2) are both readable from the AI's own card.
+-- Only a strict allowlist of enhancements is projected, so this never widens the
+-- schema to arbitrary card types; a debuffed card shows no ability, so it is not
+-- projected.
+local CARD_XMULT_CENTERS = { m_glass = true }
+local CARD_XMULT_MIN = 100
+local CARD_XMULT_MAX = 10000
+
+local function card_xmult(card, center)
+	if type(center) ~= "string" or CARD_XMULT_CENTERS[center] ~= true then
+		return nil
+	end
+	if rget(card, "debuff") == true then
+		return nil
+	end
+	local value = rget(rget(card, "ability"), "x_mult")
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return nil
+	end
+	local scaled = math.floor(value * 100 + 0.5)
+	if scaled < CARD_XMULT_MIN or scaled > CARD_XMULT_MAX then
+		return nil
+	end
+	return scaled
+end
+
 -- Playing-card record for hand/booster/target zones.
 local function build_play_card(card)
 	if not is_face_up(card) then
@@ -519,12 +693,18 @@ local function build_play_card(card)
 	end
 	local record = { face_down = false, shown = shown_copy("card") }
 	record.kind = "card"
-	put(record, "center", center_key(card))
+	local center = center_key(card)
+	put(record, "center", center)
 	put(record, "rank", base_rank(card))
 	put(record, "suit", base_suit(card))
 	put(record, "edition", token_of(edition_type(card), 32))
 	put(record, "seal", seal_of(card))
 	put(record, "debuff", debuff_of(card))
+	local xmult = card_xmult(card, center)
+	if xmult ~= nil then
+		record.xmult = xmult
+		record.shown.xmult = true
+	end
 	return record
 end
 
@@ -707,7 +887,7 @@ end
 -- so the trusted revision fingerprint is computed over `signature + view`.
 -- Raw timers are deliberately excluded: they change every frame and are not part
 -- of the emitted observation (timer projection is unwired).
-local function decision_signature(G, MP)
+local function decision_signature(G, MP, phase)
 	local sig = {}
 	local function put_int(key, value)
 		if is_int(value) then
@@ -749,8 +929,16 @@ local function decision_signature(G, MP)
 	put_bool("nemesis_timer_started", rget(mp_game, "nemesis_timer_started"))
 	put_bool("ready_blind", rget(mp_game, "ready_blind"))
 	local enemy = rget(mp_game, "enemy")
-	put_bool("info_received", rget(enemy, "info_received"))
-	put_str("score_text", rget(enemy, "score_text"))
+	local info_received = rget(enemy, "info_received")
+	put_bool("info_received", info_received)
+	-- Only a score the reader would actually project may move the epoch. While
+	-- Multiplayer masks it, the raw `score_text` must not appear in the
+	-- signature or the canonical string (the reader drops it from the view, so
+	-- an ungated signature would move the epoch for a value no observation
+	-- carries).
+	if info_received == true and opponent_score_presentable(G, MP, phase) then
+		put_str("score_text", rget(enemy, "score_text"))
+	end
 	put_str("hands_text", rget(enemy, "hands_text"))
 	put_int("enemy_lives", rget(enemy, "lives"))
 	return sig
@@ -948,7 +1136,7 @@ local function build_self(G, phase, hand_cards)
 	return out
 end
 
-local function build_opponent(G, MP)
+local function build_opponent(G, MP, phase)
 	local enemy = rpath(MP, "GAME", "enemy")
 	if type(enemy) ~= "table" then
 		return nil
@@ -960,11 +1148,15 @@ local function build_opponent(G, MP)
 	local config = rpath(MP, "LOBBY", "config")
 	local out = { certified = true }
 	local has = false
-	local score = display_of(rget(enemy, "score_text"), LIMITS.display)
-	if score ~= nil then
-		out.score_visible = true
-		out.displayed_score = score
-		has = true
+	-- Gate the pre-reader view with the same visibility rule the reader applies,
+	-- so a masked score never enters the canonical revision string.
+	if opponent_score_presentable(G, MP, phase) then
+		local score = display_of(rget(enemy, "score_text"), LIMITS.display)
+		if score ~= nil then
+			out.score_visible = true
+			out.displayed_score = score
+			has = true
+		end
 	end
 	local hands = rget(enemy, "hands")
 	if is_nat(hands) and hands <= 99 then
@@ -2284,7 +2476,7 @@ local function build_view(G, MP, phase, hand_cards, target)
 	end
 	view.self = self_view
 
-	local opponent = build_opponent(G, MP)
+	local opponent = build_opponent(G, MP, phase)
 	if opponent ~= nil then
 		view.opponent = opponent
 	end
@@ -2429,7 +2621,7 @@ function EngineAdapter.factory(ports)
 			return nil, CODE.BUILD_FAILED
 		end
 
-		local ok_encode, canonical = pcall(codec.encode, { engine = decision_signature(G, MP), view = view })
+		local ok_encode, canonical = pcall(codec.encode, { engine = decision_signature(G, MP, phase), view = view })
 		if not ok_encode or type(canonical) ~= "string" then
 			return nil, CODE.BUILD_FAILED
 		end
@@ -2448,6 +2640,53 @@ function EngineAdapter.factory(ports)
 			return nil, CODE.INTERNAL
 		end
 		return result, code
+	end
+
+	-- Trusted, side-effect-free pre-capture phase probe for the thinking dwell
+	-- (H2). It reads only the engine symbol (a pure state read) and the AI's own
+	-- public timer; it never advances the revision, never builds an observation
+	-- and never exposes a handle, canonical content, opponent data or any
+	-- policy field. The decision loop uses it ONLY to decide whether it may
+	-- capture and how long to dwell; it is never policy input.
+	function instance.probe()
+		local ok, value = pcall(function()
+			local symbol_phase = derive_engine_symbol(G)
+			if symbol_phase == nil then
+				return { ready = false, block = "hard" }
+			end
+			if symbol_phase == "ROUND_EVAL_CONTROL" then
+				return { ready = true, phase = "ROUND_EVAL_CONTROL" }
+			end
+			local phase = symbol_phase
+			if symbol_phase == "HAND_SELECT" then
+				if engine_pvp_boss(G) == true then
+					phase = "MULTIPLAYER_PVP"
+				else
+					phase = "PLAY_HAND"
+				end
+			end
+			if PHASES[phase] ~= true then
+				return { ready = false, block = "hard" }
+			end
+			-- L-a: the terminal phase is resolved BEFORE the readiness gate. A real
+			-- GAME_OVER/win screen is itself an overlay (or may be paused), so a
+			-- gated probe would otherwise hide MATCH_COMPLETE from terminal_probe.
+			if phase == "MATCH_COMPLETE" then
+				return { ready = true, phase = "MATCH_COMPLETE" }
+			end
+			local gate = readiness_gate(G)
+			if gate == "hard" then
+				return { ready = false, phase = phase, block = "hard" }
+			end
+			if gate == "soft" then
+				return { ready = false, phase = phase, block = "soft" }
+			end
+			return { ready = true, phase = phase, timer_remaining = own_timer_remaining(G, MP) }
+		end)
+		if not ok or type(value) ~= "table" then
+			return { ready = false, block = "hard" }
+		end
+		return value
 	end
 
 	function instance.describe()

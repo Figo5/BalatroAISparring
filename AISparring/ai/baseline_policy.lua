@@ -225,6 +225,19 @@ local function blocked_hand(name)
 	end
 	return false
 end
+-- M4: the effective X-multiplier of our own Glass card, projected by the trusted
+-- extractor as integer hundredths (Standard reworks Glass to 1.5 = 150; vanilla
+-- and Major League keep 2 = 200). Conservative fallback 1.5 when the projection
+-- is absent or malformed, so an unreadable card is never over-valued. Never reads
+-- a global, a center table or any hidden value.
+local GLASS_XMULT_FALLBACK = 150
+local function glass_xmult(card)
+	local value = card.xmult
+	if type(value) == "number" and value == value and value %% 1 == 0 and value >= 100 and value <= 10000 then
+		return value / 100
+	end
+	return GLASS_XMULT_FALLBACK / 100
+end
 -- BUY_ITEM Joker scores computed by best_joker, reused by score_of (per decision).
 local BUY_SCORES = {}
 -- Interest cap (interest dollars) for this decision: CONF.interest_cap, raised
@@ -753,7 +766,9 @@ local function estimate_score(played, held, jokers)
 				end
 				local center = c.center
 				-- Enhancement first (Lucky: 1 in 5 for +20 mult = +4 expected),
-				-- then Glass x2, then the card's edition.
+				-- then Glass (its projected effective own-card multiplier, x1.5
+				-- under Standard and x2 under vanilla/Major League), then the
+				-- card's edition.
 				if center == "m_bonus" then
 					chips = chips + 30
 				elseif center == "m_mult" then
@@ -763,7 +778,9 @@ local function estimate_score(played, held, jokers)
 				elseif center == "m_lucky" then
 					mult = mult + 4
 				elseif center == "m_glass" then
-					mult = mult * 2
+					-- M4: the effective own-card multiplier (Standard 1.5,
+					-- vanilla/Major League 2), never a hardcoded constant.
+					mult = mult * glass_xmult(c)
 				end
 				if c.edition == "foil" then
 					chips = chips + 50

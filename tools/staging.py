@@ -160,6 +160,18 @@ MP_KEEPALIVE_COMMENT_LITERAL = "-- Keepalive failed, attempt automatic reconnect
 # Section 4 observer additions: the pinned receive and keepalive-push lines.
 MP_RECEIVE_LITERAL = "local data, error, partial = Networking.Client:receive()"
 MP_KEEPALIVE_PUSH_LITERAL = r'uiToNetworkChannel:push("{\"action\":\"keepAlive\"}")'
+# R2: source-pinned observer at the real parsed inbound dispatch boundary in
+# Multiplayer's `networking/action_handlers.lua`. Lovely matches whole trimmed
+# lines, so the anchor below is the exact pinned dispatch line. The payload only
+# calls the fixed staging bridge global with the parsed action name; the handler
+# lookup, the handler call, ordering and every return stay byte-for-byte
+# unchanged. The staged human runtime installs the global; nothing here rewrites,
+# replaces or suppresses HANDLERS, and nothing pops or reinjects a message.
+MP_ACTION_HANDLERS_SOURCE_TARGET = '=[SMODS Multiplayer "networking/action_handlers.lua"]'
+MP_ACTION_HANDLERS_SOURCE_REL = ("networking", "action_handlers.lua")
+MP_HANDLER_DISPATCH_LITERAL = "local handler = HANDLERS[parsedAction.action]"
+MP_INBOUND_TAP_GLOBAL = "AISP_INBOUND_TAP"
+MP_INBOUND_OBSERVER_MARKERS = ("AISP_INBOUND_OBSERVER", MP_INBOUND_TAP_GLOBAL)
 # N1/section 4: one unique marker comment is emitted by each observer payload. The
 # runtime MP guard requires *all* of them in the loaded network-thread string, and
 # the receipt requires all of them in Lovely's patched socket dump, so a partially
@@ -290,6 +302,12 @@ REFERENCE_GAME_DIR = REPO_ROOT / "work" / "reference" / "game"
 # prove the generated patch applies to the real thread text. Absent on a clean
 # checkout (``work/`` is never committed); tests skip when it is missing.
 REFERENCE_MP_SOCKET = REPO_ROOT / "work" / "reference" / "mp" / "networking" / "socket.lua"
+# R2: pinned inbound-dispatch source the new observer binds to. The Ranked
+# profile pins the certified-mods Multiplayer copy (docs/RANKED_SOURCE_PINS_V1.json
+# `networking/action_handlers.lua`); the anchored dispatch line lives there.
+REFERENCE_MP_ACTION_HANDLERS = (
+    REPO_ROOT / "work" / "reference" / "certified-mods" / "Multiplayer" / "networking" / "action_handlers.lua"
+)
 LOVELY_PATCH_PRIORITY = 2147483600
 LOVELY_MANIFEST_VERSION = "1.0.0"
 
@@ -1980,6 +1998,50 @@ def p2_observer_anchor_problems(source_text: str, port: int = 1) -> list:
     return problems
 
 
+def _mp_inbound_observer_payload() -> str:
+    """R2: bounded own-role diagnostic call inserted before the handler lookup.
+
+    It reads exactly the fixed bridge global with the single parsed action name
+    (never a payload), calls it under ``pcall`` so a hostile/missing tap can never
+    break dispatch, and returns nothing. It does not touch ``HANDLERS``, the
+    lookup, the handler call or the surrounding ``repeat``/``until`` loop.
+    """
+    return (
+        "-- " + MP_INBOUND_OBSERVER_MARKERS[0] + "\n"
+        "do\n"
+        "  local ai_inbound_tap = " + MP_INBOUND_TAP_GLOBAL + "\n"
+        "  if type(ai_inbound_tap) == 'function' then\n"
+        "    pcall(ai_inbound_tap, parsedAction.action)\n"
+        "  end\n"
+        "end"
+    )
+
+
+def mp_inbound_observer_patches() -> list:
+    """R2: the single source-pinned inbound-dispatch observer patch."""
+    return [
+        {
+            "kind": "pattern",
+            "target": MP_ACTION_HANDLERS_SOURCE_TARGET,
+            "pattern": MP_HANDLER_DISPATCH_LITERAL,
+            "position": "before",
+            "payload": _mp_inbound_observer_payload(),
+            "match_indent": False,
+            "times": 1,
+        }
+    ]
+
+
+def mp_inbound_observer_anchor_problems(source_text: str) -> list:
+    """R2: the inbound-dispatch anchor must match exactly one full source line."""
+    problems: list = []
+    for patch in mp_inbound_observer_patches():
+        matches = matching_source_lines(source_text, str(patch["pattern"]))
+        if len(matches) != 1:
+            problems.append(f"mp_inbound_anchor_not_unique:{patch['pattern']}")
+    return problems
+
+
 def staging_patches(expected_save_dir, expected_mods_dir, bootstrap: bool = False, mp_guard=None) -> list:
     patches = [
         steam_disable_patch(),
@@ -1994,6 +2056,10 @@ def staging_patches(expected_save_dir, expected_mods_dir, bootstrap: bool = Fals
     if mp_guard is not None:
         patches.append(multiplayer_guard_patch(mp_guard))
         patches.extend(mp_p2_observer_patches(mp_guard))
+        # R2: the always-on source-pinned inbound-dispatch observer (real inbound
+        # event evidence for the retained terminal window). Applied to both staged
+        # roles; only the human runtime installs the tap global.
+        patches.extend(mp_inbound_observer_patches())
     return patches
 
 
@@ -2390,6 +2456,26 @@ def check_multiplayer_guard(staging_root, role: str, manifest: Optional[Mapping]
                     p2_observer_anchor_problems(
                         socket_source.read_text(encoding="utf-8", errors="replace"),
                         port if port is not None else 1,
+                    )
+                )
+        # R2: the inbound-dispatch observer must be present in the staged patch and
+        # its anchor must match the staged action_handlers source exactly (one whole
+        # trimmed line). A loose fragment anchor that would silently never apply is
+        # refused here, so the retained-window event evidence can never be claimed
+        # from an observer that was not actually applied.
+        if MP_HANDLER_DISPATCH_LITERAL not in text:
+            problems.append("mp_inbound_observer_anchor_missing")
+        for marker in MP_INBOUND_OBSERVER_MARKERS:
+            if marker not in text:
+                problems.append(f"mp_inbound_observer_marker_missing:{marker}")
+        if mod_dir is not None:
+            handlers_source = mod_dir.joinpath(*MP_ACTION_HANDLERS_SOURCE_REL)
+            if not handlers_source.is_file():
+                problems.append("mp_action_handlers_source_missing")
+            else:
+                problems.extend(
+                    mp_inbound_observer_anchor_problems(
+                        handlers_source.read_text(encoding="utf-8", errors="replace")
                     )
                 )
         if manifest is not None:

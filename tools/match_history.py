@@ -147,6 +147,20 @@ def match_record(session_dir: Path) -> Optional[dict]:
         "rejected": summary.get("rejected"),
         "errors": summary.get("errors"),
         "no_action": summary.get("no_action"),
+        # H3/M2: `rejected` is only comparable within one counter version. Version-2
+        # counts a refused decision once per delivered sequence; version-1 (or a
+        # missing field) is the historical idle-inflated number. The AI's real
+        # loop metrics are kept under `ai_loop_*`; the generic `loop_*` fields are
+        # deliberately not carried (the human runtime has no decision loop).
+        "counter_version": summary.get("counter_version"),
+        "human_counter_version": summary.get("human_counter_version"),
+        "ai_rejected": summary.get("ai_rejected"),
+        "ai_counter_version": summary.get("ai_counter_version"),
+        "ai_loop_idle": summary.get("ai_loop_idle"),
+        "ai_loop_transient": summary.get("ai_loop_transient"),
+        "ai_loop_empty": summary.get("ai_loop_empty"),
+        "ai_loop_no_action": summary.get("ai_loop_no_action"),
+        "ai_loop_waits": summary.get("ai_loop_waits"),
         "host_phase": (report or {}).get("phase"),
         "host_code": (report or {}).get("code"),
         "handoff_seconds": handoff_seconds(report),

@@ -64,6 +64,8 @@ local CODE = {
 	RESPONSE_REJECTED = "loop_response_rejected",
 	NO_ACTION = "loop_policy_no_action",
 	WAITING = "loop_waiting_for_opponent",
+	DWELL = "loop_dwelling",
+	NOT_READY = "loop_not_ready",
 	STALE = "loop_stale",
 	DISPATCH_FAILED = "loop_dispatch_failed",
 	MAX_ERRORS = "loop_max_errors",
@@ -121,6 +123,29 @@ local DEFAULT_NO_ACTION_MAX_BACKOFF = 2.0
 local DEFAULT_WAIT_MAX_BACKOFF = 1.0
 -- Wall-clock deadline for a latched trusted control that never clears.
 local DEFAULT_CONTROL_LATCH_SECONDS = 30
+-- H2 thinking dwell. Normal play waits this long BEFORE the broker issues a
+-- token (so the policy request and the exact canonical broker check both happen
+-- after the wait, never on a held, staling token). Instant supplies no dwell.
+-- The trusted pre-capture phase probe maps an engine decision phase to a dwell
+-- class; an unknown phase has no class and gets no delay.
+local DWELL_CLASS = {
+	BLIND_SELECTION = "blind",
+	PLAY_HAND = "card",
+	DISCARD = "card",
+	MULTIPLAYER_PVP = "pvp",
+	CONSUMABLE_SELECTION = "card",
+	SHOP = "shop",
+	BOOSTER_SELECTION = "booster",
+	ROUND_EVAL_CONTROL = "control",
+	MATCH_COMPLETE = "terminal",
+}
+-- Cap the dwell by the AI's own visible active timer when the probe reports it:
+-- target = min(base, max(0, R - reserve), fraction * R). Never reads opponent
+-- or hidden timers; it is the AI's own public HUD countdown only.
+local DEFAULT_DWELL_TIMER_RESERVE = 2
+local DEFAULT_DWELL_TIMER_FRACTION = 0.2
+-- Hard ceiling on the total carried dwell for one logical decision.
+local DEFAULT_DWELL_MAX = 8
 
 local function shallow_copy(source)
 	local out = {}
@@ -243,6 +268,70 @@ function DecisionLoop.factory(options)
 
 	local wait_state = rawget(options, "wait_state")
 	if wait_state ~= nil and type(wait_state) ~= "function" then
+		return nil, CODE.BAD_OPTIONS
+	end
+
+	-- H2: optional trusted pre-capture readiness/phase probe. When absent the
+	-- loop is byte-for-byte the legacy immediate path (fixtures and old callers
+	-- keep working). When present, the loop dwells before it captures.
+	local readiness = rawget(options, "readiness")
+	if readiness ~= nil and type(readiness) ~= "function" then
+		return nil, CODE.BAD_OPTIONS
+	end
+	local dwell = rawget(options, "dwell")
+	if dwell ~= nil then
+		if not is_plain_table(dwell) then
+			return nil, CODE.BAD_OPTIONS
+		end
+		for key, value in next, dwell do
+			if type(key) ~= "string" or #key == 0 or #key > LIMITS.max_terminal_phase then
+				return nil, CODE.BAD_OPTIONS
+			end
+			if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge then
+				return nil, CODE.BAD_OPTIONS
+			end
+		end
+		-- L2: keep a private copy so a caller mutating its table (production
+		-- passes the shared RuntimeBootstrap.DEFAULT_DWELL) cannot change an
+		-- already-constructed loop.
+		local dwell_copy = {}
+		for key, value in next, dwell do
+			dwell_copy[key] = value
+		end
+		dwell = dwell_copy
+	end
+	local dwell_max = rawget(options, "dwell_max")
+	if dwell_max == nil then
+		dwell_max = DEFAULT_DWELL_MAX
+	end
+	if not is_number(dwell_max) or dwell_max < 0 then
+		return nil, CODE.BAD_OPTIONS
+	end
+	-- A1: how long a soft overlay/pause may hold the thinking clock before the
+	-- loop falls through to the legitimate do_issue path and acts under the
+	-- overlay. Bounded by `dwell_max` (0 => act immediately).
+	local overlay_grace = rawget(options, "overlay_grace")
+	if overlay_grace == nil then
+		overlay_grace = dwell_max
+	end
+	if not is_number(overlay_grace) or overlay_grace < 0 then
+		return nil, CODE.BAD_OPTIONS
+	end
+	if overlay_grace > dwell_max then
+		overlay_grace = dwell_max
+	end
+	local dwell_timer_reserve = rawget(options, "dwell_timer_reserve")
+	if dwell_timer_reserve == nil then
+		dwell_timer_reserve = DEFAULT_DWELL_TIMER_RESERVE
+	end
+	if not is_number(dwell_timer_reserve) or dwell_timer_reserve < 0 then
+		return nil, CODE.BAD_OPTIONS
+	end
+	local dwell_timer_fraction = rawget(options, "dwell_timer_fraction")
+	if dwell_timer_fraction == nil then
+		dwell_timer_fraction = DEFAULT_DWELL_TIMER_FRACTION
+	end
+	if not is_number(dwell_timer_fraction) or dwell_timer_fraction < 0 or dwell_timer_fraction > 1 then
 		return nil, CODE.BAD_OPTIONS
 	end
 
@@ -428,8 +517,18 @@ function DecisionLoop.factory(options)
 	local last_request_at = nil
 	local cooldown_until = nil
 	local consecutive_errors = 0
+	-- Broker CAPTURE/control transient window (register_transient): bounded by
+	-- max_transient_seconds/streak and cleared only by a real broker progress
+	-- (issue/submit success). It is NEVER cleared by a readiness probe.
 	local transient_streak = 0
 	local transient_started_at = nil
+	-- Readiness hard-hold window (hold_not_ready): a SEPARATE bound for a
+	-- non-actionable engine (lock / STOP_USE / play animation / unknown). A
+	-- genuine soft or ready phase is progress and resets this window, but it must
+	-- never reset the capture window above (a soft overlay does not prove the
+	-- broker can capture a valid canonical state).
+	local readiness_streak = 0
+	local readiness_started_at = nil
 	local control_latch = nil
 	local control_latch_at = nil
 	local next_sequence = sequence_start
@@ -445,6 +544,35 @@ function DecisionLoop.factory(options)
 	local waiting_since = nil
 	local last_now = nil
 	local wait_backoff = nil
+	-- H2 dwell state. A logical decision's thinking time starts when a
+	-- decision-ready state first appears and is carried across state changes,
+	-- stale/no-action/empty/transient retries and opponent-location changes until
+	-- the decision commits or the match resets. `dwell_elapsed` is the accumulated
+	-- ACTIVE time and `dwell_active_since` is nil while frozen (a soft
+	-- overlay/pause), so overlay/pause time is excluded. `dwell_first_shop` marks
+	-- the first inspection of a shop visit; `shop_visit_open` is true while the
+	-- logical context is inside a shop visit (the shop itself or a booster opened
+	-- from it).
+	--
+	-- L5: a verified opponent wait does NOT reset the elapsed time: while a wait
+	-- holds, the clock keeps running against the cap, so an AI that was already
+	-- thinking may act immediately when the wait clears (accepted). An in-flight
+	-- decision is never cancelled by the wait check; its validity is
+	-- re-established by the broker's exact epoch/canonical recheck, so a still-valid
+	-- legacy decision completes (see
+	-- `a_decision_in_flight_when_the_wait_begins_still_completes`).
+	-- `dwell_elapsed` counts only ACTIVE thinking time; `dwell_active_since` is
+	-- nil while the clock is frozen (a soft overlay/pause), so overlay/pause time
+	-- never advances the dwell and never leaks into the next decision.
+	local dwell_active = false
+	local dwell_elapsed = 0
+	local dwell_active_since = nil
+	local dwell_class = nil
+	local dwell_first_shop = false
+	local shop_visit_open = false
+	-- When the current soft overlay/pause episode began (nil when not soft). The
+	-- loop falls through to do_issue after `overlay_grace`.
+	local soft_since = nil
 	local stats = {
 		issued = 0,
 		requests = 0,
@@ -454,6 +582,10 @@ function DecisionLoop.factory(options)
 		errors = 0,
 		timeouts = 0,
 		out_of_order = 0,
+		idle = 0,
+		dwelling = 0,
+		not_ready = 0,
+		overlay_idle = 0,
 		empty = 0,
 		no_action = 0,
 		transient = 0,
@@ -482,11 +614,66 @@ function DecisionLoop.factory(options)
 		transient_started_at = nil
 	end
 
+	-- A genuine readiness progress (a valid soft or ready phase) clears only the
+	-- readiness hard-hold window; it never clears the broker capture window.
+	local function reset_readiness()
+		readiness_streak = 0
+		readiness_started_at = nil
+	end
+
 	-- N6: observable progress clears the no-action throttle so a future state
 	-- change is asked about promptly instead of inheriting the old backoff.
 	local function note_progress()
 		last_no_action_epoch = nil
 		no_action_backoff = nil
+	end
+
+	-- H2: a committed action (or a match reset/stop) ends the logical decision,
+	-- so the next decision starts a fresh dwell. Stale/no-action/empty/transient
+	-- retries deliberately do NOT reset it, so a retry never re-adds a full dwell.
+	local function reset_dwell()
+		dwell_active = false
+		dwell_elapsed = 0
+		dwell_active_since = nil
+		dwell_class = nil
+		dwell_first_shop = false
+	end
+
+	-- Freeze the dwell clock (a soft overlay/pause): bank the active portion and
+	-- stop counting, so overlay/pause time never advances the dwell.
+	local function freeze_dwell(now)
+		if dwell_active_since ~= nil and now > dwell_active_since then
+			dwell_elapsed = dwell_elapsed + (now - dwell_active_since)
+		end
+		dwell_active_since = nil
+	end
+
+	local function dwell_elapsed_now(now)
+		local elapsed = dwell_elapsed
+		if dwell_active_since ~= nil and now > dwell_active_since then
+			elapsed = elapsed + (now - dwell_active_since)
+		end
+		return elapsed
+	end
+
+	-- A committed logical transition ends the current shop visit as well (a
+	-- cash-out control happens outside a shop; a match reset clears everything).
+	local function reset_shop_visit()
+		shop_visit_open = false
+		dwell_first_shop = false
+	end
+
+	-- Maintain the shop-visit flag from the current decision class and report
+	-- whether THIS evaluation is the first to enter the shop of the visit.
+	-- `shop` and `booster` are both part of a visit; any other class leaves it.
+	local function note_class(class)
+		local entering_shop = (class == "shop" and not shop_visit_open)
+		if class == "shop" or class == "booster" then
+			shop_visit_open = true
+		else
+			shop_visit_open = false
+		end
+		return entering_shop
 	end
 
 	local function abandon_pending()
@@ -561,6 +748,8 @@ function DecisionLoop.factory(options)
 		end
 		stopped = true
 		stop_reason = reason
+		reset_dwell()
+		reset_shop_visit()
 		end_wait(last_now)
 		abandon_pending()
 		pcall(broker.cancel)
@@ -580,6 +769,8 @@ function DecisionLoop.factory(options)
 		stopped = true
 		terminal = true
 		stop_reason = "terminal"
+		reset_dwell()
+		reset_shop_visit()
 		end_wait(last_now)
 		stats.terminal = true
 		abandon_pending()
@@ -588,6 +779,94 @@ function DecisionLoop.factory(options)
 			broker.revoke()
 		end)
 		return "terminal", CODE.TERMINAL
+	end
+
+	-- H2: trusted pre-capture readiness/phase probe. It returns only bounded
+	-- primitives (a ready flag, an optional decision phase token, the AI's own
+	-- visible timer and a soft/hard block kind), never engine handles, opponent
+	-- data or canonical content, and it is never policy input. An absent or
+	-- malformed probe is treated conservatively as a hard block.
+	local function read_probe()
+		if readiness == nil then
+			return nil
+		end
+		local ok, value = pcall(readiness)
+		if not ok or type(value) ~= "table" or getmetatable(value) ~= nil then
+			return nil
+		end
+		local ready = rawget(value, "ready") == true
+		local phase = printable(rawget(value, "phase"), LIMITS.max_terminal_phase)
+		local timer = rawget(value, "timer_remaining")
+		if timer ~= nil and not is_nat_int(timer) then
+			timer = nil
+		end
+		if ready then
+			if phase == nil then
+				return nil
+			end
+			return { ready = true, phase = phase, timer_remaining = timer }
+		end
+		local block = rawget(value, "block")
+		if block ~= "soft" and block ~= "hard" then
+			block = "hard"
+		end
+		return { ready = false, phase = phase, block = block }
+	end
+
+	-- Per-phase dwell seconds, capped by the AI's own visible active timer and
+	-- the hard ceiling. 0 means issue immediately (controls and unknown phases).
+	local function dwell_target(class, timer)
+		if class == nil or dwell == nil then
+			return 0
+		end
+		local base = rawget(dwell, class)
+		if type(base) ~= "number" then
+			return 0
+		end
+		if class == "shop" and dwell_first_shop == true then
+			local first = rawget(dwell, "shop_first")
+			if type(first) == "number" then
+				base = first
+			end
+		end
+		local target = base
+		if is_nat_int(timer) then
+			local reserve_cap = timer - dwell_timer_reserve
+			if reserve_cap < 0 then
+				reserve_cap = 0
+			end
+			local fraction_cap = math.floor(timer * dwell_timer_fraction)
+			if reserve_cap < target then
+				target = reserve_cap
+			end
+			if fraction_cap < target then
+				target = fraction_cap
+			end
+		end
+		if target > dwell_max then
+			target = dwell_max
+		end
+		return target
+	end
+
+	-- H2: pre-capture terminal check. With the readiness probe wired (Normal) a
+	-- terminal phase is seen on EVERY update, including the dwell and the legacy
+	-- scheduled paths, without capturing or holding a token. Without the probe
+	-- (legacy/fixtures) terminal detection stays exactly where it was (inside
+	-- do_issue, from the captured phase). On a terminal it drops any outstanding
+	-- decision (`abandon_pending`) because the match is over and no queued token
+	-- may still commit; a non-terminal probe returns nil and never touches a
+	-- pending decision.
+	local function terminal_probe()
+		if readiness == nil then
+			return nil
+		end
+		local probe = read_probe()
+		if probe ~= nil and probe.phase == terminal_phase then
+			abandon_pending()
+			return finish_terminal()
+		end
+		return nil
 	end
 
 	local function register_error(now, code)
@@ -627,6 +906,29 @@ function DecisionLoop.factory(options)
 			return finish("error", code)
 		end
 		return nil, nil
+	end
+
+	-- H2 readiness: while the trusted probe reports the engine is not yet
+	-- actionable (a HARD lock/STOP_USE/play animation or an unknown state) the
+	-- loop does NOT capture and does NOT start the thinking clock. It uses its OWN
+	-- bounded wall-clock window (separate from the broker capture window, which a
+	-- readiness probe must never clear), so a genuinely stuck non-actionable state
+	-- still ends the match cleanly. A soft overlay/pause is NOT routed here.
+	local function hold_not_ready(now)
+		stats.idle = stats.idle + 1
+		stats.not_ready = stats.not_ready + 1
+		set_cooldown(now, transient_backoff)
+		readiness_streak = readiness_streak + 1
+		if readiness_started_at == nil then
+			readiness_started_at = now
+		end
+		if readiness_streak > max_transient_streak then
+			return finish("error", CODE.NOT_READY)
+		end
+		if now - readiness_started_at > max_transient_seconds then
+			return finish("error", CODE.NOT_READY)
+		end
+		return "idle", CODE.NOT_READY
 	end
 
 	local function checksum_of(observation)
@@ -934,6 +1236,9 @@ function DecisionLoop.factory(options)
 			consecutive_errors = 0
 			reset_transient()
 			note_progress()
+			-- H2: a commit ends the logical decision (the shop visit stays open so
+			-- the next shop decision in this visit uses the ordinary dwell).
+			reset_dwell()
 			stats.submitted = stats.submitted + 1
 			local latency = item.latency
 			if latency == nil then
@@ -1006,6 +1311,13 @@ function DecisionLoop.factory(options)
 		local now = current
 		last_now = now
 
+		-- H2: terminal wins on every update when the readiness probe can see it,
+		-- including while dwelling or on the legacy scheduled path.
+		local term_status, term_code = terminal_probe()
+		if term_status ~= nil then
+			return term_status, term_code
+		end
+
 		if controls ~= nil then
 			local ok_next, name = pcall(controls.next)
 			if ok_next and type(name) == "string" and CONTROL_ALLOWLIST[name] == true then
@@ -1035,6 +1347,12 @@ function DecisionLoop.factory(options)
 							end
 							return "idle", CODE.TRANSIENT
 						end
+						-- M1: a successful control advance IS a committed logical
+						-- transition. End the current decision's dwell (the
+						-- cash-out animation time must not be charged to the next
+						-- shop's first inspection) and leave any open shop visit.
+						reset_dwell()
+						reset_shop_visit()
 						control_latch = name
 						control_latch_at = now
 						stats.controls = stats.controls + 1
@@ -1084,11 +1402,115 @@ function DecisionLoop.factory(options)
 			return do_poll(now)
 		end
 
+		-- H2 readiness. The THINKING-clock freeze/resume runs before the
+		-- issue-cadence gates so a soft overlay/pause always excludes its time,
+		-- but the actual issue/wait handling below still respects the existing
+		-- cooldown/min_interval backoff. Instant (no readiness probe) skips this
+		-- entirely and is the legacy immediate path.
+		local probe = nil
+		local soft = false
+		if readiness ~= nil then
+			probe = read_probe()
+			if probe ~= nil and probe.ready == false and probe.block == "soft" then
+				soft = true
+				-- A1: an overlay/pause gates the THINKING CLOCK only. Freeze it
+				-- (overlay time is never counted and never leaks into the next
+				-- decision). A verified soft phase proves the hard gates
+				-- (lock/STOP_USE/play animation) are clear, so it is genuine
+				-- progress: reset the hard transient window so overlay time never
+				-- accumulates toward the fatal deadline. A combined lock+overlay
+				-- probe is hard (not soft), so it is never reset here.
+				if dwell_active_since ~= nil then
+					freeze_dwell(now)
+				end
+				-- Genuine readiness progress: clear only the readiness hard-hold
+				-- window. The broker capture window is deliberately untouched, so
+				-- a persistent capture failure behind a popup still hits its
+				-- existing bound.
+				reset_readiness()
+				if soft_since == nil then
+					soft_since = now
+				end
+			else
+				soft_since = nil
+				if probe ~= nil and probe.ready then
+					-- A valid ready phase is genuine readiness progress too.
+					reset_readiness()
+				end
+			end
+		end
+
 		if cooldown_until ~= nil and now < cooldown_until then
+			stats.idle = stats.idle + 1
 			return "idle", CODE.OK
 		end
 		if last_request_at ~= nil and now - last_request_at < min_interval then
+			stats.idle = stats.idle + 1
 			return "idle", CODE.OK
+		end
+
+		-- Soft overlay/pause: after a bounded grace (or a verified wait) fall
+		-- through to the legitimate do_issue path and act under the overlay. The
+		-- backoff gates above are respected, so a persistent popup cannot cause a
+		-- capture/request every frame.
+		if soft then
+			stats.overlay_idle = stats.overlay_idle + 1
+			if external_wait() ~= nil or now - soft_since >= overlay_grace then
+				return do_issue(now)
+			end
+			stats.idle = stats.idle + 1
+			return "idle", CODE.OK
+		end
+
+		-- Hard not-ready (lock / STOP_USE / play animation / unknown) and a
+		-- malformed probe: a bounded, non-capturing fatal hold. A verified wait
+		-- keeps its own do_issue handling.
+		if readiness ~= nil and (probe == nil or (probe.ready == false and probe.block ~= "soft")) then
+			if external_wait() ~= nil then
+				return do_issue(now)
+			end
+			local hold_status, hold_code = hold_not_ready(now)
+			if hold_status ~= nil then
+				return hold_status, hold_code
+			end
+			return "idle", CODE.NOT_READY
+		end
+
+		-- Actionable now. A verified wait still holds via do_issue.
+		if readiness ~= nil and probe ~= nil and probe.ready and external_wait() == nil then
+			local class = rawget(DWELL_CLASS, probe.phase)
+			local entering_shop = false
+			if class ~= nil then
+				entering_shop = note_class(class)
+			end
+			local base = nil
+			if class ~= nil and dwell ~= nil then
+				base = rawget(dwell, class)
+			end
+			if class ~= nil and type(base) == "number" and base > 0 then
+				if not dwell_active then
+					-- A new logical decision starts a fresh dwell.
+					dwell_active = true
+					dwell_elapsed = 0
+					dwell_active_since = now
+					dwell_class = class
+					dwell_first_shop = (class == "shop" and entering_shop)
+				else
+					dwell_class = class
+					if dwell_active_since == nil then
+						dwell_active_since = now -- resume after a soft freeze
+					end
+				end
+				local target = dwell_target(class, probe.timer_remaining)
+				if target > 0 and dwell_elapsed_now(now) < target then
+					stats.dwelling = stats.dwelling + 1
+					return "dwelling", CODE.DWELL
+				end
+			elseif class ~= nil then
+				-- Zero-dwell class (control): a separate committed transition;
+				-- never start or carry the clock into the next real decision.
+				reset_dwell()
+			end
 		end
 
 		return do_issue(now)
@@ -1144,6 +1566,18 @@ function DecisionLoop.factory(options)
 			control_latch_seconds = control_latch_seconds,
 			has_revision = revision_source ~= nil,
 			has_wait_state = wait_state ~= nil,
+			has_readiness = readiness ~= nil,
+			dwell = dwell ~= nil,
+			dwell_max = dwell_max,
+			overlay_grace = overlay_grace,
+			dwell_active = dwell_active,
+			dwell_elapsed = dwell_elapsed_now(last_now or 0),
+			dwell_active_since = dwell_active_since,
+			dwell_class = dwell_class,
+			dwell_first_shop = dwell_first_shop,
+			soft_since = soft_since,
+			shop_visit_open = shop_visit_open,
+			stats = shallow_copy(stats),
 			terminal_phase = terminal_phase,
 			codes = shallow_copy(CODE),
 		}

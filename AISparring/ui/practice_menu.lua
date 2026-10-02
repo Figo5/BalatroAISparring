@@ -146,7 +146,7 @@ function PracticeMenu.factory(ui)
 			return nil, CODE.BAD_STATE
 		end
 		local ruleset = rawget(view, "ruleset")
-		local ruleset_label = "Major League"
+		local ruleset_label = "Standard Ranked"
 		if is_plain_table(ruleset) and type(ruleset.label) == "string" then
 			ruleset_label = ruleset.label
 		end
@@ -173,13 +173,162 @@ function PracticeMenu.factory(ui)
 				minw = 6,
 				minh = 0.7,
 				scale = 0.45,
-				button = "aisp_confirm_prompt",
+				button = "aisp_draft_begin",
 			}),
 		}, 0.15)
 		return options_builder({
 			back_func = "aisp_close_overlay",
 			contents = rows,
 		})
+	end
+
+	-- The host-owned attended deck/stake draft. `view.draft` is the public host
+	-- state (pool, remaining, banned, transcript, turn, required count, final
+	-- selection); the menu renders it and never derives a choice itself. Human
+	-- actions require the real `aisp_draft_pick` / `aisp_draft_confirm`
+	-- callbacks; out-of-turn and stale controls are rendered inert.
+	function instance.draft_definition(view)
+		if not is_plain_table(view) then
+			return nil, CODE.BAD_STATE
+		end
+		local draft = rawget(view, "draft")
+		if not is_plain_table(draft) then
+			local rows = {
+				row({ text("Match draft", 0.6) }, 0.12),
+				row({ text("Contacting the practice launcher...", 0.35) }, 0.05),
+				row({
+					button_builder({
+						id = "aisp:draft:cancel",
+						label = { "Cancel" },
+						colour = C.RED,
+						minw = 3,
+						minh = 0.6,
+						scale = 0.4,
+						button = "aisp_draft_cancel",
+					}),
+				}, 0.12),
+			}
+			return options_builder({ no_back = true, no_esc = true, contents = rows })
+		end
+		local pending = rawget(view, "draft_pending")
+		if not is_plain_table(pending) then
+			pending = {}
+		end
+		local chosen = {}
+		for i = 1, #pending do
+			chosen[pending[i]] = true
+		end
+		local status = draft.status
+		local current = draft.current_actor
+		local required = draft.required_count
+		local operation = draft.operation
+		local remaining = is_plain_table(draft.remaining) and draft.remaining or {}
+		local is_remaining = {}
+		for i = 1, #remaining do
+			is_remaining[remaining[i]] = true
+		end
+		local turn_label = "Waiting"
+		if status == "completed" then
+			turn_label = "Complete"
+		elseif current == "human" then
+			turn_label = "Player turn"
+		elseif current == "ai" then
+			turn_label = "AI turn"
+		end
+		local rows = {
+			row({ text("Match draft", 0.6) }, 0.08),
+			row({ text("First: " .. tostring(draft.first_actor) .. "   Turn: " .. turn_label, 0.34) }, 0.04),
+		}
+		if status == "active" and current == "human" and type(operation) == "string" then
+			rows[#rows + 1] = row({ text("Required: " .. operation .. " " .. tostring(required), 0.34) }, 0.04)
+		end
+		local error_message = rawget(view, "draft_error")
+		if type(error_message) == "string" and #error_message > 0 then
+			rows[#rows + 1] = row({ text(error_message, 0.32, C.RED) }, 0.04)
+		end
+		local nodes = {}
+		local pool = rawget(draft, "pool")
+		if is_plain_table(pool) then
+			for i = 1, #pool do
+				local item = pool[i]
+				if is_plain_table(item) and type(item.option_id) == "string" then
+					local selectable = status == "active" and current == "human" and is_remaining[item.option_id] == true
+					local label = tostring(item.deck_name or item.deck_key or "?") .. " / " .. tostring(item.stake_key or "?")
+					local colour = C.BLACK
+					if chosen[item.option_id] == true then
+						colour = C.GREEN
+					elseif selectable then
+						colour = C.BLUE
+					end
+					nodes[#nodes + 1] = button_builder({
+						id = "aisp:draft:pick:" .. item.option_id,
+						label = { label },
+						colour = colour,
+						minw = 4,
+						minh = 0.5,
+						scale = 0.32,
+						button = selectable and "aisp_draft_pick" or nil,
+					})
+				end
+			end
+		end
+		rows[#rows + 1] = row(nodes, 0.05)
+		local banned = rawget(draft, "banned")
+		if is_plain_table(banned) and #banned > 0 then
+			rows[#rows + 1] = row({ text("Banned: " .. table.concat(banned, ", "), 0.28) }, 0.03)
+		end
+		if status == "completed" then
+			local final = rawget(draft, "final_selection")
+			if is_plain_table(final) then
+				rows[#rows + 1] = row({
+					text("Selected: " .. tostring(final.back_name) .. " / " .. tostring(final.stake_key), 0.34),
+				}, 0.06)
+			end
+			rows[#rows + 1] = row({
+				button_builder({
+					id = "aisp:draft:start",
+					label = { "Continue" },
+					colour = C.GREEN,
+					minw = 4,
+					minh = 0.6,
+					scale = 0.4,
+					button = "aisp_draft_start",
+				}),
+				button_builder({
+					id = "aisp:draft:cancel",
+					label = { "Cancel" },
+					colour = C.BLUE,
+					minw = 3,
+					minh = 0.6,
+					scale = 0.4,
+					button = "aisp_draft_cancel",
+				}),
+			}, 0.12)
+		else
+			local can_confirm = status == "active" and current == "human"
+				and type(required) == "number" and #pending == required
+			rows[#rows + 1] = row({
+				button_builder({
+					id = "aisp:draft:confirm",
+					label = { "Confirm" },
+					colour = can_confirm and C.GREEN or C.BLACK,
+					minw = 3.5,
+					minh = 0.6,
+					scale = 0.4,
+					button = can_confirm and "aisp_draft_confirm" or nil,
+				}),
+				button_builder({
+					id = "aisp:draft:cancel",
+					label = { "Cancel" },
+					colour = C.BLUE,
+					minw = 3,
+					minh = 0.6,
+					scale = 0.4,
+					button = "aisp_draft_cancel",
+				}),
+			}, 0.12)
+		end
+		return options_builder({ no_back = true, no_esc = true, contents = rows })
 	end
 
 	function instance.confirm_definition(view)

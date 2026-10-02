@@ -47,6 +47,7 @@ RuntimeBootstrap.CODE = {
 	COORD_TIMEOUT = "boot_coord_timeout",
 	SEED_MISMATCH = "boot_seed_mismatch",
 	SEED_TIMEOUT = "boot_seed_timeout",
+	SELECTION_MISMATCH = "boot_selection_mismatch",
 	TERMINAL_TIMEOUT = "boot_terminal_timeout",
 	NOT_ARMED = "boot_not_armed",
 	ACTIVATE_FAILED = "boot_activate_failed",
@@ -61,6 +62,12 @@ RuntimeBootstrap.CODE = {
 
 RuntimeBootstrap.ROLE_AI = "ai_staged"
 RuntimeBootstrap.ROLE_HUMAN = "human_staged"
+-- Explicit versioned Ranked contract carried through Setup/Ready.
+RuntimeBootstrap.RANKED_CONFIG_SCHEMA = "aisparring.ranked_effective_config.v1"
+-- The production Standard Ranked registry key. A driver configured with this
+-- key must require the Ranked schema; only an explicit legacy driver fixture may
+-- use the schema-less Major League digest path.
+RuntimeBootstrap.RANKED_RULESET_ID = "ruleset_mp_standard_ranked"
 
 RuntimeBootstrap.LIMITS = {
 	max_token = 128,
@@ -111,7 +118,26 @@ RuntimeBootstrap.LIMITS = {
 	-- larger (service timeout + margin) or the runtime would keep attempting
 	-- coordination the service has already refused.
 	prestart_timeout = 120,
+	-- Terminal drain diagnostics: how many decoded late replies may be logged as
+	-- dropped after terminal. The counter keeps counting but the logging stops so
+	-- a hostile peer cannot flood the log; every dropped reply is still consumed.
+	max_terminal_drops = 16,
+	-- Cadence of the bracketed inbound-observer snapshot while terminal is
+	-- retained: one bounded snapshot group every this many seconds, never per
+	-- frame.
+	retained_snapshot_interval = 30,
+	-- Wire-bound integer ceiling for the summary counters (the service caps every
+	-- bounded int at this value). New frame/loop metrics saturate here rather than
+	-- being refused by the service.
+	max_sequence = 2147483647,
 }
+
+-- Staging observer bridge: the exact namespaced global the source-pinned
+-- Multiplayer dispatch observer reads before its own handler lookup. The staged
+-- human runtime installs the tap; the AI runtime leaves it nil. The tap receives
+-- only the parsed action name (never a payload) and returns nothing.
+RuntimeBootstrap.INBOUND_TAP_NAME = "AISP_INBOUND_TAP"
+RuntimeBootstrap.INBOUND_EVENT_NAMES = { "enemyDisconnected", "reconnecting", "stopGame" }
 
 local CODE = RuntimeBootstrap.CODE
 
@@ -276,6 +302,20 @@ RuntimeBootstrap.WAIT_STATES = {
 	PVP_COUNTDOWN = "mp_pvp_countdown",
 }
 
+-- H2 default thinking dwell per decision class (seconds). Production Normal
+-- passes this table through `ports.dwell`; it is tuning data informed by sparse
+-- match observations, not measured population statistics, and it never touches
+-- the engine's own timers or animations.
+RuntimeBootstrap.DEFAULT_DWELL = {
+	blind = 2,
+	card = 4,
+	pvp = 4,
+	shop = 6,
+	shop_first = 8,
+	booster = 4,
+	control = 0,
+}
+
 -- The real current blind is the PvP blind: `G.GAME.blind.pvp` (any non-nil,
 -- non-false value, matching MP's `... or blind.pvp` truthiness) or the pinned
 -- nemesis blind key. Never inferred from `pvp_reached`, which Multiplayer resets
@@ -347,6 +387,57 @@ function RuntimeBootstrap.mp_wait_state(mp, G)
 	return nil
 end
 
+-- SAMPLED STATE-EDGE HEURISTIC (diagnostic only; never inbound event evidence).
+-- It only READS the public state the real Multiplayer handlers already write
+-- (`MP.enemy_disconnect_countdown`, `MP.self_reconnect_countdown`/
+-- `MP.LOBBY.connected`, and a running joined match leaving RUN). Because it
+-- samples once per update it cannot prove how many actual inbound messages
+-- arrived: two same-kind messages collapse to one edge, a `stopGame` that changes
+-- no tracked state is missed, and a voluntary menu transition without a message
+-- can look like one. It is retained only as a state diagnostic; the certification
+-- signal is the staging dispatch observer's `inbound_events`. It never calls,
+-- wraps, replaces or suppresses a handler. `previous`/`started` carry the
+-- caller's prior observation and the trusted driver's latched start; the returned
+-- table is the next sample plus a 0/1 rising-edge marker per signal.
+function RuntimeBootstrap.observe_state_edges(previous, mp, g, started)
+	local prev = is_plain(previous) and previous or {}
+	local state = {
+		enemy = prev.enemy == true,
+		reconnect = prev.reconnect == true,
+		match = prev.match == true,
+		enemy_edge = 0,
+		reconnect_edge = 0,
+		stop_edge = 0,
+	}
+	if not is_plain(mp) then
+		return state
+	end
+	local enemy = rget(mp, "enemy_disconnect_countdown") ~= nil
+	if enemy and not state.enemy then
+		state.enemy_edge = 1
+	end
+	state.enemy = enemy
+
+	local lobby_connected = rpath(mp, "LOBBY", "connected")
+	local reconnect = rget(mp, "self_reconnect_countdown") ~= nil or lobby_connected == false
+	if reconnect and not state.reconnect then
+		state.reconnect_edge = 1
+	end
+	state.reconnect = reconnect
+
+	local stages = rget(g, "STAGES")
+	local stage_value = rget(g, "STAGE")
+	local run_stage = rget(stages, "RUN")
+	local in_run = is_int(stage_value) and is_int(run_stage) and stage_value == run_stage
+	local lobby_code = rpath(mp, "LOBBY", "code")
+	local match = started == true and in_run and type(lobby_code) == "string" and #lobby_code > 0
+	if state.match and not match and not state.enemy and not state.reconnect then
+		state.stop_edge = 1
+	end
+	state.match = match
+	return state
+end
+
 function RuntimeBootstrap.factory(ports)
 	if not is_plain(ports) then
 		return nil, CODE.BAD_PORTS
@@ -383,6 +474,13 @@ function RuntimeBootstrap.factory(ports)
 	local mode = rawget(ports, "mode") or "normal"
 	local difficulty = rawget(ports, "difficulty") or "competitive"
 	local pacing = rawget(ports, "pacing") or "normal"
+	-- Optional trusted thinking-dwell table (H2). Production (Normal) passes
+	-- `RuntimeBootstrap.DEFAULT_DWELL`; a caller that omits it keeps the legacy
+	-- immediate path. It is validated again by the decision loop factory.
+	local dwell_port = rawget(ports, "dwell")
+	if dwell_port ~= nil and not is_plain(dwell_port) then
+		return nil, CODE.BAD_PORTS
+	end
 	local decision_base = rawget(ports, "decision_base") or 1000000
 	local auto_coordinate = rawget(ports, "auto_coordinate")
 	if auto_coordinate == nil then
@@ -445,12 +543,16 @@ function RuntimeBootstrap.factory(ports)
 	local setup_sent = false
 	local setup_acked = false
 	local setup_info = nil
+	local post_start_checked = false
+	local post_start_check_at = nil
 	local lobby_code_sent = false
 	local lobby_code_acked = false
 	local join_code = nil
 	local join_sent = false
 	local ready_sent = false
 	local ready_acked = false
+	local ready_digest = nil
+	local ready_readiness = nil
 	local start_sent = false
 	local start_acked = false
 	local guest_ready_committed = false
@@ -466,11 +568,27 @@ function RuntimeBootstrap.factory(ports)
 	local terminal_acked = false
 	local terminal_sent_at = nil
 	local terminal_timeout_recorded = false
+	local terminal_drops = 0
 	local pending_stop = nil
 	local last_summary = nil
 	local receipt_rejections = {}
 	local last_receipt_sequence = nil
 	local counters = { decisions = 0, rejected = 0, errors = 0, terminal = 0 }
+	-- Sampled state-edge diagnostic (never inbound evidence). Read-only.
+	local state_edges = { enemy_disconnected = 0, reconnecting = 0, stop_game = 0 }
+	local state_edge_sample = nil
+	-- Actual inbound event counts, fed only by the source-pinned staging dispatch
+	-- observer through the bounded `AISP_INBOUND_TAP` bridge. The staged human
+	-- runtime installs the tap; the AI runtime leaves it nil. One count per really
+	-- parsed inbound action the observer passes (never a payload).
+	local inbound_events = { enemyDisconnected = 0, reconnecting = 0, stopGame = 0 }
+	-- Bounded total of every parsed action string the tap observed (including
+	-- innocuous ones such as keepAlive), so native evidence can show the observer
+	-- was alive and progressing even when the disruptive counts stay zero. No
+	-- action name other than the three counters is ever stored or exported.
+	local inbound_seen_total = 0
+	local inbound_tap = nil
+	local last_retained_snapshot_at = nil
 	local inbound = {}
 	local inbound_count = 0
 	-- Bounded vanilla unlock-notification dismissal bookkeeping. `unlock_blocking`
@@ -498,6 +616,120 @@ function RuntimeBootstrap.factory(ports)
 			pcall(logger.record, { event = "runtime_bootstrap", code = last_error, role = role })
 		end
 		return last_error
+	end
+
+	-- Saturating bound shared by every diagnostic counter (wire integer ceiling).
+	local function saturate(value)
+		local limit = RuntimeBootstrap.LIMITS.max_sequence
+		if value > limit then
+			return limit
+		end
+		return value
+	end
+
+	-- True only for a real finite number (rejects NaN and +/-infinity), so a
+	-- nonfinite clock can never be serialized as a timestamp or poison the
+	-- retained-snapshot cadence.
+	local function finite_number(value)
+		return type(value) == "number" and value == value and value > -math.huge and value < math.huge
+	end
+
+	-- Sampled state-edge diagnostic. Honest name: it counts observed *state*
+	-- transitions, never actual inbound messages. Never used as acceptance
+	-- evidence (the staging dispatch observer's `inbound_events` is).
+	local function note_state_edge(key)
+		local value = saturate(state_edges[key] + 1)
+		state_edges[key] = value
+		if logger ~= nil then
+			pcall(logger.record, { event = "mp_state_edge", code = key, count = value })
+		end
+	end
+
+	-- Actual inbound event counting, fed ONLY by the source-pinned staging
+	-- dispatch observer. The observer reads the fixed global
+	-- `RuntimeBootstrap.INBOUND_TAP_NAME` (`AISP_INBOUND_TAP`) before its own
+	-- handler lookup and calls it with the single parsed action name (never a
+	-- payload). The tap counts the bounded *total* of every parsed action string
+	-- (so keepAlive and other ordinary traffic prove the observer is alive) and
+	-- the three exact disruptive actions, each with a saturating bound. It stores
+	-- no name other than the three counters and returns nothing, so the original
+	-- decode/dispatch/handler/returns are untouched. Installed for the staged
+	-- human runtime only; the AI runtime leaves the global nil.
+	local function note_inbound_event(action)
+		local value = saturate(inbound_events[action] + 1)
+		inbound_events[action] = value
+		if logger ~= nil then
+			pcall(logger.record, { event = "mp_inbound_event", code = action, count = value })
+		end
+	end
+
+	-- Bracketed snapshot through the trusted logger bridge. Each counter is its
+	-- own bounded record using only existing allowlisted logger fields
+	-- (`action`/`count`/`phase`/`seconds`/`status`), so the production logger
+	-- (and the real core-shaped bridge) never drops a value. The observer record
+	-- carries its alive fact and the bounded total observed count.
+	local function log_inbound_snapshot(reason, at)
+		if logger == nil then
+			return
+		end
+		local phase = token_of(reason, 32) or "snapshot"
+		local seconds = nil
+		if finite_number(at) then
+			seconds = at
+		end
+		-- Owned identity is the actual callback equality, never merely a saved
+		-- nonnil slot: a displaced global must not read as alive.
+		local owned = inbound_tap ~= nil and AISP_INBOUND_TAP == inbound_tap
+		local status
+		if owned then
+			status = inbound_seen_total > 0 and "alive" or "installed"
+		elseif inbound_tap ~= nil then
+			status = "displaced"
+		else
+			status = "absent"
+		end
+		pcall(logger.record, {
+			event = "mp_inbound_snapshot",
+			phase = phase,
+			action = "observer",
+			status = status,
+			count = inbound_seen_total,
+			seconds = seconds,
+		})
+		for i = 1, #RuntimeBootstrap.INBOUND_EVENT_NAMES do
+			local name = RuntimeBootstrap.INBOUND_EVENT_NAMES[i]
+			pcall(logger.record, {
+				event = "mp_inbound_snapshot",
+				phase = phase,
+				action = name,
+				count = inbound_events[name],
+				seconds = seconds,
+			})
+		end
+	end
+
+	local function install_inbound_tap()
+		if role ~= "human" then
+			return
+		end
+		local function tap(action)
+			if type(action) ~= "string" or action == "" then
+				return
+			end
+			inbound_seen_total = saturate(inbound_seen_total + 1)
+			if inbound_events[action] ~= nil then
+				note_inbound_event(action)
+			end
+		end
+		AISP_INBOUND_TAP = tap
+		inbound_tap = tap
+	end
+
+	local function clear_inbound_tap()
+		if inbound_tap ~= nil and AISP_INBOUND_TAP == inbound_tap then
+			AISP_INBOUND_TAP = nil
+		end
+		inbound_tap = nil
 	end
 
 	-- Diagnostic only (no control effect): why the bounded pre-start coordinator
@@ -727,15 +959,52 @@ function RuntimeBootstrap.factory(ports)
 		end
 		local bounded = token_of(result, 32) or "unknown"
 		local wire = RESULT_WIRE[role] or RESULT_WIRE.ai
+		-- Versioned receipt-counter semantics (H3): `rejected` counts a refused
+		-- decision once per delivered sequence (the existing receipt allowlist),
+		-- never idle update frames. The wait/backoff classes are reported
+		-- separately so they can never be mis-read as refused choices. Historical
+		-- `ai_rejected` totals counted idle ticks and are not comparable; a
+		-- consumer that wants the old magnitude must look at the loop_* fields.
+		local loop_stats = nil
+		if loop ~= nil then
+			local ok_stats, value = pcall(loop.stats)
+			if ok_stats and type(value) == "table" then
+				loop_stats = value
+			end
+		end
+		-- Every summary counter is saturated at the wire ceiling so a very large
+		-- metric can never cause the service to refuse the whole END frame. The
+		-- incoming bounds are unchanged.
+		local function clamp_metric(value)
+			if type(value) ~= "number" or value ~= value or value % 1 ~= 0 or value < 0 then
+				return 0
+			end
+			if value > RuntimeBootstrap.LIMITS.max_sequence then
+				return RuntimeBootstrap.LIMITS.max_sequence
+			end
+			return value
+		end
+		local function loop_metric(key)
+			if loop_stats == nil then
+				return 0
+			end
+			return clamp_metric(rget(loop_stats, key))
+		end
 		local summary = {
 			result = wire[bounded] or "unknown",
 			human_lives = nil,
 			ai_lives = nil,
 			ante = nil,
 			round = nil,
-			decisions = counters.decisions,
-			rejected = counters.rejected,
-			errors = counters.errors,
+			decisions = clamp_metric(counters.decisions),
+			rejected = clamp_metric(counters.rejected),
+			errors = clamp_metric(counters.errors),
+			counter_version = 2,
+			loop_idle = loop_metric("idle"),
+			loop_transient = loop_metric("transient"),
+			loop_empty = loop_metric("empty"),
+			loop_no_action = loop_metric("no_action"),
+			loop_waits = loop_metric("waits"),
 		}
 		if type(MP) == "table" then
 			local local_lives = rget(rget(MP, "GAME"), "lives")
@@ -820,6 +1089,20 @@ function RuntimeBootstrap.factory(ports)
 			logger = logger,
 			client = rawget(ports, "client"),
 			hash_string = hash_string,
+			-- The typed canonical parity module for the Ranked contract; absent
+			-- on the legacy Major League path.
+			ranked_config = type(modules) == "table" and rawget(modules, "ranked_config") or nil,
+			-- Registry selection: production uses the driver default (Standard
+			-- Ranked); a legacy fixture may name the Major League registry.
+			ruleset_key = rawget(ports, "ruleset_key"),
+			ruleset_short = rawget(ports, "ruleset_short"),
+			-- Real readiness producers supplied by the entrypoint (release mode)
+			-- and the deployment slice (approved inventory); an explicit fixture
+			-- override is available to tests only.
+			release_mode = rawget(ports, "release_mode"),
+			approved_mods = rawget(ports, "approved_mods"),
+			ranked_profile_facts = rawget(ports, "ranked_profile_facts"),
+			readiness_override = rawget(ports, "readiness_override"),
 		})
 		if driver == nil then
 			return nil, CODE.BAD_MODULES
@@ -979,14 +1262,41 @@ function RuntimeBootstrap.factory(ports)
 				return nil, code
 			end,
 		}
+		-- H2: Normal installs a trusted pre-capture readiness/phase probe and the
+		-- per-phase thinking dwell, but only when the trusted caller supplies the
+		-- dwell table (`ports.dwell`, production companion host). A caller that
+		-- does not (legacy fixtures) keeps the byte-for-byte immediate path.
+		-- Instant supplies no dwell either. Post-response pacing is 0 in every
+		-- case. The probe reads only the adapter's pure engine-symbol/own-timer
+		-- view: no handle, no canonical content, no opponent data, and it is
+		-- never policy input.
+		local readiness_probe = nil
+		local dwell_config = nil
+		if pacing == "normal" and is_plain(dwell_port) then
+			dwell_config = dwell_port
+			readiness_probe = function()
+				if adapter == nil or type(adapter.probe) ~= "function" then
+					return nil
+				end
+				local ok, value = pcall(adapter.probe)
+				if not ok then
+					return nil
+				end
+				return value
+			end
+		end
 		loop = DecisionLoop.factory({
 			broker = broker,
 			transport = decision_transport,
 			clock = clock,
 			logger = decision_logger(),
 			controls = controls,
+			-- Production post-response pacing is always 0: the thinking time is
+			-- the pre-capture dwell below, never a delayed submit of a held token.
 			pacing = 0,
 			pacing_mode = pacing,
+			readiness = readiness_probe,
+			dwell = dwell_config,
 			min_interval = 0,
 			timeout = loop_timeout,
 			terminal_phase = "MATCH_COMPLETE",
@@ -1087,6 +1397,16 @@ function RuntimeBootstrap.factory(ports)
 		if mp_driver == nil or setup_info == nil then
 			return nil
 		end
+		-- The versioned Ranked contract reads the actual live configuration,
+		-- layers and timers itself; it never echoes a service-provided expected
+		-- digest. An unknown schema fails closed.
+		if setup_info.config_schema ~= nil then
+			if setup_info.config_schema ~= RuntimeBootstrap.RANKED_CONFIG_SCHEMA then
+				return nil
+			end
+			local value = mp_driver.ranked_config_digest()
+			return value
+		end
 		local keys = setup_info.forced_options
 		if role == "human" then
 			local recorded = mp_driver.forced_keys()
@@ -1105,6 +1425,50 @@ function RuntimeBootstrap.factory(ports)
 		end
 		local value = mp_driver.config_digest(setup_info.ruleset_id, setup_info.gamemode, keys)
 		return value
+	end
+
+	-- B4: the READY digest is retained and re-checked before any readiness or
+	-- start commit. The runtime always recomputes from the actual config; a
+	-- missing or changed value is a config mismatch, never an echoed expected
+	-- checksum.
+	local function recheck_digest()
+		if ready_digest == nil then
+			return false
+		end
+		local current = compute_digest()
+		return current ~= nil and current == ready_digest
+	end
+
+	-- The dedicated draft commitment digest is re-derived from the bounded public
+	-- transcript before READY, before the ready/start actuators and before the
+	-- host start commit. It is never echoed from the service.
+	local function recheck_draft()
+		if setup_info == nil or setup_info.draft_digest == nil then
+			return true
+		end
+		local parity = type(modules) == "table" and rawget(modules, "ranked_config") or nil
+		if type(parity) ~= "table" or type(rawget(parity, "validate_draft")) ~= "function" then
+			return false
+		end
+		local derived = parity.validate_draft(setup_info.draft)
+		return derived ~= nil and derived == setup_info.draft_digest
+	end
+
+	-- The real readiness record (primitives only). Absent producer or malformed
+	-- record fails the Ranked readiness gate.
+	local function compute_readiness()
+		if mp_driver == nil or type(mp_driver.readiness_facts) ~= "function" then
+			return nil
+		end
+		local facts = mp_driver.readiness_facts()
+		if type(facts) ~= "table" then
+			return nil
+		end
+		-- Withhold READY unless every reviewed fact is exactly true.
+		if type(mp_driver.readiness_ok) ~= "function" or mp_driver.readiness_ok() ~= true then
+			return nil
+		end
+		return facts
 	end
 
 	-- Route one coordination response to the op that produced it. Only
@@ -1131,7 +1495,11 @@ function RuntimeBootstrap.factory(ports)
 			if response.ok == true then
 				hello_acked = true
 				handshake = "acked"
-				state = "armed"
+				-- Defense in depth: a terminal runtime is never re-armed by any
+				-- coordinator reply (terminal drain never routes here anyway).
+				if state ~= "terminal" then
+					state = "armed"
+				end
 			elseif code == protocol.CODES.NOT_ATTESTED then
 				-- The launcher host attests after both probes; re-send hello on
 				-- the next bounded retry. The sequence is not consumed on a
@@ -1155,8 +1523,55 @@ function RuntimeBootstrap.factory(ports)
 			local ruleset_id = rawget(response, "ruleset_id")
 			local gamemode = rawget(response, "gamemode")
 			local forced = rawget(response, "forced_options")
+			local config_schema = rawget(response, "config_schema")
+			-- A driver configured for Standard Ranked must never accept a
+			-- schema-less SETUP and fall back to the legacy Major League digest
+			-- path. Only an explicit legacy registry driver may do that.
+			local driver_ranked = mp_driver ~= nil
+				and type(mp_driver.ruleset_key_value) == "function"
+				and mp_driver.ruleset_key_value() == RuntimeBootstrap.RANKED_RULESET_ID
+			if driver_ranked and config_schema ~= RuntimeBootstrap.RANKED_CONFIG_SCHEMA then
+				coord_failure = CODE.CONFIG_MISMATCH
+				return
+			end
+			if config_schema ~= nil then
+				if type(config_schema) ~= "string" then
+					coord_failure = CODE.SETUP_FAILED
+					return
+				end
+				-- Only the reviewed versioned schema is accepted; an unknown
+				-- version fails closed rather than being treated as legacy.
+				if config_schema ~= RuntimeBootstrap.RANKED_CONFIG_SCHEMA then
+					coord_failure = CODE.CONFIG_MISMATCH
+					return
+				end
+				-- The Ranked contract needs the shared typed parity module. A
+				-- missing driver/module is an immediate module fault, never a
+				-- bounded readiness wait that only times out.
+				if mp_driver == nil
+					or type(mp_driver.has_ranked_config) ~= "function"
+					or mp_driver.has_ranked_config() ~= true then
+					coord_failure = CODE.BAD_MODULES
+					return
+				end
+			end
 			if type(ruleset_id) ~= "string" or type(gamemode) ~= "string"
-				or type(forced) ~= "table" or #forced == 0 then
+				or type(forced) ~= "table" then
+				coord_failure = CODE.SETUP_FAILED
+				return
+			end
+			-- Under the Ranked schema the SETUP ruleset id must match the driver's
+			-- configured registry key; a legacy id cannot be relabelled as Ranked.
+			if config_schema ~= nil then
+				if type(mp_driver.ruleset_key_value) ~= "function"
+					or ruleset_id ~= mp_driver.ruleset_key_value() then
+					coord_failure = CODE.CONFIG_MISMATCH
+					return
+				end
+			end
+			-- The legacy Major League path carries a non-empty forced-keyset; the
+			-- Ranked path carries no keyset and reads the actual layered config.
+			if #forced == 0 and config_schema == nil then
 				coord_failure = CODE.SETUP_FAILED
 				return
 			end
@@ -1175,10 +1590,61 @@ function RuntimeBootstrap.factory(ports)
 				end
 				keys[i] = forced[i]
 			end
+			local selection = rawget(response, "selection")
+			if selection ~= nil and type(selection) ~= "table" then
+				coord_failure = CODE.SETUP_FAILED
+				return
+			end
+			local draft = rawget(response, "draft")
+			local draft_digest = nil
+			-- Under the Ranked schema a validated selection is mandatory with
+			-- exact keys/types; the expected deck/stake come only from it.
+			if config_schema ~= nil then
+				local parity = type(modules) == "table" and rawget(modules, "ranked_config") or nil
+				if type(parity) ~= "table" or type(rawget(parity, "selection_valid")) ~= "function" then
+					coord_failure = CODE.BAD_MODULES
+					return
+				end
+				local valid, valid_code = parity.selection_valid(selection)
+				if valid ~= true then
+					coord_failure = CODE.SETUP_FAILED
+					return
+				end
+				-- A completed host-owned draft commitment is MANDATORY under the
+				-- Ranked schema. There is no selection-only launch and no caller
+				-- flag that can downgrade the requirement; the transcript is
+				-- independently validated here and its digest derived (a supplied
+				-- digest is never accepted as a substitute).
+				if type(draft) ~= "table" or type(rawget(parity, "validate_draft")) ~= "function" then
+					coord_failure = CODE.SETUP_FAILED
+					return
+				end
+				local derived, draft_code, final = parity.validate_draft(draft)
+				if derived == nil then
+					coord_failure = CODE.SETUP_FAILED
+					return
+				end
+				-- The committed final option must bind to the mandatory selection's
+				-- deck/stake keys, so a transcript that disagrees can never launch.
+				local final_deck, final_stake = string.match(final, "^([%w_]+)~([%w_]+)$")
+				if final_deck == nil or final_deck ~= selection.deck_key
+					or final_stake ~= selection.stake_key then
+					coord_failure = CODE.CONFIG_MISMATCH
+					return
+				end
+				draft_digest = derived
+			elseif draft ~= nil then
+				coord_failure = CODE.SETUP_FAILED
+				return
+			end
 			setup_info = {
 				ruleset_id = ruleset_id,
 				gamemode = gamemode,
 				forced_options = keys,
+				config_schema = config_schema,
+				selection = selection,
+				draft = draft,
+				draft_digest = draft_digest,
 			}
 			if role == "human" then
 				local trusted = rawget(response, "gauntlet_seed")
@@ -1286,7 +1752,13 @@ function RuntimeBootstrap.factory(ports)
 						else
 							lobby_enter_sent = true
 							note_wait("host_start_calling")
-							local ok, host_code = mp_driver.host_start(human_seed)
+							-- The completed-draft selection is applied by the
+							-- driver after the real reset and before the first
+							-- lobby-options send; the legacy Major League path
+							-- supplies no selection.
+							local ok, host_code = mp_driver.host_start(
+								human_seed, setup_info ~= nil and setup_info.selection or nil
+							)
 							if ok ~= true then
 								-- Once the real create callback has been invoked, a
 								-- failure must never re-arm: a second createLobby
@@ -1327,7 +1799,28 @@ function RuntimeBootstrap.factory(ports)
 				if digest_value == nil then
 					note_wait("ready_digest_unavailable")
 				else
-					if co_send(protocol.OPS.READY, { config_digest = digest_value }) ~= nil then
+					local ready_payload = { config_digest = digest_value }
+					if setup_info.config_schema ~= nil then
+						ready_payload.config_schema = setup_info.config_schema
+						-- The independently derived draft commitment digest is
+						-- bound alongside the lobby-config digest when a draft is
+						-- carried.
+						if setup_info.draft_digest ~= nil then
+							ready_payload.draft_digest = setup_info.draft_digest
+						end
+						-- The Ranked contract withholds READY unless every real
+						-- readiness fact is true; the record is carried as
+						-- primitives only and is never part of AIObservation.
+						local facts = compute_readiness()
+						if facts == nil then
+							note_wait("ready_readiness_unavailable")
+							return
+						end
+						ready_payload.readiness = facts
+						ready_readiness = facts
+					end
+					if co_send(protocol.OPS.READY, ready_payload) ~= nil then
+						ready_digest = digest_value
 						ready_sent = true
 					end
 				end
@@ -1341,6 +1834,12 @@ function RuntimeBootstrap.factory(ports)
 		if role == "ai" then
 			if not guest_ready_committed then
 				if coord_ready(current) then
+					-- B4: recompute the actual digest before committing ready;
+					-- the draft commitment digest is re-derived too.
+					if not recheck_digest() or not recheck_draft() then
+						coord_failure = CODE.CONFIG_MISMATCH
+						return
+					end
 					local ok, ready_code = mp_driver.ai_ready()
 					if ok == true then
 						guest_ready_committed = true
@@ -1357,6 +1856,12 @@ function RuntimeBootstrap.factory(ports)
 				note_wait("start_awaiting_guest_ready")
 			end
 			if rpath(MP, "LOBBY", "ready_to_start") == true and coord_ready(current) then
+				-- B4: recompute the actual digest before sending START; the
+				-- draft commitment digest is re-derived too.
+				if not recheck_digest() or not recheck_draft() then
+					coord_failure = CODE.CONFIG_MISMATCH
+					return
+				end
 				if co_send(protocol.OPS.START, {}) ~= nil then
 					start_sent = true
 				end
@@ -1369,6 +1874,12 @@ function RuntimeBootstrap.factory(ports)
 		end
 		if not start_committed then
 			if coord_ready(current) then
+				-- B4: recompute the actual digest before committing the start;
+				-- the draft commitment digest is re-derived too.
+				if not recheck_digest() or not recheck_draft() then
+					coord_failure = CODE.CONFIG_MISMATCH
+					return
+				end
 				local ok, start_code = mp_driver.host_start_game()
 				if ok == true then
 					start_committed = true
@@ -1406,8 +1917,12 @@ function RuntimeBootstrap.factory(ports)
 
 	-- Terminal is a drain-only state: consume the owned END ack (never leave it
 	-- unread in the channel), never run the loop again, and never let a missing
-	-- ack hang the runtime. The AI END is a receipt and never authorizes
-	-- teardown on this side; the human END is the authoritative one.
+	-- ack hang the runtime. ONLY an END reply is acted on. Every other decoded
+	-- reply -- successful HELLO/SETUP/READY/START/JOIN_CODE as well as CLOSED/
+	-- ENDED/ABORTED/aborted-heartbeat -- is consumed and dropped with a bounded
+	-- diagnostic: it can never re-arm, modify setup/readiness/start/seed, restart
+	-- the policy, duplicate the END, or remove the MP send guard. The AI END is a
+	-- receipt and never authorizes teardown on this side.
 	local function drain_terminal(current)
 		if transport == nil then
 			return
@@ -1417,13 +1932,18 @@ function RuntimeBootstrap.factory(ports)
 			if response == nil then
 				break
 			end
-			local op = rawget(response, "op")
-			if op == protocol.OPS.END then
+			if rawget(response, "op") == protocol.OPS.END then
 				terminal_acked = response.ok == true
-			elseif op ~= nil then
-				handle_coordination(op, response)
 			else
-				push_inbound(response)
+				terminal_drops = saturate(terminal_drops + 1)
+				if terminal_drops <= RuntimeBootstrap.LIMITS.max_terminal_drops and logger ~= nil then
+					pcall(logger.record, {
+						event = "terminal_drop",
+						count = terminal_drops,
+						-- `action` is allowlisted (a bounded op token); `op` was not.
+						action = token_of(rawget(response, "op"), 32),
+					})
+				end
 			end
 		end
 		if not terminal_acked and terminal_sent_at ~= nil
@@ -1615,6 +2135,12 @@ function RuntimeBootstrap.factory(ports)
 		state = "installed"
 		installed = true
 		installed_at = now()
+		-- Install the real inbound-event tap for the staged human runtime only.
+		-- The source-pinned Multiplayer dispatch observer calls it; the AI runtime
+		-- leaves it nil so nothing changes for the unattended role. The installed
+		-- snapshot brackets the pre-terminal window from the first moment.
+		install_inbound_tap()
+		log_inbound_snapshot("installed", installed_at)
 		return true, CODE.OK
 	end
 
@@ -1629,6 +2155,30 @@ function RuntimeBootstrap.factory(ports)
 		return nil
 	end
 
+	-- One read-only sampled state-edge observation per update. Diagnostic only:
+	-- it is not an inbound event count and is never acceptance evidence.
+	local function observe_state_edges()
+		if type(MP) ~= "table" then
+			return
+		end
+		local started = false
+		if mp_driver ~= nil and type(mp_driver.is_started) == "function" then
+			local ok, value = pcall(mp_driver.is_started)
+			started = ok and value == true
+		end
+		local next_sample = RuntimeBootstrap.observe_state_edges(state_edge_sample, MP, G, started)
+		state_edge_sample = next_sample
+		if next_sample.enemy_edge == 1 then
+			note_state_edge("enemy_disconnected")
+		end
+		if next_sample.reconnect_edge == 1 then
+			note_state_edge("reconnecting")
+		end
+		if next_sample.stop_edge == 1 then
+			note_state_edge("stop_game")
+		end
+	end
+
 	function instance.update(dt)
 		if not installed then
 			return "inert", CODE.OK
@@ -1636,6 +2186,13 @@ function RuntimeBootstrap.factory(ports)
 		if state == "stopped" then
 			return "stopped", CODE.STOPPED
 		end
+		-- Terminal is sticky: once reported, no later path may leave it.
+		if terminal_reported and state ~= "terminal" then
+			state = "terminal"
+		end
+		-- Sampled state-edge diagnostic runs on every update, including the
+		-- terminal/retention drain. It is diagnostic only, never event evidence.
+		observe_state_edges()
 		local current = now()
 		if current == nil then
 			if state == "terminal" then
@@ -1650,6 +2207,19 @@ function RuntimeBootstrap.factory(ports)
 		end
 		if state == "terminal" then
 			drain_terminal(current)
+			-- Bounded periodic snapshot across the retained window, so a native
+			-- proof can bracket the observer's live zero/again counts (never a
+			-- per-frame flood).
+			if
+				finite_number(current)
+				and (
+					last_retained_snapshot_at == nil
+					or current - last_retained_snapshot_at >= RuntimeBootstrap.LIMITS.retained_snapshot_interval
+				)
+			then
+				last_retained_snapshot_at = current
+				log_inbound_snapshot("retained", current)
+			end
 			return "terminal", CODE.TERMINAL
 		end
 
@@ -1721,6 +2291,12 @@ function RuntimeBootstrap.factory(ports)
 			if not terminal_reported then
 				terminal_reported = true
 				terminal_sent_at = current
+				-- Only a finite open time may anchor the cadence; a nonfinite clock
+				-- never poisons it, so finite snapshots resume once the clock is sane.
+				if finite_number(current) then
+					last_retained_snapshot_at = current
+				end
+				log_inbound_snapshot("open", current)
 				report_summary(terminal)
 			end
 			state = "terminal"
@@ -1784,7 +2360,28 @@ function RuntimeBootstrap.factory(ports)
 		elseif loop ~= nil then
 			match_running = true
 		end
-		if loop ~= nil and not loop.is_stopped() and match_running and not unlock_blocking then
+		-- Post-start selection binding: both roles verify the actual initialized
+		-- `selected_back.effect.center.key` and `G.GAME.stake` against the
+		-- completed host-owned draft before any AI policy action. A loading frame
+		-- is a bounded retry; a real mismatch aborts. With no selection present
+		-- (legacy path / next draft slice) the check is skipped.
+		local selection_ready = setup_info == nil or setup_info.selection == nil or post_start_checked
+		if match_running and not selection_ready and mp_driver ~= nil then
+			if post_start_check_at == nil or current - post_start_check_at >= coord_retry_interval then
+				post_start_check_at = current
+				local ok_check, check_code, retry = mp_driver.check_post_start_selection(setup_info.selection)
+				if ok_check == true then
+					post_start_checked = true
+				elseif retry ~= true then
+					-- Record the boot-level mismatch code (the driver's specific
+					-- code is diagnostic only) so the abort reason is stable.
+					record_error(CODE.SELECTION_MISMATCH)
+					instance.shutdown(CODE.SELECTION_MISMATCH)
+					return "stopped", CODE.SELECTION_MISMATCH
+				end
+			end
+		end
+		if loop ~= nil and not loop.is_stopped() and match_running and selection_ready and not unlock_blocking then
 			local status, loop_code = loop.update()
 			if status == "submitted" then
 				counters.decisions = counters.decisions + 1
@@ -1797,14 +2394,25 @@ function RuntimeBootstrap.factory(ports)
 					last_receipt_sequence = local_sequence
 					transport.decision_result(local_sequence, { accepted = true, code = "broker_ok" })
 				end
-			elseif status == "idle" and loop_code ~= nil then
-				counters.rejected = counters.rejected + 1
-				-- Stable rejection receipt for a decision that was actually
-				-- delivered and then refused by the broker/engine.
+			elseif (status == "idle" or status == "stopped") and loop_code ~= nil then
+				-- H3: count a refused decision exactly once per delivered
+				-- sequence and only for the receipt allowlist (stale / dispatch
+				-- failed / response rejected). Plain cooldown, dwell, transient,
+				-- empty, no-action and wait returns are NOT refusals and are
+				-- reported separately through `loop.stats()` in the end summary;
+				-- they no longer inflate `rejected`. A delivered stale sequence
+				-- therefore counts exactly once no matter how many idle frames
+				-- follow it, because `last_receipt_sequence` latches it.
+				-- L3: the final refusal that reaches `max_errors` stops the loop,
+				-- so `status` is "stopped"; if it was a genuinely delivered
+				-- refusal it is still counted and receipted here (before the
+				-- shutdown below) exactly once. Non-receipt stop codes (revoked,
+				-- timeout, transport error, terminal) are ignored by the allowlist.
 				local local_sequence = transport.last_delivered_sequence()
 				if local_sequence ~= nil and local_sequence ~= last_receipt_sequence
 					and receipt_rejections[loop_code] == true then
 					last_receipt_sequence = local_sequence
+					counters.rejected = counters.rejected + 1
 					transport.decision_result(local_sequence, { accepted = false, code = loop_code })
 				end
 			end
@@ -1834,10 +2442,22 @@ function RuntimeBootstrap.factory(ports)
 			handshake = handshake,
 			activated = activated,
 			decisions = counters.decisions,
+			-- `rejected` is the version-2 receipt-based count (one per delivered
+			-- refused decision). `counter_version` lets a consumer tell it apart
+			-- from the historical idle-inflated number without guessing.
 			rejected = counters.rejected,
 			errors = counters.errors,
+			counter_version = 2,
 			has_pending = loop ~= nil and loop.pending_sequence() ~= nil,
 			connected = transport ~= nil and transport.connected(),
+			-- `inbound_events` are actual parsed-action counts from the staging
+			-- dispatch observer; `inbound_seen` is its bounded total observed
+			-- count (liveness); `state_edges` are the sampled diagnostic only.
+			inbound_events = shallow_copy(inbound_events),
+			inbound_seen = inbound_seen_total,
+			-- Actual owned identity: our saved callback is still the live global.
+			inbound_tap = inbound_tap ~= nil and AISP_INBOUND_TAP == inbound_tap,
+			state_edges = shallow_copy(state_edges),
 			last_error = last_error,
 		}
 	end
@@ -1847,6 +2467,9 @@ function RuntimeBootstrap.factory(ports)
 			return true, CODE.STOPPED
 		end
 		local bounded = token_of(reason, RuntimeBootstrap.LIMITS.max_reason) or "shutdown"
+		-- Final bracketed snapshot before the tap is cleared, so the retained
+		-- window closes with its real counts and observer alive fact.
+		log_inbound_snapshot("final", now())
 		if loop ~= nil then
 			pcall(loop.stop, bounded)
 		end
@@ -1874,6 +2497,11 @@ function RuntimeBootstrap.factory(ports)
 		if transport ~= nil then
 			pcall(transport.stop)
 		end
+		-- Drop the inbound tap only while it is still ours, so a foreign global of
+		-- the same name is never clobbered by our shutdown. The closed snapshot
+		-- then records the absent identity honestly (counters are preserved).
+		clear_inbound_tap()
+		log_inbound_snapshot("closed", now())
 		activated = false
 		installed = false
 		installed_at = nil
@@ -1916,9 +2544,16 @@ function RuntimeBootstrap.factory(ports)
 			loop_timeout = loop_state ~= nil and loop_state.timeout or nil,
 			loop_has_wait_state = loop_state ~= nil and loop_state.has_wait_state == true,
 			loop_has_revision = loop_state ~= nil and loop_state.has_revision == true,
+			loop_has_readiness = loop_state ~= nil and loop_state.has_readiness == true,
+			loop_stats = loop_state ~= nil and loop_state.stats or nil,
 			role_ai = RuntimeBootstrap.ROLE_AI,
 			role_human = RuntimeBootstrap.ROLE_HUMAN,
 			counters = shallow_copy(counters),
+			inbound_events = shallow_copy(inbound_events),
+			inbound_seen = inbound_seen_total,
+			-- Actual owned identity: our saved callback is still the live global.
+			inbound_tap = inbound_tap ~= nil and AISP_INBOUND_TAP == inbound_tap,
+			state_edges = shallow_copy(state_edges),
 			last_error = last_error,
 			codes = shallow_copy(CODE),
 		}

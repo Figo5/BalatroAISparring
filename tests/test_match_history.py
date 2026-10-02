@@ -445,6 +445,33 @@ def test_tarot_selection_requires_positive_integer_sequences():
         assert [row["receipt_status"] for row in rows] == ["invalid"] * 7 + ["absent"]
 
 
+def test_match_record_round_trips_ai_loop_metrics():
+    """M2: history keeps the AI's real loop metrics and the versioned counters,
+    and never carries the misleading generic loop_* fields."""
+    with tempfile.TemporaryDirectory() as tmp:
+        session = Path(tmp) / "s-ai"
+        logs = session / "logs"
+        logs.mkdir(parents=True)
+        summary = {
+            "timestamp": 1.0, "session": "s-ai", "difficulty": "competitive", "result": "human_win",
+            "reason": "human_end", "ante": 4, "round": 7, "human_lives": 3, "ai_lives": 0,
+            "decisions": 40, "rejected": 2, "errors": 0, "no_action": 1, "counter_version": 2,
+            "human_counter_version": 2, "ai_rejected": 2, "ai_counter_version": 2,
+            "ai_loop_idle": 9, "ai_loop_transient": 3, "ai_loop_empty": 1,
+            "ai_loop_no_action": 4, "ai_loop_waits": 6,
+        }
+        (logs / "summary.jsonl").write_text(json.dumps(summary) + "\n", encoding="utf-8")
+        (logs / "decisions.jsonl").write_text("", encoding="utf-8")
+        (logs / "results.jsonl").write_text("", encoding="utf-8")
+        record = match_history.match_record(session)
+        assert record["counter_version"] == 2
+        assert record["human_counter_version"] == 2 and record["ai_counter_version"] == 2
+        assert record["ai_rejected"] == 2
+        assert record["ai_loop_idle"] == 9 and record["ai_loop_transient"] == 3
+        assert record["ai_loop_empty"] == 1 and record["ai_loop_no_action"] == 4 and record["ai_loop_waits"] == 6
+        assert "loop_idle" not in record and "loop_waits" not in record
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     failures = 0

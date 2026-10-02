@@ -167,7 +167,16 @@ function F.fixture(repo_root, cfg)
 		quit_fails = cfg.quit_fails == true,
 		diagnostics_path = cfg.diagnostics_path or "C:/logs/aisparring/practice.log",
 		poll_result = cfg.poll_result,
+		draft_begins = {},
+		draft_actions = {},
+		draft_cancels = {},
+		draft_polls = 0,
+		draft_begin_ok = cfg.draft_begin_ok ~= false,
+		draft_responses = {},
 	}
+	for index = 1, #(cfg.draft_responses or {}) do
+		fx.draft_responses[index] = cfg.draft_responses[index]
+	end
 
 	local host = {
 		available = function()
@@ -203,6 +212,28 @@ function F.fixture(repo_root, cfg)
 			fx.ends = fx.ends + 1
 			return cfg.request_end(reason)
 		end
+	end
+	host.draft_begin = function(payload)
+		fx.draft_begins[#fx.draft_begins + 1] = payload
+		if not fx.draft_begin_ok then
+			return nil, "ranked_catalog_unmeasured"
+		end
+		return "draft-1"
+	end
+	host.draft_action = function(action)
+		fx.draft_actions[#fx.draft_actions + 1] = action
+		return "draft-2"
+	end
+	host.draft_cancel = function(draft_id)
+		fx.draft_cancels[#fx.draft_cancels + 1] = draft_id
+		return "draft-3"
+	end
+	host.poll_draft = function(request_id)
+		fx.draft_polls = fx.draft_polls + 1
+		if type(cfg.poll_draft) == "function" then
+			return cfg.poll_draft(request_id, fx)
+		end
+		return table.remove(fx.draft_responses, 1)
 	end
 
 	local status = {

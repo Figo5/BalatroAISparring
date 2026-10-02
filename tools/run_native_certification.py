@@ -185,6 +185,7 @@ def main(argv=None):
     parser.add_argument("--reviewed-commit", required=True, help="exact reviewed commit SHA")
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--ranked-dependencies", action="store_true", help="fixed minimal Ranked-compatible staged dependencies")
     args = parser.parse_args(argv)
     repo = Path(args.repo)
     out = Path(args.out)
@@ -212,12 +213,21 @@ def main(argv=None):
         return [installer.TARGET_NAME] if Path(dirpath).resolve() == live_mods.resolve() and installer.TARGET_NAME in names else []
 
     no_game()
-    shutil.copytree(live_mods, private_mods, ignore=omit_companion)
-    expected = {k: v for k, v in staging.hash_tree(live_mods, staging.MODS_HASH_POLICY).items()
-                if not k.startswith(installer.TARGET_NAME + "/")}
-    assert staging.hash_tree(private_mods, staging.MODS_HASH_POLICY) == expected, "Other Mods source differs from live"
+    if args.ranked_dependencies:
+        import ranked_deployment
+        ranked_deployment.assemble(private_mods)
+    else:
+        shutil.copytree(live_mods, private_mods, ignore=omit_companion)
+        expected = {k: v for k, v in staging.hash_tree(live_mods, staging.MODS_HASH_POLICY).items()
+                    if not k.startswith(installer.TARGET_NAME + "/")}
+        assert staging.hash_tree(private_mods, staging.MODS_HASH_POLICY) == expected, "Other Mods source differs from live"
     run(out, repo, "bootstrap-stage", ["tools/staging.py", "bootstrap"])
     run(out, repo, "role-stage", ["tools/staging.py", "stage", "--mods-source", str(private_mods)])
+    if args.ranked_dependencies:
+        no_game()
+        ranked_deployment.install_injector(ROOT)
+        (out / "ranked-dependencies.json").write_text(json.dumps({"pins_sha256":staging.sha256_file(ranked_deployment.PINS),
+            "lovely_sha256":ranked_deployment.pins()["lovely_sha256"], "live_dependencies_changed":False}, indent=2))
     pack = run(out, repo, "package", ["tools/install_companion.py", "package"])
     assert installer.verify_package(installer.DEFAULT_PACKAGE_ROOT).get("ok")
     # Bind the packaged module files to the reviewed commit's blobs, on top of

@@ -70,6 +70,7 @@ if str(TOOLS_DIR) not in sys.path:
 
 import launch_practice  # noqa: E402
 import practice_service  # noqa: E402
+import ranked_draft  # noqa: E402
 import ruleset_contract  # noqa: E402
 import staging  # noqa: E402
 
@@ -115,7 +116,20 @@ SERVER_BIND_BAD = "server.listen(PORT, '0.0.0.0', () => {"
 SERVER_ADMIN_OK = "// AISparring local adaptation: unused admin listener disabled."
 SERVER_ADMIN_BAD = "adminServer.listen(ADMIN_PORT, '127.0.0.1', () => {"
 
-MENU_OPS = ("available", "start", "poll", "status", "acknowledge")
+MENU_OPS = (
+    "available",
+    "start",
+    "poll",
+    "status",
+    "acknowledge",
+    # The host-owned Ranked draft runs over the same authenticated loopback
+    # control channel BEFORE the start request. The menu renders only the
+    # public state; human bans require real callbacks and are never automated.
+    "draft_begin",
+    "draft_action",
+    "draft_cancel",
+    "draft_status",
+)
 PHASES = (
     "accepted",
     "waiting_live_exit",
@@ -137,10 +151,20 @@ DEFAULT_QUIESCENCE_SECONDS = 5.0
 DEFAULT_ATTESTATION_TIMEOUT = 90.0
 
 REQUEST_KEYS = frozenset({"schema", "op", "auth", "request"})
+# The launch request adds ONLY `draft_id` to the pre-existing strict seven-key
+# request; the host resolves the completed, unconsumed draft's immutable
+# selection/catalog/transcript from its own state, never from the caller.
 START_REQUEST_KEYS = frozenset(
-    {"session_id", "difficulty", "pacing", "mode", "gauntlet", "live_pid", "live_create_time"}
+    {"session_id", "difficulty", "pacing", "mode", "gauntlet", "live_pid", "live_create_time", "draft_id"}
 )
 POLL_REQUEST_KEYS = frozenset({"ticket"})
+START_REQUIRED_KEYS = START_REQUEST_KEYS - {"draft_id"}
+DRAFT_BEGIN_KEYS = frozenset({"difficulty", "pacing", "mode", "gauntlet"})
+DRAFT_STATUS_KEYS = frozenset({"draft_id"})
+DRAFT_CANCEL_KEYS = frozenset({"draft_id"})
+DRAFT_ACTION_KEYS = frozenset(
+    {"draft_id", "expected_revision", "request_id", "operation", "option_ids"}
+)
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 SECRET_RE = re.compile(r"^[0-9a-f]{32,128}$")
@@ -203,6 +227,11 @@ CODE_SUPERVISOR_ACTIVE = "practice_supervisor_active"
 CODE_CONFIG_DIGEST = "practice_major_league_config_unproven"
 CODE_MEASUREMENT_API_MISSING = "practice_measurement_api_missing"
 CODE_RUNTIME_PREFLIGHT = "practice_runtime_preflight_failed"
+CODE_RANKED_GAUNTLET = "practice_ranked_gauntlet_unsupported"
+CODE_RANKED_CATALOG = "practice_ranked_catalog_unmeasured"
+CODE_RANKED_DRAFT = "practice_ranked_draft_unbound"
+CODE_RANKED_DRAFT_UNKNOWN = "practice_ranked_draft_unknown"
+CODE_RANKED_DRAFT_STALE = "practice_ranked_draft_stale"
 
 
 class HostError(Exception):
@@ -393,6 +422,16 @@ class HostConfig:
     require_certificate: bool = True
     require_attestation: bool = True
     server_runtime_deps: tuple = ("better-sqlite3", "uuid")
+    # Measurement-authenticated Ranked catalog (provisioned by the deployment
+    # slice). While absent every Ranked reader/draft fails closed; there is no
+    # built-in or guessed fallback pool. These are repository-owned configuration
+    # values, never accepted from a menu request.
+    ranked_catalog: Optional[Mapping] = None
+    ranked_guest_catalog: Optional[Mapping] = None
+    ranked_selection: Optional[Mapping] = None
+    ranked_custom_seed: Optional[str] = None
+    ranked_generation: Optional[str] = None
+    ranked_preparation_required: bool = False
 
     def resolved_discovery_path(self) -> Path:
         return Path(self.discovery_path) if self.discovery_path else Path(self.work_dir) / DISCOVERY_NAME
@@ -418,6 +457,9 @@ def default_config(repo_root=None, **overrides) -> HostConfig:
         gauntlet_catalog=dict(practice_service.GAUNTLET_SEEDS),
     )
     values.update(overrides)
+    if values.get("ranked_preparation_required"):
+        import ranked_deployment
+        values.update(ranked_deployment.load_ready(values["staging_root"]))
     return HostConfig(**values)
 
 
@@ -2085,6 +2127,12 @@ class MatchSupervisor:
         self.match_port: Optional[int] = None
         self.admin_port: Optional[int] = None
         self.human_retained = False
+        # True only while a verified terminal AI (and its real MP connection) is
+        # deliberately kept alive beside the retained Player, server and service
+        # until the Player closes. Cleared once its owned exit is proven and
+        # ownership is dropped; `ai_retention_granted` is the historical record.
+        self.ai_retained = False
+        self.ai_retention_granted = False
         self.voided = False
         self.certificate_id: Optional[str] = None
         self.backup_id: Optional[str] = None
@@ -2148,6 +2196,7 @@ class MatchSupervisor:
         self._stop_server()
         self._stop_service()
         self.human_retained = False
+        self.ai_retained = False
         if self.session is not None:
             try:
                 self._terminate_roles()
@@ -2168,10 +2217,19 @@ class MatchSupervisor:
         return bool(human and human[0].get("running"))
 
     def _teardown_for_completion(self) -> None:
-        """Retire the AI role after its bounded receipt, keep server/service + human.
+        """Set up completion retention; never touch the server's win/life logic.
 
-        The human's MP client keeps its loopback server and the status/end service
-        until the human window exits (H5); only the AI role is retired here.
+        For a successful, authoritative ``human_end`` with ``leave_human_visible``
+        enabled, the terminal AI process and its real Multiplayer connection are
+        retained beside the already retained Player, server and service until the
+        Player closes, BUT only for a proven non-conflicting terminal AI receipt
+        and an owned AI that is still running. The AI's own policy is stopped by
+        the existing trusted terminal path; this method never suppresses or
+        replaces a disconnect handler.
+
+        Existing bounded receipt wait is unchanged. A missing/conflicting receipt
+        or an AI that already exited falls back honestly to the immediate owned-AI
+        teardown: a genuinely exited AI is never relaunched or reconnected.
         """
         if self.session is None:
             self._stop_server()
@@ -2181,12 +2239,100 @@ class MatchSupervisor:
             self._retire_or_cleanup()
             return
         self._await_ai_receipt()
-        self._terminate_roles(only=("ai",))
+        if self._terminal_retention_ok():
+            self.ai_retained = True
+            self.ai_retention_granted = True
+        else:
+            self._terminate_roles(only=("ai",))
         statuses = self.session.is_running()
         human = [item for item in statuses if item.get("role") == "human"]
         self.human_retained = bool(human and human[0].get("running"))
-        if not self.human_retained:
-            self._retire_or_cleanup()
+        if self.human_retained:
+            return
+        if self.ai_retained:
+            # The Player window is already gone; ``_finalize_after_run`` retires
+            # the retained AI (proving its exit) before any server/service stop.
+            return
+        self._retire_or_cleanup()
+
+    def _owned_role_running(self, role: str) -> bool:
+        """True only when the session's exact owned handle for ``role`` runs."""
+        session = self.session
+        if session is None:
+            return False
+        try:
+            for item in getattr(session, "owned", ()) or ():
+                if getattr(item, "role", None) == role:
+                    return bool(item.is_running())
+        except Exception:  # noqa: BLE001
+            return False
+        return False
+
+    def _terminal_retention_ok(self) -> bool:
+        """Whether the terminal AI may be retained with the Player and server.
+
+        Requires the authoritative successful human_end (implied by the caller's
+        path, asserted here from the service's own terminal view), a terminal AI
+        receipt with no human/AI result conflict, and a still-running owned AI.
+        The service's ``terminal_summary`` is the trusted host view; no client
+        value is consulted.
+        """
+        if self.session is None or not self._owned_role_running("ai"):
+            return False
+        # An aborted/role-lost/timeout service never authorizes retention, even if a
+        # stale terminal view lingered.
+        if getattr(self.service, "aborted", False):
+            return False
+        summary_fn = getattr(self.service, "terminal_summary", None)
+        if not callable(summary_fn):
+            return False
+        try:
+            terminal = summary_fn()
+        except Exception:  # noqa: BLE001
+            return False
+        if not isinstance(terminal, dict):
+            return False
+        if terminal.get("terminal_phase") != practice_service.TERMINAL_CLOSED:
+            return False
+        # Only the authoritative successful human_end authorizes retention.
+        if terminal.get("terminal_reason") != "human_end":
+            return False
+        if terminal.get("human_end_received") is not True:
+            return False
+        if terminal.get("ai_end_received") is not True:
+            return False
+        row = terminal.get("summary")
+        if not isinstance(row, dict):
+            return False
+        # A real win or loss only: a matching draw/unknown/aborted pair must not
+        # retain the AI. Both roles' results must agree directly, not just via the
+        # service's conflict flag.
+        result = row.get("result")
+        if result not in ("human_win", "ai_win"):
+            return False
+        if row.get("ai_result") != result:
+            return False
+        if row.get("result_conflict"):
+            return False
+        return True
+
+    def _retire_retained_ai(self) -> bool:
+        """Terminate the retained terminal AI while the server is still up.
+
+        Returns ``True`` only once every retained owned handle is proven exited.
+        The Player has already closed, so this bounded proof gates the later
+        server/service stop, the post-verifier and the measured closure. A stuck
+        owned AI returns ``False`` and is retained for a guarded retry.
+        """
+        self._terminate_roles(only=("ai",))
+        try:
+            self._reap_owned()
+        except Exception:  # noqa: BLE001
+            return False
+        if not self._owned_exit_proven():
+            return False
+        self.ai_retained = False
+        return True
 
     def _retire_or_cleanup(self) -> None:
         """Retire the server/service/roles but keep the retained session (N-1-R).
@@ -2441,6 +2587,7 @@ class MatchSupervisor:
             return self._fail(CODE_CONFIG_DIGEST, problems=["config_digest_missing"])
         ruleset = self._gates.get("ruleset") or {}
         self.admin_port = pick_free_port()
+        config_schema = ruleset.get("config_schema")
         service_config = practice_service.ServiceConfig(
             session_id=self.session_id,
             difficulty=str(self.request["difficulty"]),
@@ -2454,6 +2601,18 @@ class MatchSupervisor:
             ruleset_id=str(ruleset.get("ruleset_id") or practice_service.MAJOR_LEAGUE_RULESET_ID),
             gamemode=ruleset.get("gamemode"),
             forced_options=ruleset.get("forced_options"),
+            # The versioned Ranked contract carries the typed host view and the
+            # resolved engine values so the service can independently re-derive
+            # the digest instead of trusting the caller string.
+            config_schema=config_schema,
+            ranked_host=ruleset.get("host") if config_schema else None,
+            ranked_resolved=ruleset.get("resolved") if config_schema else None,
+            selection=ruleset.get("selection") if config_schema else None,
+            ranked_catalog=ruleset.get("catalog") if config_schema else None,
+            # The dedicated draft commitment and its independently derived digest
+            # are carried separately from the canonical lobby configuration.
+            draft=ruleset.get("draft") if config_schema else None,
+            expected_draft_digest=ruleset.get("draft_digest") if config_schema else None,
         )
         try:
             with self.timer.stage("service_start"):
@@ -2637,6 +2796,14 @@ class MatchSupervisor:
                 return self._void(CODE_LIVE_APPEARED)
             if outcome != "exited":
                 return self._finalize_unverified_human()
+        # Once the retained Player has exited, the owned terminal AI (and its MP
+        # connection) is terminated while the server is still up, and its exit is
+        # bounded and proven BEFORE the server/service stop or any measured
+        # closure. A still-running owned AI must never reach a measured success:
+        # ownership and the open record are retained for a guarded retry.
+        if self.ai_retained:
+            if not self._retire_retained_ai():
+                return self._finalize_refused_closure("session_closure_unproven")
         # The human window has closed: now the owned loopback server and service
         # can be retired before the (real, closed) after-diff.
         self._stop_server()
@@ -2867,6 +3034,7 @@ class MatchSupervisor:
         if not self._owned_exit_proven():
             return False
         self.session = None
+        self.ai_retained = False
         return True
 
     def _finalize_unverified_human(self) -> dict:
@@ -3292,6 +3460,8 @@ class MatchSupervisor:
             "gates": _gate_summary(self._gates) if self._gates else None,
             "role_records": list(self._role_records),
             "human_retained": self.human_retained,
+            "ai_retained": self.ai_retained,
+            "ai_retention_granted": self.ai_retention_granted,
             "voided": self.voided,
             "certificate_id": self.certificate_id,
             "backup_id": self.backup_id,
@@ -3539,14 +3709,38 @@ class HostDaemon:
     ) -> None:
         validate_config(config)
         self.config = config
-        self._supervisor_factory = supervisor_factory or _default_supervisor_factory
+        # The host-owned attended draft (created by the Player menu over the
+        # authenticated control channel). Only one is active at a time; it is
+        # voided by cancel/expiry/restart and consumed once at launch.
+        self._draft = None
+        # The immutable per-launch draft snapshot captured before the
+        # pre-acknowledgement gates and passed to the supervisor, so a later
+        # consume cannot hide the already-validated selection from launch.
+        self._launch_snapshot = None
+        self._supervisor_factory = supervisor_factory or self._default_supervisor_factory
         self._listener_probe = listener_probe
         self._opener = opener
         self._enumerator = enumerator
         self._runtime_checker = runtime_checker
         self._certificate_api = certificate_api if certificate_api is not None else isolation_certificate
         self._which = which
-        self._ruleset_reader = ruleset_reader
+        # Production defaults to the Standard Ranked source-pinned reader; until
+        # the measured catalog is provisioned it fails closed before the quit
+        # acknowledgement rather than validating the user's live setup. The
+        # default reader is draft-aware: it binds the completed host-owned draft
+        # captured for this launch (immutable snapshot), never a caller value.
+        self._reader_is_default = ruleset_reader is None
+        if ruleset_reader is not None:
+            self._ruleset_reader = ruleset_reader
+        else:
+            def _default_authority(staging_root, role: str = "human"):
+                return self._default_ruleset_reader(staging_root, role)
+
+            # Tag the trusted Standard Ranked authority so the pre-acknowledgement
+            # gate can refuse an unsupported Ranked gauntlet (an explicit legacy
+            # reader is never tagged).
+            _default_authority.is_ranked = True
+            self._ruleset_reader = _default_authority
         # M-3: the pre-acknowledgement gate. Production always runs the real
         # default; tests inject it so acceptance paths need no on-disk server.
         self._start_gate = start_gate or (
@@ -3683,6 +3877,139 @@ class HostDaemon:
     def _runtime_preflight(self) -> dict:
         return runtime_preflight(self.config, checker=self._runtime_checker)
 
+    # -- Ranked draft --------------------------------------------------------
+
+    def _generation_token(self):
+        """Stable token for the available staged generation/catalog.
+
+        Editing the catalog (or an explicitly configured generation) changes the
+        token, so an already-open draft no longer matches and is invalidated
+        rather than silently reused.
+        """
+        explicit = getattr(self.config, "ranked_generation", None)
+        if isinstance(explicit, str) and explicit:
+            return explicit
+        catalog = getattr(self.config, "ranked_catalog", None)
+        if isinstance(catalog, Mapping):
+            try:
+                payload = json.dumps(catalog, sort_keys=True, separators=(",", ":"))
+            except (TypeError, ValueError):
+                return None
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        return None
+
+    def _draft_catalog(self):
+        if self.config.ranked_preparation_required:
+            try:
+                import ranked_deployment
+                measured = ranked_deployment.load_ready(self.config.staging_root)
+                if measured["ranked_generation"] != self.config.ranked_generation:
+                    return None, CODE_RANKED_CATALOG
+            except Exception:
+                return None, CODE_RANKED_CATALOG
+        catalog = getattr(self.config, "ranked_catalog", None)
+        guest = getattr(self.config, "ranked_guest_catalog", None)
+        if not isinstance(catalog, Mapping):
+            return None, CODE_RANKED_CATALOG
+        built = ruleset_contract.build_ranked_catalog(catalog, guest_measurement=guest)
+        if not built.get("ok"):
+            return None, CODE_RANKED_CATALOG
+        return {"decks": built["decks"], "stakes": built["stakes"]}, CODE_OK
+
+    def _default_ruleset_reader(self, staging_root, role: str = "human"):
+        """The production Standard Ranked reader, bound to this launch's draft.
+
+        The completed draft snapshot captured before the acknowledgement gates is
+        used; the caller can never substitute a selection. With no snapshot (for
+        example a legacy explicit selection path) the reader fails closed under
+        the Ranked schema rather than inventing a deck.
+        """
+        snapshot = self._launch_snapshot
+        if snapshot is not None:
+            selection = snapshot["selection"]
+            draft = snapshot["draft"]
+        else:
+            selection = getattr(self.config, "ranked_selection", None)
+            draft = None
+        return ruleset_contract.production_ranked_reader(
+            getattr(self.config, "ranked_catalog", None),
+            guest_catalog=getattr(self.config, "ranked_guest_catalog", None),
+            selection=selection,
+            custom_seed=getattr(self.config, "ranked_custom_seed", None),
+            draft=draft,
+        )(staging_root, role)
+
+    def _default_supervisor_factory(self, config, request):
+        # The reader is captured before consumption; the default path binds the
+        # immutable completed draft snapshot concretely so a later consume (or
+        # clearing the launch snapshot) cannot hide it. An injected reader is
+        # always honoured unchanged.
+        if self._reader_is_default and self._launch_snapshot is not None:
+            snapshot = self._launch_snapshot
+            reader = ruleset_contract.production_ranked_reader(
+                getattr(config, "ranked_catalog", None),
+                guest_catalog=getattr(config, "ranked_guest_catalog", None),
+                selection=snapshot["selection"],
+                custom_seed=getattr(config, "ranked_custom_seed", None),
+                draft=snapshot["draft"],
+            )
+        else:
+            reader = self._ruleset_reader
+        return MatchSupervisor(config, request, ruleset_reader=reader)
+
+    def _completed_draft_snapshot(self, draft_id):
+        with self._lock:
+            draft = self._draft
+            if draft is None or not isinstance(draft_id, str) or draft.draft_id != draft_id:
+                return None
+            if draft.cancelled or draft.status != "completed" or draft.consumed:
+                return None
+            if draft.expired():
+                draft.status = "expired"
+                return None
+            return {
+                "draft_id": draft.draft_id,
+                "selection": dict(draft.selection),
+                "draft": draft.public_commitment(),
+                "settings": dict(draft.bound_settings),
+                "generation": draft.generation,
+            }
+
+    def _consume_draft(self, snapshot) -> bool:
+        """Atomically consume the launch-bound draft after every pre-ack gate.
+
+        The draft is re-validated under the existing lock against the captured
+        snapshot: the bound draft id, completed status, cancellation, monotonic
+        expiry and the staged-generation/settings binding must all still hold.
+        A draft replaced or voided while the (possibly slow) gates ran can never
+        slip through, and the TTL is never extended by a request.
+        """
+        with self._lock:
+            draft = self._draft
+            if draft is None or not isinstance(snapshot, Mapping):
+                return False
+            if draft.draft_id != snapshot.get("draft_id"):
+                return False
+            # The bound draft must still belong to the *current* staged
+            # generation/catalog; a replacement generation invalidates it.
+            if draft.generation != snapshot.get("generation"):
+                return False
+            if self._generation_token() != snapshot.get("generation"):
+                return False
+            if dict(draft.bound_settings) != dict(snapshot.get("settings") or {}):
+                return False
+            if draft.cancelled or draft.status != "completed" or draft.consumed:
+                return False
+            if draft.expired():
+                draft.status = "expired"
+                return False
+            return draft.mark_consumed()
+
+    def _draft_settings_match(self, snapshot, settings) -> bool:
+        if not isinstance(settings, Mapping):
+            return False
+        return dict(snapshot.get("settings") or {}) == dict(settings)
+
     def stop(self, *, force: bool = False) -> dict:
         """Shut the daemon down. Refuses while a match worker still owns its run.
 
@@ -3806,6 +4133,14 @@ class HostDaemon:
             return self._op_poll(request)
         if op == "acknowledge":
             return self._op_acknowledge(request)
+        if op == "draft_begin":
+            return self._op_draft_begin(request)
+        if op == "draft_action":
+            return self._op_draft_action(request)
+        if op == "draft_cancel":
+            return self._op_draft_cancel(request)
+        if op == "draft_status":
+            return self._op_draft_status(request)
         return self._op_status(request)
 
     def _op_available(self, request) -> dict:
@@ -3861,8 +4196,102 @@ class HostDaemon:
             acked = None
         return {"ok": True, "code": CODE_OK, "cleared": True, "certificate_lockout": acked}
 
+    # -- draft ops -----------------------------------------------------------
+
+    def _op_draft_begin(self, request) -> dict:
+        if set(request.keys()) != DRAFT_BEGIN_KEYS:
+            return {"ok": False, "code": CODE_BAD_REQUEST}
+        difficulty = request.get("difficulty")
+        if difficulty not in practice_service.DIFFICULTIES:
+            return {"ok": False, "code": CODE_BAD_ENUM}
+        pacing = request.get("pacing")
+        if pacing not in practice_service.PACING:
+            return {"ok": False, "code": CODE_BAD_ENUM}
+        mode = request.get("mode")
+        if mode not in practice_service.MODES:
+            return {"ok": False, "code": CODE_BAD_ENUM}
+        gauntlet = request.get("gauntlet")
+        if mode == "gauntlet":
+            # Unsupported Ranked gauntlet stays refused before any draft, exactly
+            # as it is refused pre-acknowledgement for a launch.
+            return {"ok": False, "code": CODE_RANKED_GAUNTLET, "problems": ["ranked_gauntlet_unsupported"]}
+        if gauntlet is not None:
+            return {"ok": False, "code": CODE_BAD_ENUM}
+        catalog, code = self._draft_catalog()
+        if catalog is None:
+            return {"ok": False, "code": code}
+        settings = {"mode": mode, "difficulty": difficulty, "pacing": pacing, "gauntlet": None}
+        generation = self._generation_token()
+        try:
+            draft = ranked_draft.RankedDraft(catalog, settings, generation, clock=self._clock)
+            draft.auto_ai()
+        except ranked_draft.DraftError as error:
+            return {"ok": False, "code": error.code}
+        with self._lock:
+            self._draft = draft
+            state = draft.public_state()
+        return {"ok": True, "code": CODE_OK, "draft": state}
+
+    def _op_draft_action(self, request) -> dict:
+        if set(request.keys()) != DRAFT_ACTION_KEYS:
+            return {"ok": False, "code": CODE_BAD_REQUEST}
+        draft_id = request.get("draft_id")
+        request_id = request.get("request_id")
+        operation = request.get("operation")
+        option_ids = request.get("option_ids")
+        if not isinstance(option_ids, list):
+            return {"ok": False, "code": CODE_BAD_REQUEST}
+        with self._lock:
+            draft = self._draft
+            if draft is None or not isinstance(draft_id, str) or draft.draft_id != draft_id:
+                return {"ok": False, "code": CODE_RANKED_DRAFT_UNKNOWN}
+            # The actor is derived by the state machine from the turn; the wire
+            # request can never name one. Only a human callback reaches here, so
+            # `apply("human", ...)` refuses an out-of-turn request.
+            try:
+                result = draft.apply(
+                    "human", request_id, request.get("expected_revision"), operation, option_ids
+                )
+                if result.get("ok") and draft.status == "active" and draft.current_actor() == "ai":
+                    # Host executes only AI turns, from the public preferences and
+                    # public remaining choices (never a seed or hidden state).
+                    draft.auto_ai()
+            except ranked_draft.DraftError as error:
+                return {"ok": False, "code": error.code}
+            return {
+                "ok": bool(result.get("ok")),
+                "code": result.get("code"),
+                "draft": draft.public_state(),
+            }
+
+    def _op_draft_cancel(self, request) -> dict:
+        if set(request.keys()) != DRAFT_CANCEL_KEYS:
+            return {"ok": False, "code": CODE_BAD_REQUEST}
+        draft_id = request.get("draft_id")
+        with self._lock:
+            draft = self._draft
+            if draft is None or not isinstance(draft_id, str) or draft.draft_id != draft_id:
+                return {"ok": False, "code": CODE_RANKED_DRAFT_UNKNOWN}
+            result = draft.cancel()
+            return {
+                "ok": bool(result.get("ok")),
+                "code": result.get("code"),
+                "draft": draft.public_state(),
+            }
+
+    def _op_draft_status(self, request) -> dict:
+        if set(request.keys()) != DRAFT_STATUS_KEYS:
+            return {"ok": False, "code": CODE_BAD_REQUEST}
+        draft_id = request.get("draft_id")
+        with self._lock:
+            draft = self._draft
+            if draft is None or not isinstance(draft_id, str) or draft.draft_id != draft_id:
+                return {"ok": False, "code": CODE_RANKED_DRAFT_UNKNOWN}
+            return {"ok": True, "code": CODE_OK, "draft": draft.public_state()}
+
     def _op_start(self, request) -> dict:
-        if set(request.keys()) != START_REQUEST_KEYS:
+        keys = set(request.keys())
+        if keys - START_REQUEST_KEYS or not START_REQUIRED_KEYS <= keys:
             return {"ok": False, "code": CODE_BAD_REQUEST}
         # H-A-1-R: retry a finished prior supervisor's pending closure before the
         # open-record check, so a delayed safe exit never wedges the next ticket.
@@ -3943,6 +4372,40 @@ class HostDaemon:
                 "code": CODE_RUNTIME_PREFLIGHT,
                 "problems": preflight.get("problems") or [],
             }
+        # M2: an unsupported Ranked gauntlet is refused at the real pre-quit gate
+        # (before the supervisor, spawn or any acknowledgement) using the trusted
+        # Standard Ranked authority. Legacy gauntlet readers are not tagged.
+        gauntlet = ranked_gauntlet_refusal(clean, self._ruleset_reader)
+        if gauntlet is not None:
+            _release()
+            return gauntlet
+        # The launch may name a completed host-owned draft. The selection,
+        # catalog and transcript come only from the host's immutable snapshot;
+        # editing the launch settings (or the staged generation) invalidates the
+        # stale draft instead of silently reusing it. A gate refusal below
+        # preserves the draft; only a successful gate consumes it.
+        snapshot = None
+        if isinstance(getattr(self.config, "ranked_catalog", None), Mapping):
+            snapshot = self._completed_draft_snapshot(clean.get("draft_id"))
+            if snapshot is None:
+                _release()
+                return {"ok": False, "code": CODE_RANKED_DRAFT, "problems": ["ranked_draft_unbound"]}
+            request_settings = {
+                "mode": clean["mode"],
+                "difficulty": clean["difficulty"],
+                "pacing": clean["pacing"],
+                "gauntlet": clean["gauntlet"],
+            }
+            if not self._draft_settings_match(snapshot, request_settings):
+                # Editing launch-relevant settings voids the stale draft instead
+                # of silently reusing it (a completed draft cannot be cancelled
+                # through the client, so the host drops its own copy).
+                with self._lock:
+                    if self._draft is not None and self._draft.draft_id == snapshot["draft_id"]:
+                        self._draft = None
+                _release()
+                return {"ok": False, "code": CODE_RANKED_DRAFT_STALE, "problems": ["ranked_draft_stale"]}
+        self._launch_snapshot = snapshot
         # M-3: every gate that does not need the game closed runs before the
         # acknowledgement, so the user never quits Balatro only to fail afterwards.
         try:
@@ -3950,6 +4413,7 @@ class HostDaemon:
         except Exception:  # noqa: BLE001
             gate = {"ok": False, "code": CODE_INTERNAL}
         if not isinstance(gate, dict) or not gate.get("ok"):
+            self._launch_snapshot = None
             _release()
             gate = gate if isinstance(gate, dict) else {}
             return {
@@ -3957,6 +4421,13 @@ class HostDaemon:
                 "code": gate.get("code") or CODE_INTERNAL,
                 "problems": gate.get("problems") or [],
             }
+        # Atomic consume AFTER every pre-acknowledgement gate succeeds and
+        # BEFORE the accepted response/ticket launch. A later launch failure
+        # cannot relaunch a consumed draft; a gate refusal above preserved it.
+        if snapshot is not None and not self._consume_draft(snapshot):
+            self._launch_snapshot = None
+            _release()
+            return {"ok": False, "code": CODE_RANKED_DRAFT, "problems": ["ranked_draft_consumed"]}
         try:
             ticket.request = clean
             # Retire a finished previous ticket's owned handles, but never a retained
@@ -3972,6 +4443,8 @@ class HostDaemon:
                     except Exception:  # noqa: BLE001
                         pass
             supervisor = self._supervisor_factory(self.config, clean)
+            # The supervisor now owns its concrete draft-bound reader.
+            self._launch_snapshot = None
             ticket.supervisor = supervisor
             thread = threading.Thread(
                 target=self._run_ticket, args=(ticket, supervisor), name="practice-host-supervisor", daemon=True
@@ -3994,6 +4467,7 @@ class HostDaemon:
         except BaseException:
             # A factory/workspace-mkdir/thread-start failure must never leak the
             # reserved slot (a later start would otherwise be stuck ``ticket_active``).
+            self._launch_snapshot = None
             _release()
             raise
         return {
@@ -4061,6 +4535,10 @@ class HostDaemon:
         create_time = request.get("live_create_time")
         if isinstance(create_time, bool) or not isinstance(create_time, (int, float)) or float(create_time) <= 0:
             raise HostError(CODE_BAD_LIVE_PID)
+        draft_id = request.get("draft_id")
+        if draft_id is not None:
+            if not isinstance(draft_id, str) or not TOKEN_RE.match(draft_id):
+                raise HostError(CODE_BAD_REQUEST)
         return {
             "session_id": session_id,
             "difficulty": difficulty,
@@ -4069,14 +4547,48 @@ class HostDaemon:
             "gauntlet": gauntlet if mode == "gauntlet" else None,
             "live_pid": live_pid,
             "live_create_time": float(create_time),
+            "draft_id": draft_id,
         }
 
 
+def _production_ranked_reader(config):
+    """The production Standard Ranked reader for a host config.
+
+    Until the trusted deployment slice provisions the measured host/guest
+    catalogs and the host-owned completed-draft selection on the config, this
+    reader fails closed with ``ranked_catalog_unmeasured`` or
+    ``ranked_draft_unbound`` rather than inventing the Cocktail default or a
+    Red Deck / White Stake fallback. ``ranked_custom_seed`` is the trusted host
+    gauntlet seed only.
+    """
+    return ruleset_contract.production_ranked_reader(
+        getattr(config, "ranked_catalog", None),
+        guest_catalog=getattr(config, "ranked_guest_catalog", None),
+        selection=getattr(config, "ranked_selection", None),
+        custom_seed=getattr(config, "ranked_custom_seed", None),
+    )
+
+
 def _default_supervisor_factory(config, request):
-    return MatchSupervisor(config, request)
+    return MatchSupervisor(config, request, ruleset_reader=_production_ranked_reader(config))
 
 
-def default_start_gate(config, *, certificate_api=None, which=None, ruleset_reader=None) -> dict:
+def ranked_gauntlet_refusal(request, ruleset_reader) -> Optional[dict]:
+    """Refuse an unsupported Ranked gauntlet at the pre-quit gate.
+
+    The trusted host gauntlet-seed derivation/binding is not provisioned for the
+    Standard Ranked authority in this source pass, so a Ranked gauntlet is
+    refused before any acknowledgement, supervisor or spawn. An explicit legacy
+    reader (not tagged ``is_ranked``) keeps legacy gauntlet semantics.
+    """
+    if not callable(ruleset_reader) or getattr(ruleset_reader, "is_ranked", False) is not True:
+        return None
+    if not isinstance(request, Mapping) or request.get("mode") != "gauntlet":
+        return None
+    return {"ok": False, "code": CODE_RANKED_GAUNTLET, "problems": ["ranked_gauntlet_unsupported"]}
+
+
+def default_start_gate(config, *, certificate_api=None, which=None, ruleset_reader=None, request=None) -> dict:
     """Gates that do not need the game closed, run before the quit acknowledgement (M-3).
 
     A missing fixed match port, a missing certificate, a drifted server adaptation,
@@ -4084,6 +4596,14 @@ def default_start_gate(config, *, certificate_api=None, which=None, ruleset_read
     acknowledgement, so the user never quits Balatro only to watch the session fail
     after launch. Nothing here spawns a process or touches the live tree.
     """
+    if config.ranked_preparation_required:
+        try:
+            import ranked_deployment
+            measured = ranked_deployment.load_ready(config.staging_root)
+            if measured["ranked_generation"] != config.ranked_generation:
+                raise RuntimeError("ranked_preparation_generation_changed")
+        except Exception as error:
+            return {"ok":False,"code":CODE_RANKED_CATALOG,"problems":[str(error)]}
     if config.require_fixed_match_port and config.match_port is None:
         return {"ok": False, "code": CODE_MATCH_PORT_UNCONFIGURED, "problems": ["match_port_unconfigured"]}
     port = config.match_port
@@ -4329,6 +4849,7 @@ def config_from_args(args) -> HostConfig:
         node_executable=args.node,
         match_port=args.match_port,
         live_exit_timeout=args.live_exit_timeout,
+        ranked_preparation_required=args.command == "serve",
         work_dir=Path(args.repo) / "work" / "aisparring-host",
         session_root=Path(args.repo) / "work" / "aisparring-host" / "sessions",
     )

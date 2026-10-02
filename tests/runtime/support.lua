@@ -64,6 +64,11 @@ function Support.shape_mp(engine, opts)
 	local ruleset = {
 		forced_gamemode = "gamemode_mp_attrition",
 		forced_lobby_options = true,
+		standard = true,
+		multiplayer_content = true,
+		pvp_timer_base_seconds = 60,
+		pvp_timer_hand_played_increment_seconds = 10,
+		_layer_order = { "standard", "ranked", "pvp_timer" },
 		is_disabled = function()
 			return false
 		end,
@@ -74,7 +79,8 @@ function Support.shape_mp(engine, opts)
 			return true
 		end,
 	}
-	MP.Rulesets = { ruleset_mp_majorleague = ruleset }
+	local ruleset_key = opts.ruleset_key or "ruleset_mp_standard_ranked"
+	MP.Rulesets = { [ruleset_key] = ruleset }
 	-- The real `MP.current_ruleset()` returns a metatable proxy over the active
 	-- layer/ruleset view (work/reference/mp/rulesets/_rulesets.lua): an empty
 	-- table answering every field through its metatable. Reproduce that exact
@@ -87,10 +93,43 @@ function Support.shape_mp(engine, opts)
 		})
 	end
 
+	-- The reviewed `reset_lobby_config` defaults, so the actual-config Ranked
+	-- digest sees every required field with its real type (missing required
+	-- fields are a field-type refusal, not typed nil).
 	local function base_config()
 		local config = MP.LOBBY.config or {}
-		config.ruleset = "ruleset_mp_majorleague"
+		config.ruleset = ruleset_key
 		config.gamemode = "gamemode_mp_attrition"
+		config.gold_on_life_loss = true
+		config.no_gold_on_round_loss = false
+		config.death_on_round_loss = true
+		config.different_seeds = false
+		config.the_order = true
+		config.starting_lives = 4
+		config.pvp_start_round = 2
+		config.timer_base_seconds = 150
+		config.timer_increment_seconds = 60
+		config.pvp_countdown_seconds = 3
+		config.showdown_starting_antes = 3
+		config.custom_seed = "random"
+		config.different_decks = false
+		config.random_loadout = false
+		config.back = "Red Deck"
+		config.sleeve = "sleeve_casl_none"
+		config.stake = 1
+		config.challenge = ""
+		config.cocktail = "1H"
+		config.multiplayer_jokers = true
+		config.timer = true
+		config.timer_forgiveness = 0
+		config.forced_config = true
+		config.preview_disabled = false
+		config.legacy_smallworld = false
+		config.hide_score_until_played = true
+		config.enemy_location_disabled = false
+		config.timer_display_threshold = 0
+		config.modifier_layers = ""
+		config.disable_live_and_timer_hud = false
 		MP.LOBBY.config = config
 		return config
 	end
@@ -315,6 +354,7 @@ function Support.bootstrap(repo_root, overrides)
 	local codec = load(repo_root, "AISparring/ai/codec.lua")
 	local observation = load(repo_root, "AISparring/ai/observation.lua")
 	local actions = load(repo_root, "AISparring/ai/actions.lua")
+	local ranked_config = load(repo_root, "AISparring/integration/ranked_config.lua")
 
 	local role = overrides.role or "ai"
 	local session = overrides.session or "session-1"
@@ -370,10 +410,12 @@ function Support.bootstrap(repo_root, overrides)
 			started = overrides.started,
 			run_seed = overrides.run_seed,
 			deferred_code = overrides.deferred_code,
+			ruleset_key = overrides.ruleset_key,
+			ruleset_short = overrides.ruleset_short,
 		})
 	end
 
-	local modules = {
+	local modules = overrides.modules or {
 		codec = codec,
 		observation = observation,
 		actions = actions,
@@ -384,6 +426,7 @@ function Support.bootstrap(repo_root, overrides)
 		ActionBroker = ActionBroker,
 		DecisionLoop = DecisionLoop,
 		MPDriver = MPDriver,
+		ranked_config = ranked_config,
 	}
 
 	-- The send guard wraps the real game Client.send and is required for BOTH
@@ -434,6 +477,10 @@ function Support.bootstrap(repo_root, overrides)
 		mode = overrides.mode,
 		difficulty = overrides.difficulty,
 		pacing = overrides.pacing,
+		-- H2: only an explicit override wires the thinking dwell, so every
+		-- existing fixture keeps the legacy immediate path; dwell tests pass a
+		-- table here.
+		dwell = overrides.dwell,
 		auto_coordinate = overrides.auto_coordinate,
 		client = client,
 		logger = overrides.logger,
@@ -441,6 +488,13 @@ function Support.bootstrap(repo_root, overrides)
 		terminal_probe = overrides.terminal_probe,
 		config_digest = overrides.config_digest,
 		hook_targets = overrides.hook_targets,
+		ruleset_key = overrides.ruleset_key,
+		ruleset_short = overrides.ruleset_short,
+		-- Readiness producers/ports: a fixture override for the record, plus the
+		-- real release-mode and approved-inventory producers when supplied.
+		readiness_override = overrides.readiness_override,
+		release_mode = overrides.release_mode,
+		approved_mods = overrides.approved_mods,
 	}
 
 	local instance, code = RuntimeBootstrap.factory(options)

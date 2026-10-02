@@ -382,6 +382,17 @@ local function convert_entity(kind, zone, add_ref)
 			end
 			out.current = current
 		end
+		-- M4: the effective own-card X-multiplier in hundredths (Glass under
+		-- Standard x1.5 = 150, vanilla/Major League x2 = 200). Strict numeric
+		-- allowlist and range; a malformed value refuses the whole entity rather
+		-- than silently coercing it.
+		if kind == "card" and rawget(item, "xmult") ~= nil then
+			local xmult_code, xmult = read_int(item, "xmult", 100, 10000)
+			if xmult_code ~= nil or xmult == nil then
+				return CODE.BAD_ENTITY
+			end
+			out.xmult = xmult
+		end
 		return nil, out
 	end
 end

@@ -444,6 +444,7 @@ function Support.staged_modules(repo_root, role)
 	local modules = {
 		MPDriver = load(repo_root, "AISparring/integration/mp_driver.lua"),
 		codec = load(repo_root, "AISparring/ai/codec.lua"),
+		ranked_config = load(repo_root, "AISparring/integration/ranked_config.lua"),
 	}
 	if role == "ai" then
 		modules.StateReader = load(repo_root, "AISparring/integration/state_reader.lua")

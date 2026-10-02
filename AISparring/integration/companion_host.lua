@@ -801,7 +801,8 @@ local function validate_payload(payload)
 		return nil
 	end
 	for key in next, payload do
-		if key ~= "mode" and key ~= "difficulty" and key ~= "pacing" and key ~= "gauntlet_index" then
+		if key ~= "mode" and key ~= "difficulty" and key ~= "pacing"
+			and key ~= "gauntlet_index" and key ~= "draft_id" then
 			return nil
 		end
 	end
@@ -829,6 +830,13 @@ local function validate_payload(payload)
 	local out = { mode = mode, difficulty = difficulty, pacing = pacing }
 	if index ~= nil then
 		out.gauntlet_index = index
+	end
+	local draft_id = rawget(payload, "draft_id")
+	if draft_id ~= nil then
+		if token_of(draft_id, TOKEN_PATTERN, 64) == nil then
+			return nil
+		end
+		out.draft_id = draft_id
 	end
 	return out
 end
@@ -861,6 +869,7 @@ function CompanionHost.live_host(ports)
 	local transport = nil
 	local transport_port = nil
 	local pending = nil
+	local draft_pending = nil
 	local counter = 0
 	local state = "idle"
 	local diagnostic_path = sanitize_text(path_directory(discovery_path), LIMITS.max_path)
@@ -1099,6 +1108,9 @@ function CompanionHost.live_host(ports)
 			if selection.mode == "gauntlet" then
 				request.gauntlet = label
 			end
+			if selection.draft_id ~= nil then
+				request.draft_id = selection.draft_id
+			end
 			local text, encode_code = encode_request(info.secret, "start", request, label)
 			if text == nil then
 				return nil, encode_code
@@ -1182,6 +1194,150 @@ function CompanionHost.live_host(ports)
 		end
 		state = "rejected"
 		return { status = "rejected", code = rawget(response, "code") }
+	end
+
+	-- -- host-owned Ranked draft (over the same authenticated channel) ---------
+
+	local DRAFT_ACTION_KEYS = {
+		draft_id = true,
+		expected_revision = true,
+		request_id = true,
+		operation = true,
+		option_ids = true,
+	}
+
+	local function send_draft(op, request)
+		if draft_pending ~= nil then
+			return nil, CODE.BUSY
+		end
+		-- The draft ops use the exact-key wire encoder; the legacy sentinel
+		-- encoder only knows the `start` shape.
+		if wire == nil then
+			return nil, CODE.BAD_WIRE
+		end
+		local info, info_code = refresh()
+		if info == nil then
+			return nil, info_code or CODE.NOT_AVAILABLE
+		end
+		local text, encode_code = encode_request(info.secret, op, request, nil)
+		if text == nil then
+			return nil, encode_code
+		end
+		drop_transport()
+		local built, build_code = ensure_transport(info)
+		if built == nil then
+			return nil, build_code or CODE.TRANSPORT_UNAVAILABLE
+		end
+		local sent, send_code = built.send(text)
+		if sent ~= true then
+			return nil, send_code or CODE.TRANSPORT_ERROR
+		end
+		counter = counter + 1
+		local request_id = "draft-" .. tostring(counter)
+		draft_pending = { id = request_id }
+		return request_id, CODE.OK
+	end
+
+	function host.draft_begin(payload)
+		local selection = validate_payload(payload)
+		if selection == nil or selection.draft_id ~= nil then
+			return nil, CODE.BAD_SELECTION
+		end
+		local request = {
+			difficulty = selection.difficulty,
+			pacing = selection.pacing,
+			mode = selection.mode,
+		}
+		if selection.mode == "gauntlet" then
+			request.gauntlet = "Test" .. tostring(selection.gauntlet_index)
+		end
+		return send_draft("draft_begin", request)
+	end
+
+	function host.draft_action(action)
+		if not is_plain(action) then
+			return nil, CODE.BAD_SELECTION
+		end
+		for key in next, action do
+			if DRAFT_ACTION_KEYS[key] ~= true then
+				return nil, CODE.BAD_SELECTION
+			end
+		end
+		if token_of(rawget(action, "draft_id"), TOKEN_PATTERN, 64) == nil
+			or token_of(rawget(action, "request_id"), TOKEN_PATTERN, 64) == nil then
+			return nil, CODE.BAD_SELECTION
+		end
+		if not is_int(rawget(action, "expected_revision")) then
+			return nil, CODE.BAD_SELECTION
+		end
+		local operation = rawget(action, "operation")
+		if operation ~= "ban" and operation ~= "select" then
+			return nil, CODE.BAD_SELECTION
+		end
+		local options = rawget(action, "option_ids")
+		if type(options) ~= "table" or next(options) == nil then
+			return nil, CODE.BAD_SELECTION
+		end
+		for i = 1, #options do
+			if type(options[i]) ~= "string" then
+				return nil, CODE.BAD_SELECTION
+			end
+		end
+		return send_draft("draft_action", action)
+	end
+
+	function host.draft_cancel(draft_id)
+		if token_of(draft_id, TOKEN_PATTERN, 64) == nil then
+			return nil, CODE.BAD_SELECTION
+		end
+		return send_draft("draft_cancel", { draft_id = draft_id })
+	end
+
+	function host.draft_status(draft_id)
+		if token_of(draft_id, TOKEN_PATTERN, 64) == nil then
+			return nil, CODE.BAD_SELECTION
+		end
+		return send_draft("draft_status", { draft_id = draft_id })
+	end
+
+	-- Poll the single outstanding draft request. Returns the raw host response
+	-- (`{ok, code, draft}`) once available, a bounded transport error, or nil
+	-- while it is still pending.
+	function host.poll_draft(request_id)
+		if draft_pending == nil or draft_pending.id ~= request_id then
+			return nil
+		end
+		if type(transport) ~= "table" or type(rawget(transport, "poll")) ~= "function" then
+			return nil
+		end
+		local response = transport.poll()
+		if response == nil then
+			local last_error = nil
+			if type(rawget(transport, "last_error")) == "function" then
+				local ok_error, value = pcall(transport.last_error)
+				if ok_error then
+					last_error = value
+				end
+			end
+			if last_error == nil and type(rawget(transport, "worker_stopped")) == "function" then
+				local ok_stopped, stopped = pcall(transport.worker_stopped)
+				if ok_stopped and stopped == true then
+					last_error = CODE.TRANSPORT_ERROR
+				end
+			end
+			if last_error ~= nil then
+				draft_pending = nil
+				drop_transport()
+				return { ok = false, status = "error", code = last_error }
+			end
+			return nil
+		end
+		drop_transport()
+		draft_pending = nil
+		if type(response) ~= "table" then
+			return { ok = false, status = "error", code = CODE.TRANSPORT_ERROR }
+		end
+		return response
 	end
 
 	function host.quit()
@@ -1763,9 +1919,19 @@ function CompanionHost.staged(ports)
 			terminal_probe = ports.terminal_probe,
 			config_digest = ports.config_digest,
 			hook_targets = hook_targets,
+			-- Real readiness producers forwarded to the driver. The fixture-only
+			-- readiness override is deliberately NOT forwarded here; it stays a
+			-- direct test port on the bootstrap/driver.
+			release_mode = ports.release_mode,
+			approved_mods = ports.approved_mods,
+			ranked_profile_facts = ports.ranked_profile_facts,
 			mode = descriptors.mode,
 			difficulty = descriptors.difficulty,
 			pacing = descriptors.pacing,
+			-- H2: Normal acquires a real thinking dwell before each capture;
+			-- Instant is immediate. The bootstrap only wires the dwell when the
+			-- table is supplied, so a caller without one stays legacy.
+			dwell = descriptors.pacing == "normal" and RuntimeBootstrap.DEFAULT_DWELL or nil,
 		})
 	end
 

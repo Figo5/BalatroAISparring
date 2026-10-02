@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -192,7 +193,17 @@ class FakeServer:
 
 
 class FakeService:
-    def __init__(self, config, *, ended=False, aborted=False, port=51234, terminal_phase="none", events=None):
+    def __init__(
+        self,
+        config,
+        *,
+        ended=False,
+        aborted=False,
+        port=51234,
+        terminal_phase="none",
+        events=None,
+        terminal=None,
+    ):
         self.config = config
         self.expected_config_digest = getattr(config, "expected_config_digest", None)
         self.human_credential = "h1" * 32
@@ -213,6 +224,24 @@ class FakeService:
         self.attest_digest = None
         self.prestart_calls = 0
         self._events = events
+        # Optional real-shaped terminal view for retention tests. By default it is
+        # deliberately NOT retention-eligible (no AI receipt), so existing
+        # completion tests keep the immediate owned-AI teardown.
+        self._terminal = terminal
+
+    def terminal_summary(self):
+        if self._terminal is not None:
+            return dict(self._terminal)
+        return {
+            "terminal": bool(self.ended),
+            "terminal_phase": self.terminal_phase,
+            "terminal_result": "human_win" if self.ended else None,
+            "terminal_reason": self.terminal_reason,
+            "human_end_received": bool(self.ended),
+            "ai_end_received": False,
+            "summary_written": False,
+            "summary": None,
+        }
 
     def _record(self, name):
         if self._events is not None:
@@ -2574,6 +2603,461 @@ def test_supervisor_accepts_human_exit_after_authoritative_end():
         assert result["code"] == practice_host.CODE_OK
 
 
+class _RetentionRole:
+    """Owned role handle: releasable on terminate, or sticky (mirrors a stuck Job)."""
+
+    def __init__(self, role, pid, events, sticky=False):
+        self.role = role
+        self.pid = pid
+        self._events = events
+        self.running = True
+        self.terminated = 0
+        self.sticky = sticky
+
+    def is_running(self):
+        return self.running
+
+    def release(self):
+        self.running = False
+
+    def terminate(self, timeout=10.0):
+        self.terminated += 1
+        if self._events is not None:
+            self._events.append(("terminate", self.role))
+        if not self.sticky:
+            self.running = False
+        return {"role": self.role, "pid": self.pid, "terminated": not self.sticky}
+
+
+class _RetentionServer(FakeServer):
+    def __init__(self, events):
+        super().__init__()
+        self._events = events
+
+    def terminate(self, timeout=10.0):
+        if self._events is not None:
+            self._events.append(("terminate", "server"))
+        return super().terminate(timeout)
+
+
+class _RetentionSession:
+    def __init__(self, events, *, roles=("human", "ai"), sticky=()):
+        self.ok = True
+        self.code = "launched"
+        self.spawn_time = 1000.0
+        self.records = []
+        self._events = events
+        self.owned = [
+            _RetentionRole(role, 100 + index, events, sticky=role in sticky)
+            for index, role in enumerate(roles)
+        ]
+        self.closed = 0
+
+    def role(self, name):
+        for item in self.owned:
+            if item.role == name:
+                return item
+        return None
+
+    def is_running(self):
+        return [{"role": item.role, "pid": item.pid, "running": item.running} for item in self.owned]
+
+    def close(self):
+        self.closed += 1
+
+
+def _retention_terminal(*, ai_result="human_win", conflict=False, ai_received=True, human_received=True):
+    """The real service's terminal_summary() view for an eligible completion."""
+    return {
+        "terminal": True,
+        "terminal_phase": practice_service.TERMINAL_CLOSED,
+        "terminal_result": "human_win",
+        "terminal_reason": "human_end",
+        "human_end_received": human_received,
+        "ai_end_received": ai_received,
+        "summary_written": True if ai_received else False,
+        "summary": {
+            "result": "human_win",
+            "ai_result": ai_result,
+            "result_conflict": conflict,
+        }
+        if ai_received
+        else None,
+    }
+
+
+def test_supervisor_retains_terminal_ai_until_player_exit_then_proves_exit():
+    """A proven terminal AI is kept with the Player/server/service, then its
+    owned exit is proven while the server is still up, before any teardown."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        events = []
+        session = _RetentionSession(events)
+        server = _RetentionServer(events)
+        service = FakeService(None, ended=True, terminal_phase="closed", terminal=_retention_terminal())
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            server_runner=lambda command, cwd, env, log_dir: server,
+            human_exit_waiter=lambda sess, grace: (sess.role("human").release() or True),
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert result["report"]["ai_retention_granted"] is True, result["report"]
+        assert result["report"]["ai_retained"] is False, "cleared once exit is proven"
+        assert session.role("ai").terminated == 1
+        assert session.role("human").terminated == 0
+        assert events.index(("terminate", "ai")) < events.index(("terminate", "server"))
+        assert service.closed == 1 and server.terminated == 1
+        assert supervisor.live_verdict["ok"] is True
+
+
+def test_supervisor_falls_back_when_ai_receipt_missing():
+    """No AI receipt: honest immediate owned-AI teardown, never a retained AI."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([])
+        service = FakeService(
+            None, ended=True, terminal_phase="closed", terminal=_retention_terminal(ai_received=False)
+        )
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            human_exit_waiter=lambda sess, grace: (sess.role("human").release() or True),
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert result["report"]["ai_retained"] is False
+        assert result["report"]["ai_retention_granted"] is False
+        assert session.role("ai").terminated == 1
+
+
+def test_supervisor_falls_back_when_result_conflicts():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([])
+        service = FakeService(
+            None,
+            ended=True,
+            terminal_phase="closed",
+            terminal=_retention_terminal(ai_result="ai_win", conflict=True),
+        )
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            human_exit_waiter=lambda sess, grace: (sess.role("human").release() or True),
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert result["report"]["ai_retained"] is False
+        assert session.role("ai").terminated == 1
+
+
+def test_supervisor_falls_back_when_ai_already_exited():
+    """An AI that already exited is never retained, relaunched or reconnected."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([])
+        session.role("ai").running = False
+        service = FakeService(None, ended=True, terminal_phase="closed", terminal=_retention_terminal())
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            human_exit_waiter=lambda sess, grace: (sess.role("human").release() or True),
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert result["report"]["ai_retained"] is False
+        assert result["report"]["ai_retention_granted"] is False
+
+
+def test_supervisor_retention_refuses_non_win_or_inconsistent_views():
+    """Only an authoritative agreeing win/loss human_end may retain the AI."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+
+        def view(
+            result="human_win",
+            ai_result="human_win",
+            reason="human_end",
+            conflict=False,
+            phase=practice_service.TERMINAL_CLOSED,
+            ai_received=True,
+        ):
+            return {
+                "terminal": True,
+                "terminal_phase": phase,
+                "terminal_result": result,
+                "terminal_reason": reason,
+                "human_end_received": True,
+                "ai_end_received": ai_received,
+                "summary_written": True,
+                "summary": {"result": result, "ai_result": ai_result, "result_conflict": conflict},
+            }
+
+        def ok_for(terminal, *, aborted=False):
+            service = FakeService(
+                None, ended=True, aborted=aborted, terminal_phase="closed", terminal=terminal
+            )
+            supervisor = _supervisor(config, make_request(), service_factory=lambda cfg: service)
+            supervisor.service = service
+            supervisor.session = _RetentionSession([])
+            return supervisor._terminal_retention_ok()
+
+        assert ok_for(view()) is True
+        assert ok_for(view(result="ai_win", ai_result="ai_win")) is True
+        # A matching draw/unknown/aborted pair must never retain.
+        assert ok_for(view(result="draw", ai_result="draw")) is False
+        assert ok_for(view(result="unknown", ai_result="unknown")) is False
+        assert ok_for(view(result="aborted", ai_result="aborted")) is False
+        # Direct disagreement / conflict flag.
+        assert ok_for(view(result="human_win", ai_result="ai_win", conflict=True)) is False
+        assert ok_for(view(result="human_win", ai_result="ai_win")) is False
+        # Wrong reason, non-closed phase, or an aborted service.
+        assert ok_for(view(reason="practice_role_lost")) is False
+        assert ok_for(view(phase="awaiting_ai")) is False
+        assert ok_for(view(ai_received=False)) is False
+        assert ok_for(view(), aborted=True) is False
+
+
+def test_supervisor_terminal_ai_exit_during_retention_does_not_fail_result():
+    """An AI that exits while retained must not fail the completed result."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([])
+        service = FakeService(None, ended=True, terminal_phase="closed", terminal=_retention_terminal())
+
+        def waiter(sess, grace):
+            sess.role("ai").release()
+            sess.role("human").release()
+            return True
+
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            human_exit_waiter=waiter,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert result["report"]["ai_retention_granted"] is True
+        assert result["report"]["ai_retained"] is False
+        assert session.role("ai").terminated == 1
+
+
+def test_supervisor_retires_retained_ai_when_player_already_closed():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        events = []
+        session = _RetentionSession(events)
+        session.role("human").running = False
+        server = _RetentionServer(events)
+        service = FakeService(None, ended=True, terminal_phase="closed", terminal=_retention_terminal())
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            server_runner=lambda command, cwd, env, log_dir: server,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        assert result["report"]["ai_retention_granted"] is True
+        assert result["report"]["ai_retained"] is False
+        assert events.index(("terminate", "ai")) < events.index(("terminate", "server"))
+
+
+def test_supervisor_stuck_retained_ai_keeps_open_record_for_retry():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([], sticky=("ai",))
+        session.role("human").running = False
+        service = FakeService(None, ended=True, terminal_phase="closed", terminal=_retention_terminal())
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        supervisor._reap_owned = lambda timeout=10.0: None
+        result = supervisor.run()
+        assert result["ok"] is False, result
+        assert result["code"] == "session_closure_unproven", result
+        assert supervisor.session is session
+        assert supervisor.human_retained is True
+        assert supervisor._pending_closure == "session_closure_unproven"
+
+        # A guarded retry completes once the owned AI finally exits.
+        session.role("ai").release()
+        assert supervisor.retry_pending_closure() is True
+        assert supervisor.session is None
+        assert supervisor._pending_closure is None
+
+
+def test_supervisor_leave_human_visible_false_never_retains_ai():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp, leave_human_visible=False)
+        events = []
+        session = _RetentionSession(events)
+        server = _RetentionServer(events)
+        service = FakeService(None, ended=True, terminal_phase="closed", terminal=_retention_terminal())
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+            server_runner=lambda command, cwd, env, log_dir: server,
+        )
+        supervisor.session = session
+        supervisor.service = service
+        supervisor.server = server
+        supervisor._teardown_for_completion()
+        assert supervisor.ai_retained is False
+        assert session.role("ai").terminated == 1
+        assert server.terminated == 1 and service.closed == 1
+
+
+def test_supervisor_retained_human_window_voids_when_live_appears():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([])
+        supervisor = _supervisor(config, make_request())
+        supervisor.session = session
+        supervisor.human_retained = True
+        supervisor.ai_retained = True
+        supervisor._human_exit_waiter = None
+        supervisor._live_closed = lambda: {"ok": False}
+        assert supervisor._await_human_exit() == "void"
+        supervisor._void(practice_host.CODE_LIVE_APPEARED)
+        assert session.role("ai").terminated == 1
+        assert session.role("human").terminated == 1
+        assert supervisor.ai_retained is False, "void retirement clears the retention flag"
+
+
+def test_supervisor_forced_cleanup_terminates_retained_ai():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([])
+        supervisor = _supervisor(config, make_request())
+        supervisor.session = session
+        supervisor.ai_retained = True
+        supervisor.human_retained = True
+        supervisor.cleanup()
+        assert session.role("ai").terminated == 1
+        assert session.role("human").terminated == 1
+        assert session.closed == 1
+        assert supervisor.ai_retained is False, "cleanup clears the retention flag"
+
+
+def test_supervisor_fails_on_midmatch_ai_exit_positive_control():
+    """A genuine mid-match AI loss is still an abnormal failure, never hidden."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        session = _RetentionSession([])
+        session.role("ai").running = False
+        service = FakeService(None)
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=lambda cfg: service,
+            launch_runner=lambda plan, **kwargs: session,
+        )
+        result = supervisor.run()
+        assert result["ok"] is False, result
+        assert result["code"] == practice_host.CODE_ROLE_EXITED, result
+
+
+def _drive_real_service_to_terminal(tmp, *, session_id, ai_result=None):
+    """Drive the real PracticeService to a terminal human_end (+ optional AI END)."""
+    service = practice_service.PracticeService(
+        _real_service_config(tmp, session_id),
+        source_provider=_FakeSourceProvider(),
+        worker_runner=_FakeWorkerRunner(),
+    )
+    service.mark_attested("deadbeef")
+
+    def call(role, op, sequence, payload=None):
+        credential = service.human_credential if role == "human" else service.ai_credential
+        return service.handle_request(
+            {
+                "session": session_id,
+                "credential": credential,
+                "role": role,
+                "op": op,
+                "sequence": sequence,
+                "observation": payload,
+            }
+        )
+
+    assert call("human", "hello", 0, {"version": "v", "content_digest": "c" * 64})["ok"]
+    assert call("ai", "hello", 0, {"version": "v", "content_digest": "c" * 64})["ok"]
+    assert call("human", "ready", 1, {"config_digest": "deadbeef"})["ok"]
+    assert call("ai", "ready", 1, {"config_digest": "deadbeef"})["ok"]
+    assert call("human", "start", 2)["ok"]
+    assert call("human", "end", 3, {"result": "human_win"})["ok"]
+    if ai_result is not None:
+        assert call("ai", "end", 2, {"result": ai_result})["ok"]
+    return service
+
+
+def test_supervisor_retention_reads_real_service_terminal_view():
+    """The retention gate is the real service's own terminal view, not a fake."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+
+        def supervisor_for(service, session_id):
+            supervisor = _supervisor(config, make_request(), service_factory=lambda cfg: service)
+            supervisor.service = service
+            session = _RetentionSession([])
+            supervisor.session = session
+            return supervisor, session
+
+        # A human win is reported by the AI runtime as its own role-mapped loss
+        # ("human_win"), so the clean receipt agrees with the human result.
+        eligible = _drive_real_service_to_terminal(tmp, session_id="sess-ok", ai_result="human_win")
+        try:
+            supervisor, _ = supervisor_for(eligible, "sess-ok")
+            view = eligible.terminal_summary()
+            assert view["ai_end_received"] is True and view["summary"]["result_conflict"] is False
+            assert view["summary"]["ai_result"] == "human_win"
+            assert supervisor._terminal_retention_ok() is True
+        finally:
+            eligible.close()
+
+        conflict = _drive_real_service_to_terminal(tmp, session_id="sess-conflict", ai_result="ai_win")
+        try:
+            supervisor, _ = supervisor_for(conflict, "sess-conflict")
+            assert conflict.terminal_summary()["summary"]["result_conflict"] is True
+            assert supervisor._terminal_retention_ok() is False
+        finally:
+            conflict.close()
+
+        missing = _drive_real_service_to_terminal(tmp, session_id="sess-missing", ai_result=None)
+        try:
+            supervisor, session = supervisor_for(missing, "sess-missing")
+            assert missing.terminal_summary()["ai_end_received"] is False
+            assert supervisor._terminal_retention_ok() is False
+            # An already-exited AI is never retained even with a clean receipt.
+            eligible_view = _drive_real_service_to_terminal(tmp, session_id="sess-exited", ai_result="human_win")
+            try:
+                exited_supervisor, exited_session = supervisor_for(eligible_view, "sess-exited")
+                exited_session.role("ai").running = False
+                assert exited_supervisor._terminal_retention_ok() is False
+            finally:
+                eligible_view.close()
+        finally:
+            missing.close()
+
+
 def test_supervisor_records_revocation_lockout_on_live_diff():
     with tempfile.TemporaryDirectory() as tmp:
         config = make_config(tmp)
@@ -4517,6 +5001,189 @@ def test_restart_clears_a_deferred_stop_request():
             assert daemon._stop_requested is False
         finally:
             daemon.stop(force=True)
+
+
+def _stage_pinned_ranked(config):
+    pinned = REPO / "work" / "reference" / "certified-mods" / "Multiplayer"
+    mods = Path(config.staging_root) / "roles" / "human" / "appdata" / "Roaming" / "Balatro" / "Mods"
+    mod = mods / "Multiplayer"
+    shutil.copytree(pinned, mod)
+    (mod / "manifest.json").write_text(json.dumps({"id": "Multiplayer"}), encoding="utf-8")
+    return mod
+
+
+def _ranked_catalog():
+    return {
+        "schema": ruleset_contract.RANKED_CATALOG_SCHEMA,
+        "eligible_decks": ["b_red", "b_blue"],
+        "decks": {
+            "red": {"center_key": "b_red", "name": "Red Deck"},
+            "blue": {"center_key": "b_blue", "name": "Blue Deck"},
+        },
+        "stakes": {"white": {"index": 1, "max_index": 8}},
+    }
+
+
+def _ranked_selection(rec):
+    return {
+        "schema": rec.SELECTION_SCHEMA,
+        "deck_key": "red",
+        "back_key": "b_red",
+        "back_name": "Red Deck",
+        "stake_key": "white",
+        "stake_index": 1,
+    }
+
+
+def _ranked_draft_commitment():
+    """A valid completed transcript whose final option is the fixture selection."""
+    import ranked_draft as rd
+
+    pool = [
+        "blue~green",
+        "blue~black",
+        "green~green",
+        "green~black",
+        "yellow~green",
+        "red~white",
+        "black~green",
+        "black~black",
+        "yellow~black",
+    ]
+    commit = {
+        "schema": rd.DRAFT_SCHEMA,
+        "profile_id": rd.DRAFT_PROFILE_ID,
+        "first_actor": "human",
+        "pool": pool,
+        "transcript": [
+            {"actor": "human", "operation": "ban", "option_ids": [pool[0]]},
+            {"actor": "ai", "operation": "ban", "option_ids": [pool[1], pool[2]]},
+            {"actor": "human", "operation": "ban", "option_ids": [pool[3], pool[4]]},
+            {"actor": "ai", "operation": "select", "option_ids": [pool[5]]},
+        ],
+        "final": pool[5],
+    }
+    verdict = rd.commitment_from_public(commit)
+    assert verdict["ok"], verdict
+    commit["digest"] = verdict["digest"]
+    return commit
+
+
+def test_production_ranked_reader_wires_schema_into_service_config():
+    rec = ruleset_contract.ranked_effective_config
+    draft = _ranked_draft_commitment()
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        _stage_pinned_ranked(config)
+        reader = ruleset_contract.production_ranked_reader(
+            _ranked_catalog(),
+            guest_catalog=_ranked_catalog(),
+            selection=_ranked_selection(rec),
+            draft=draft,
+        )
+        verdict = reader(config.staging_root)
+        assert verdict["ok"] is True, verdict
+        assert verdict["config_schema"] == rec.RANKED_CONFIG_SCHEMA
+        captured = {}
+
+        def factory(cfg):
+            captured["config"] = cfg
+            return FakeService(cfg, port=51234, ended=True, terminal_phase="closed")
+
+        def gate():
+            return _gate_ok(config, config_digest=verdict["config_digest"], ruleset=verdict)
+
+        supervisor = _supervisor(
+            config,
+            make_request(),
+            service_factory=factory,
+            ruleset_reader=reader,
+            gate_evaluator=gate,
+        )
+        result = supervisor.run()
+        assert result["ok"] is True, result
+        service_config = captured["config"]
+        assert service_config.config_schema == rec.RANKED_CONFIG_SCHEMA
+        assert service_config.ruleset_id == rec.RULESET_ID
+        assert service_config.gamemode == rec.FORCED_GAMEMODE
+        assert service_config.ranked_host and service_config.ranked_resolved
+        assert service_config.forced_options is None
+        assert service_config.selection and service_config.selection["back_key"] == "b_red"
+        assert service_config.ranked_catalog
+        assert service_config.draft and service_config.draft["final"] == "red~white"
+        assert service_config.expected_draft_digest == draft["digest"]
+
+
+def test_production_ranked_reader_fails_closed_without_catalog():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        _stage_pinned_ranked(config)
+        verdict = ruleset_contract.production_ranked_reader()(config.staging_root)
+        assert verdict["ok"] is False
+        assert verdict["code"] == "ranked_catalog_unmeasured"
+
+
+def test_production_ranked_reader_fails_closed_without_draft():
+    rec = ruleset_contract.ranked_effective_config
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        _stage_pinned_ranked(config)
+        # Both catalogs present, but no validated selection: ranked_draft_unbound.
+        verdict = ruleset_contract.production_ranked_reader(
+            _ranked_catalog(), guest_catalog=_ranked_catalog()
+        )(config.staging_root)
+        assert verdict["ok"] is False
+        assert verdict["code"] == "ranked_draft_unbound"
+
+
+def test_daemon_refuses_ranked_gauntlet_pre_ack_and_accepts_normal():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = make_config(tmp)
+        created = []
+
+        def factory(cfg, request):
+            created.append(FakeSupervisor())
+            return created[-1]
+
+        daemon = practice_host.HostDaemon(
+            config,
+            opener=_live_opener(config),
+            enumerator=FakeEnumerator([]),
+            runtime_checker=_ok_runtime_checker,
+            start_gate=lambda: {"ok": True, "code": practice_host.CODE_OK},
+            supervisor_factory=factory,
+        )
+        daemon.start()
+        try:
+            # Ranked gauntlet: refused at the pre-quit gate, no ticket/supervisor.
+            gauntlet = daemon._op_start(make_request(mode="gauntlet", gauntlet="Test1"))
+            assert gauntlet["ok"] is False, gauntlet
+            assert gauntlet["code"] == practice_host.CODE_RANKED_GAUNTLET, gauntlet
+            assert created == [], "no supervisor for a refused Ranked gauntlet"
+            with daemon._lock:
+                assert daemon._ticket is None, "no accepted ticket for a refused gauntlet"
+            # Normal Ranked: still accepted.
+            normal = daemon._op_start(make_request(mode="normal"))
+            assert normal["ok"] is True and normal["code"] == practice_host.CODE_ACCEPTED, normal
+            assert len(created) == 1, "the normal Ranked match is accepted"
+        finally:
+            with daemon._lock:
+                daemon._ticket = None
+            daemon.stop(force=True)
+
+
+def test_legacy_reader_keeps_gauntlet_semantics():
+    # An explicit legacy reader (not tagged is_ranked) keeps legacy gauntlet.
+    def legacy_reader(staging_root, role="human"):
+        return {"ok": True, "code": "ruleset_contract_ok"}
+
+    assert practice_host.ranked_gauntlet_refusal({"mode": "gauntlet"}, legacy_reader) is None
+    # The trusted Ranked reader refuses.
+    ranked_reader = ruleset_contract.production_ranked_reader()
+    assert practice_host.ranked_gauntlet_refusal({"mode": "gauntlet"}, ranked_reader)["code"] == (
+        practice_host.CODE_RANKED_GAUNTLET
+    )
+    assert practice_host.ranked_gauntlet_refusal({"mode": "normal"}, ranked_reader) is None
 
 
 def _run_all() -> int:

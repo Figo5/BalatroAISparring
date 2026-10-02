@@ -106,6 +106,12 @@ function Support.card(opts)
 		ability.consumeable = ability.consumeable or {}
 		ability.consumeable.max_highlighted = opts.max_highlighted
 	end
+	-- M4: the effective own-card X-multiplier the engine stores from
+	-- `center.config.Xmult` (card.lua:288). Real `set_ability` always writes it
+	-- (1 by default); the fixture sets it only when asked.
+	if opts.x_mult ~= nil then
+		ability.x_mult = opts.x_mult
+	end
 	local card = {
 		facing = opts.facing or "front",
 		sprite_facing = opts.sprite_facing or "front",

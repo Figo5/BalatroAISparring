@@ -214,6 +214,24 @@ return function()
 		eq(obs_code(obs, f), CODE.BAD_ENTITY, "control char")
 	end)
 
+	test("observation.entity.card_xmult_bounded", function()
+		local f = syn("PLAY_HAND")
+		f.self.hand_visible = true
+		f.self.hand = { { face_down = false, center = "m_glass", xmult = 150 } }
+		eq(obs.export(ois(obs, f)).self.hand[1].xmult, 150, "Standard x1.5 = 150")
+		f.self.hand = { { face_down = false, center = "m_glass", xmult = 200 } }
+		eq(obs.export(ois(obs, f)).self.hand[1].xmult, 200, "vanilla/ML x2 = 200")
+		-- Malformed or out-of-range projections refuse the whole entity.
+		f.self.hand = { { face_down = false, center = "m_glass", xmult = 1.5 } }
+		eq(obs_code(obs, f), CODE.BAD_ENTITY, "fractional")
+		f.self.hand = { { face_down = false, center = "m_glass", xmult = "150" } }
+		eq(obs_code(obs, f), CODE.BAD_ENTITY, "string")
+		f.self.hand = { { face_down = false, center = "m_glass", xmult = 50 } }
+		eq(obs_code(obs, f), CODE.BAD_ENTITY, "below range")
+		f.self.hand = { { face_down = false, center = "m_glass", xmult = 20000 } }
+		eq(obs_code(obs, f), CODE.BAD_ENTITY, "above range")
+	end)
+
 	test("observation.arrays.sparse_rejected", function()
 		local f = syn("PLAY_HAND")
 		f.self.hand_visible = true

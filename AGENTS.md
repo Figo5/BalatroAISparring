@@ -1,5 +1,9 @@
 # Engineering workflow
 
+## User override — October 2, 2026
+
+The user explicitly instructed: "you are the sole actor on this project just finish it so i can play". Codex now implements, reviews, verifies and delivers this candidate alone. The OpenCode/DeepSeek implementation and Claude review requirements below are superseded. No delegated actors or external model review are required. All game isolation, rules, fairness, backup and source/package/certificate binding requirements remain in force.
+
 - Orchestrator: Codex / GPT-6 Astra / Medium. Own architecture, integration, independent verification, acceptance and Git history.
 - Primary implementation: OpenCode Go / opencode-go/deepseek-v4.1-flash / High if supported. Do not substitute another provider or model without user approval.
 - Reviewer: Claude Code / claude-opus-5-5 / High. Inspect real code and challenge fairness, state isolation, rules fidelity and compatibility. Resolve high/critical findings and re-review before accepting milestones.

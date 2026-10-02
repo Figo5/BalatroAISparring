@@ -108,8 +108,8 @@ def static_cases() -> list[dict]:
     add("ui_declares_exact_error_message", ERROR_MESSAGE in controller_text)
     add("ui_declares_development_label", "0.1.0-dev" in controller_text)
     add(
-        "ui_declares_fixed_major_league_ruleset",
-        '"major_league"' in controller_text and '"Major League"' in controller_text,
+        "ui_declares_fixed_standard_ranked_ruleset",
+        '"standard_ranked"' in controller_text and '"Standard Ranked"' in controller_text,
     )
     add(
         "ui_declares_no_process_launch_calls",

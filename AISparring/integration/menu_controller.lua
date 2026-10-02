@@ -38,6 +38,8 @@ local CODE = {
 	HOST_ERROR = "menu_host_error",
 	QUIT_FAILED = "menu_quit_failed",
 	INSTALL_FAILED = "menu_install_failed",
+	DRAFT_REJECTED = "menu_draft_rejected",
+	DRAFT_UNAVAILABLE = "menu_draft_unavailable",
 	INTERNAL = "menu_internal_error",
 	-- Bounded local diagnostic outcomes for the Play-menu build path (LV-14 M2).
 	-- These are logged at most once each through the injected logger port; they
@@ -60,6 +62,8 @@ local MESSAGES = {
 	[CODE.HOST_ERROR] = "AI Sparring could not reach the practice launcher.",
 	[CODE.TIMEOUT] = "AI Sparring did not receive a launcher confirmation in time.",
 	[CODE.REJECTED] = "The practice launcher rejected the start request.",
+	[CODE.DRAFT_REJECTED] = "That draft selection was refused. Check whose turn it is and the required count.",
+	[CODE.DRAFT_UNAVAILABLE] = "The Ranked deck/stake catalog is not available on this install, so no draft can be offered.",
 }
 
 -- Screens that must not be dismissed with Esc (the engine reads `no_esc` only
@@ -102,7 +106,9 @@ MenuController.GAUNTLET_COUNT = GAUNTLET_COUNT
 MenuController.MODES = { "normal", "gauntlet" }
 MenuController.DIFFICULTIES = { "rookie", "competitive", "major_league", "expert" }
 MenuController.PACINGS = { "instant", "normal" }
-MenuController.RULESET = { id = "major_league", label = "Major League" }
+-- The production practice ruleset is the real Multiplayer Standard Ranked
+-- registry. The policy difficulty list below is separate and is never a ruleset.
+MenuController.RULESET = { id = "standard_ranked", label = "Standard Ranked" }
 MenuController.DEFAULT_SELECTION = { mode = "normal", difficulty = "competitive", pacing = "normal" }
 MenuController.OPTIONS = {
 	modes = {
@@ -276,7 +282,8 @@ function MenuController.factory(ports)
 		or type(rawget(menu, "confirm_definition")) ~= "function"
 		or type(rawget(menu, "diagnostic_definition")) ~= "function"
 		or type(rawget(menu, "error_definition")) ~= "function"
-		or type(rawget(menu, "session_definition")) ~= "function" then
+		or type(rawget(menu, "session_definition")) ~= "function"
+		or type(rawget(menu, "draft_definition")) ~= "function" then
 		return nil, CODE.BAD_UI
 	end
 	local host = rawget(ports, "host")
@@ -319,6 +326,14 @@ function MenuController.factory(ports)
 	local started_at = nil
 	local quit_invoked = false
 	local last_payload = nil
+	-- Host-owned attended Ranked draft. The public state is rendered read-only;
+	-- `draft_selection` is the human's in-progress (not yet committed) choice.
+	local draft_state = nil
+	local draft_request_id = nil
+	local draft_request_started = nil
+	local draft_selection = {}
+	local draft_error = nil
+	local completed_draft_id = nil
 
 	-- Bounded local diagnostics: each allowlisted outcome code is logged at most
 	-- once for the lifetime of this instance, so repeated Play opens or frames
@@ -398,6 +413,9 @@ function MenuController.factory(ports)
 			options = copy_options(),
 			selection = copy_plain(selection, 0) or {},
 			ruleset = shallow_copy(MenuController.RULESET),
+			draft = draft_state,
+			draft_pending = copy_plain(draft_selection, 0) or {},
+			draft_error = draft_error,
 		}
 	end
 
@@ -574,6 +592,27 @@ function MenuController.factory(ports)
 			aisp_end_practice = function()
 				instance.end_practice()
 			end,
+			-- The attended Ranked draft. Human selections require these real
+			-- callbacks; nothing here automates a human ban or pick.
+			aisp_draft_begin = function()
+				instance.begin_draft()
+			end,
+			aisp_draft_pick = function(event)
+				local id = nil
+				if type(event) == "table" and type(event.config) == "table" then
+					id = event.config.id
+				end
+				instance.handle_draft_select(id)
+			end,
+			aisp_draft_confirm = function()
+				instance.draft_confirm()
+			end,
+			aisp_draft_cancel = function()
+				instance.draft_cancel()
+			end,
+			aisp_draft_start = function()
+				instance.draft_start()
+			end,
 		}
 		for name, handler in pairs(defs) do
 			if registered[name] == nil then
@@ -647,6 +686,12 @@ function MenuController.factory(ports)
 		started_at = nil
 		quit_invoked = false
 		last_payload = nil
+		draft_state = nil
+		draft_request_id = nil
+		draft_request_started = nil
+		draft_selection = {}
+		draft_error = nil
+		completed_draft_id = nil
 		return true, CODE.OK
 	end
 
@@ -712,6 +757,8 @@ function MenuController.factory(ports)
 				return nil, CODE.BAD_SELECTION
 			end
 			selection.gauntlet_index = index
+		elseif namespace == "draft" then
+			return instance.handle_draft_select(id)
 		else
 			return nil, CODE.BAD_SELECTION
 		end
@@ -739,6 +786,230 @@ function MenuController.factory(ports)
 		return true, CODE.OK
 	end
 
+	function instance.refresh_draft_overlay()
+		local definition = menu.draft_definition(view_state())
+		if definition == nil then
+			return refuse(CODE.BAD_UI)
+		end
+		show(definition)
+		return true, CODE.OK
+	end
+
+	-- Begin the host-owned draft. The host performs the pool generation and any
+	-- AI turns; the menu only renders the returned public state.
+	function instance.begin_draft()
+		if type(rawget(host, "draft_begin")) ~= "function" then
+			return refuse(CODE.DRAFT_UNAVAILABLE)
+		end
+		if state == "draft_begin_pending" or state == "draft_action_pending" then
+			return nil, CODE.ALREADY_PENDING
+		end
+		local payload, code = validate_selection(selection)
+		if payload == nil then
+			return refuse(CODE.BAD_SELECTION)
+		end
+		if payload.mode == "gauntlet" then
+			-- Ranked gauntlet is unsupported; the host refuses it, but the menu
+			-- states it plainly here rather than starting a doomed draft.
+			return refuse(CODE.DRAFT_UNAVAILABLE)
+		end
+		local allowed, reason = instance.start_preconditions()
+		if allowed ~= true then
+			return refuse(reason)
+		end
+		if not launcher_available() then
+			local definition = menu.diagnostic_definition(MESSAGES[CODE.LAUNCHER_UNAVAILABLE], diagnostics_path())
+			show(definition, MODAL)
+			notify("warn", MESSAGES[CODE.LAUNCHER_UNAVAILABLE])
+			return nil, CODE.LAUNCHER_UNAVAILABLE
+		end
+		local now = read_now()
+		if now == nil then
+			return fail(CODE.BAD_CLOCK)
+		end
+		local ok_call, request_id, reason = pcall(host.draft_begin, payload)
+		if not ok_call then
+			return fail(CODE.HOST_ERROR)
+		end
+		if type(request_id) ~= "string" or #request_id == 0 then
+			if reason == "ranked_catalog_unmeasured" or reason == "ranked_draft_unbound" then
+				return refuse(CODE.DRAFT_UNAVAILABLE)
+			end
+			return fail(CODE.HOST_ERROR)
+		end
+		draft_request_id = request_id
+		draft_request_started = now
+		draft_state = nil
+		draft_selection = {}
+		draft_error = nil
+		state = "draft_begin_pending"
+		instance.refresh_draft_overlay()
+		return true, CODE.OK
+	end
+
+	function instance.handle_draft_select(id)
+		if type(id) ~= "string" then
+			return nil, CODE.BAD_SELECTION
+		end
+		local action, option = string.match(id, "^aisp:draft:([a-z]+):(.+)$")
+		if action == "pick" and type(option) == "string" then
+			return instance.draft_pick(option)
+		end
+		return nil, CODE.BAD_SELECTION
+	end
+
+	-- A human pick on the current turn only. The host remains the authority; a
+	-- stale/out-of-turn pick is refused and the rendered state is refreshed.
+	function instance.draft_pick(option_id)
+		if state ~= "draft_active" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		local draft = draft_state
+		if type(draft) ~= "table" or draft.status ~= "active" or draft.current_actor ~= "human" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		local available = false
+		local remaining = type(draft.remaining) == "table" and draft.remaining or {}
+		for i = 1, #remaining do
+			if remaining[i] == option_id then
+				available = true
+			end
+		end
+		if not available then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		local index = nil
+		for i = 1, #draft_selection do
+			if draft_selection[i] == option_id then
+				index = i
+			end
+		end
+		if index ~= nil then
+			table.remove(draft_selection, index)
+		else
+			local required = draft.required_count
+			if type(required) == "number" and #draft_selection >= required then
+				return nil, CODE.DRAFT_REJECTED
+			end
+			draft_selection[#draft_selection + 1] = option_id
+		end
+		draft_error = nil
+		instance.refresh_draft_overlay()
+		return true, CODE.OK
+	end
+
+	-- Commit exactly the required distinct count through a real confirm callback.
+	function instance.draft_confirm()
+		if state ~= "draft_active" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		local draft = draft_state
+		if type(draft) ~= "table" or draft.status ~= "active" or draft.current_actor ~= "human" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		if type(draft.required_count) ~= "number" or #draft_selection ~= draft.required_count then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		if type(host.draft_action) ~= "function" then
+			return fail(CODE.HOST_ERROR)
+		end
+		local now = read_now()
+		if now == nil then
+			return fail(CODE.BAD_CLOCK)
+		end
+		local action = {
+			draft_id = draft.draft_id,
+			expected_revision = draft.revision,
+			request_id = "menu-" .. tostring(draft.revision) .. "-" .. tostring(#draft_selection),
+			operation = draft.operation,
+			option_ids = copy_plain(draft_selection, 0) or {},
+		}
+		local ok_call, request_id = pcall(host.draft_action, action)
+		if not ok_call or type(request_id) ~= "string" or #request_id == 0 then
+			return fail(CODE.HOST_ERROR)
+		end
+		draft_request_id = request_id
+		draft_request_started = now
+		state = "draft_action_pending"
+		instance.refresh_draft_overlay()
+		return true, CODE.OK
+	end
+
+	-- Clear all local draft state. Only ever called on an authenticated host
+	-- cancellation success (or when there is no host-owned draft to void).
+	local function close_draft_overlay()
+		draft_state = nil
+		draft_request_id = nil
+		draft_request_started = nil
+		draft_selection = {}
+		draft_error = nil
+		completed_draft_id = nil
+		state = "idle"
+		pcall(ui.exit_overlay_menu)
+	end
+
+	-- Restore the pre-cancel draft screen after a refusal/timeout.
+	local function resume_draft_overlay()
+		if type(draft_state) == "table" and draft_state.status == "completed" then
+			state = "draft_complete"
+		elseif type(draft_state) == "table" then
+			state = "draft_active"
+		else
+			state = "idle"
+		end
+	end
+
+	-- Cancel voids the draft and never starts a match. The host's authenticated
+	-- reply is observed: a refusal or timeout keeps the draft and reports
+	-- honestly instead of falsely showing success or dropping state.
+	function instance.draft_cancel()
+		if state == "draft_cancel_pending" then
+			return nil, CODE.ALREADY_PENDING
+		end
+		local draft = draft_state
+		if type(draft) ~= "table" or type(draft.draft_id) ~= "string" then
+			close_draft_overlay()
+			return true, CODE.OK
+		end
+		if type(rawget(host, "draft_cancel")) ~= "function"
+			or type(rawget(host, "poll_draft")) ~= "function" then
+			-- Without a pollable cancel port the success can never be observed.
+			refuse(CODE.DRAFT_REJECTED)
+			return nil, CODE.DRAFT_REJECTED
+		end
+		local now = read_now()
+		if now == nil then
+			return fail(CODE.BAD_CLOCK)
+		end
+		local ok_call, request_id = pcall(host.draft_cancel, draft.draft_id)
+		if not ok_call or type(request_id) ~= "string" or #request_id == 0 then
+			return fail(CODE.HOST_ERROR)
+		end
+		draft_request_id = request_id
+		draft_request_started = now
+		state = "draft_cancel_pending"
+		instance.refresh_draft_overlay()
+		return true, CODE.OK
+	end
+
+	function instance.draft_start()
+		if state ~= "draft_complete" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		if type(draft_state) ~= "table" or type(draft_state.draft_id) ~= "string" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		completed_draft_id = draft_state.draft_id
+		return instance.open_confirm()
+	end
+
+	function instance.draft()
+		if draft_state == nil then
+			return nil
+		end
+		return copy_plain(draft_state, 0)
+	end
+
 	function instance.confirm_start()
 		if state == "awaiting_ack" then
 			return nil, CODE.ALREADY_PENDING
@@ -746,6 +1017,10 @@ function MenuController.factory(ports)
 		local payload, code = validate_selection(selection)
 		if payload == nil then
 			return refuse(CODE.BAD_SELECTION)
+		end
+		-- Launch adds ONLY the completed draft id to the strict start request.
+		if completed_draft_id ~= nil then
+			payload.draft_id = completed_draft_id
 		end
 		local allowed, reason = instance.start_preconditions()
 		if allowed ~= true then
@@ -811,6 +1086,113 @@ function MenuController.factory(ports)
 			if type(uidf) == "table" and rawget(uidf, BUILDER_KEY) ~= wrapped_builder then
 				log_menu_once(CODE.WRAPPER_REPLACED)
 			end
+		end
+		if state == "draft_begin_pending" or state == "draft_action_pending" then
+			if type(now) ~= "number" then
+				now = read_now()
+			end
+			if now == nil then
+				fail(CODE.BAD_CLOCK)
+				return "failed", CODE.BAD_CLOCK
+			end
+			if now - (draft_request_started or now) > ACK_TIMEOUT then
+				fail(CODE.TIMEOUT)
+				return "failed", CODE.TIMEOUT
+			end
+			if type(rawget(host, "poll_draft")) ~= "function" or draft_request_id == nil then
+				fail(CODE.HOST_ERROR)
+				return "failed", CODE.HOST_ERROR
+			end
+			local ok_poll, response = pcall(host.poll_draft, draft_request_id)
+			if not ok_poll then
+				fail(CODE.HOST_ERROR)
+				return "failed", CODE.HOST_ERROR
+			end
+			if response == nil then
+				return state, CODE.OK
+			end
+			draft_request_id = nil
+			draft_request_started = nil
+			if not is_plain_table(response) then
+				fail(CODE.HOST_ERROR)
+				return "failed", CODE.HOST_ERROR
+			end
+			if response.ok ~= true then
+				local rejected = type(response.code) == "string" and response.code or CODE.DRAFT_REJECTED
+				draft_error = MESSAGES[CODE.DRAFT_REJECTED]
+				draft_state = type(response.draft) == "table" and response.draft or draft_state
+				draft_selection = {}
+				if type(draft_state) == "table" then
+					state = (draft_state.status == "completed") and "draft_complete" or "draft_active"
+					instance.refresh_draft_overlay()
+				else
+					state = "idle"
+					show(menu.diagnostic_definition(MESSAGES[CODE.DRAFT_REJECTED], diagnostics_path()), MODAL)
+					notify("warn", MESSAGES[CODE.DRAFT_REJECTED])
+				end
+				return state, rejected
+			end
+			draft_state = response.draft
+			draft_selection = {}
+			draft_error = nil
+			if type(draft_state) ~= "table" or type(draft_state.draft_id) ~= "string" then
+				fail(CODE.HOST_ERROR)
+				return "failed", CODE.HOST_ERROR
+			end
+			if draft_state.status == "completed" then
+				state = "draft_complete"
+			else
+				state = "draft_active"
+			end
+			instance.refresh_draft_overlay()
+			return state, CODE.OK
+		end
+		if state == "draft_cancel_pending" then
+			if type(now) ~= "number" then
+				now = read_now()
+			end
+			if now == nil then
+				fail(CODE.BAD_CLOCK)
+				return "failed", CODE.BAD_CLOCK
+			end
+			if now - (draft_request_started or now) > ACK_TIMEOUT then
+				-- The cancellation outcome is unknown: keep the draft and report
+				-- honestly rather than dropping it or claiming success.
+				draft_request_id = nil
+				draft_request_started = nil
+				draft_error = MESSAGES[CODE.DRAFT_REJECTED]
+				resume_draft_overlay()
+				instance.refresh_draft_overlay()
+				notify("warn", MESSAGES[CODE.DRAFT_REJECTED])
+				return state, CODE.TIMEOUT
+			end
+			if type(rawget(host, "poll_draft")) ~= "function" or draft_request_id == nil then
+				fail(CODE.HOST_ERROR)
+				return "failed", CODE.HOST_ERROR
+			end
+			local ok_poll, response = pcall(host.poll_draft, draft_request_id)
+			if not ok_poll then
+				fail(CODE.HOST_ERROR)
+				return "failed", CODE.HOST_ERROR
+			end
+			if response == nil then
+				return state, CODE.OK
+			end
+			draft_request_id = nil
+			draft_request_started = nil
+			if not is_plain_table(response) or response.ok ~= true then
+				-- The host refused (or the reply was malformed): keep the draft.
+				draft_error = MESSAGES[CODE.DRAFT_REJECTED]
+				if is_plain_table(response) and type(response.draft) == "table" then
+					draft_state = response.draft
+				end
+				resume_draft_overlay()
+				instance.refresh_draft_overlay()
+				notify("warn", MESSAGES[CODE.DRAFT_REJECTED])
+				return state, CODE.DRAFT_REJECTED
+			end
+			close_draft_overlay()
+			return "idle", CODE.OK
 		end
 		if state ~= "awaiting_ack" then
 			return state, CODE.OK
@@ -901,6 +1283,9 @@ function MenuController.factory(ports)
 			has_pending = pending_request ~= nil,
 			quit_invoked = quit_invoked,
 			selection = copy_plain(selection, 0) or {},
+			has_draft = draft_state ~= nil,
+			draft_status = type(draft_state) == "table" and draft_state.status or nil,
+			has_completed_draft = completed_draft_id ~= nil,
 			codes = shallow_copy(CODE),
 		}
 	end

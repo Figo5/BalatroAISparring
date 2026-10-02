@@ -1033,5 +1033,586 @@ return function(ctx)
 		clock.advance(5)
 		eq(loop.update(), "issued")
 	end)
+
+	-- H2 thinking dwell. A trusted readiness probe reports a decision phase and
+	-- the AI's own visible timer; the loop waits BEFORE capturing, then captures
+	-- and submits immediately (post-response pacing stays 0).
+	local function ready_state(phase, timer)
+		return { value = { ready = true, phase = phase, timer_remaining = timer } }
+	end
+
+	test("normal_dwell_waits_before_capture_then_issues", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		eq(lr.loop.update(), "dwelling", "ready: dwell before any capture")
+		eq(lr.transport.sent, 0, "no policy request before the dwell elapses")
+		eq(r.ports.dispatch_calls, 0)
+		lr.clock.advance(3.9)
+		eq(lr.loop.update(), "dwelling")
+		eq(lr.transport.sent, 0)
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued")
+		eq(lr.transport.sent, 1)
+	end)
+
+	test("cash_out_control_ends_the_decision_so_the_first_shop_is_eight", function()
+		-- M1: a successful cash-out control is a committed logical transition.
+		-- The round-eval animation time must not be charged to the next shop, and
+		-- the first inspection of the new shop is the full 8 s.
+		local state = ready_state("PLAY_HAND", nil)
+		local controls = support.controls()
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4, shop = 6, shop_first = 8 },
+			controls = controls,
+		})
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(4.1)
+		eq(lr.loop.update(), "issued")
+		lr.transport.push({ sequence = 1, ok = true, action = play_action(r), reason = "play" })
+		eq(lr.loop.update(), "submitted")
+		-- Cash-out control (ROUND_EVAL), then the button clears.
+		state.value = { ready = true, phase = "ROUND_EVAL_CONTROL" }
+		controls.name = "cash_out"
+		eq(lr.loop.update(), "control")
+		controls.clear()
+		-- A long cash-out animation passes: it is NOT charged to the shop.
+		lr.clock.advance(5)
+		state.value = { ready = true, phase = "SHOP", timer_remaining = nil }
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(7.9)
+		eq(lr.loop.update(), "dwelling", "the full 8s starts at the shop, not at cash-out")
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued")
+	end)
+
+	test("booster_commit_returns_to_the_same_shop_with_the_ordinary_six", function()
+		local state = ready_state("SHOP", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4, shop = 6, shop_first = 8, booster = 4 },
+		})
+		-- First inspection of the shop: 8.
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(8.1)
+		eq(lr.loop.update(), "issued")
+		lr.transport.push({ sequence = 1, ok = true, action = play_action(r), reason = "buy" })
+		eq(lr.loop.update(), "submitted")
+		-- Open a booster (same visit): 4.
+		state.value = { ready = true, phase = "BOOSTER_SELECTION" }
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(4.1)
+		eq(lr.loop.update(), "issued")
+		lr.transport.push({ sequence = 2, ok = true, action = play_action(r), reason = "pick" })
+		eq(lr.loop.update(), "submitted")
+		-- Back in the same shop visit: ordinary 6, never another 8.
+		state.value = { ready = true, phase = "SHOP" }
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(5.9)
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued", "same shop visit uses 6s")
+	end)
+
+	test("own_timer_cap_shortens_the_dwell", function()
+		local state = ready_state("PLAY_HAND", 10)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		-- cap = min(4, max(0, 10-2), 0.2*10) = 2.
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(1.9)
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued")
+	end)
+
+	test("terminal_during_dwell_stops_without_dispatch", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		eq(lr.loop.update(), "dwelling")
+		state.value = { ready = true, phase = "MATCH_COMPLETE" }
+		local status, code = lr.loop.update()
+		eq(status, "terminal")
+		eq(code, "loop_terminal")
+		eq(r.ports.dispatch_calls, 0, "terminal never dispatches")
+		eq(lr.transport.sent, 0)
+	end)
+
+	test("wait_during_dwell_holds_instead_of_dispatching", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local wait = { value = nil }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			wait_state = function() return wait.value end,
+		})
+		eq(lr.loop.update(), "dwelling")
+		wait.value = "mp_ready_blind"
+		lr.clock.advance(5)
+		local status, code = lr.loop.update()
+		eq(status, "waiting")
+		eq(code, "loop_waiting_for_opponent")
+		eq(lr.transport.sent, 0, "a wait never captures")
+		eq(lr.loop.stats().waits, 1)
+	end)
+
+	test("a_stale_retry_does_not_restart_the_full_dwell", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(4.1)
+		eq(lr.loop.update(), "issued")
+		-- The state changes before the delivery: the broker refuses the stale
+		-- token instead of dispatching it.
+		r.world.bump_epoch()
+		lr.transport.push({ sequence = 1, ok = true, action = play_action(r), reason = "x" })
+		eq(lr.loop.update(), "idle")
+		eq(lr.loop.stats().stale, 1)
+		eq(r.ports.dispatch_calls, 0, "a stale action is never dispatched")
+		-- The retry re-issues at once: the carried elapsed is already past target.
+		eq(lr.loop.update(), "issued")
+	end)
+
+	test("a_no_action_retry_does_not_restart_the_full_dwell", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(4.1)
+		eq(lr.loop.update(), "issued")
+		lr.transport.push({ sequence = 1, ok = false, code = "policy_no_action" })
+		eq(lr.loop.update(), "idle")
+		eq(lr.loop.stats().no_action, 1)
+		-- Past the no-action cooldown the retry issues at once: the carried
+		-- elapsed is already past the target, so no fresh 4 s dwell is added.
+		lr.clock.advance(0.3)
+		eq(lr.loop.update(), "issued")
+	end)
+
+	test("a_changing_observation_does_not_restart_the_dwell", function()
+		-- Ranked exposes changing opponent score/location, which moves the epoch.
+		-- The dwell is wall-clock, so this churn must not restart it.
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		eq(lr.loop.update(), "dwelling")
+		local issued_at = nil
+		for step = 1, 60 do
+			r.world.bump_epoch()
+			lr.clock.advance(0.1)
+			if lr.loop.update() == "issued" then
+				issued_at = step * 0.1
+				break
+			end
+		end
+		is_true(issued_at ~= nil and issued_at >= 4.0, "issued after the full dwell: " .. tostring(issued_at))
+		eq(lr.transport.sent, 1)
+	end)
+
+	test("a_mid_dwell_unready_transient_does_not_restart_the_clock", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(2)
+		-- The engine becomes non-actionable mid-dwell (lock/animation); the clock
+		-- keeps running rather than restarting.
+		state.value = { ready = false }
+		eq(lr.loop.update(), "idle")
+		lr.clock.advance(2.1) -- 4.1 s since the clock started
+		state.value = { ready = true, phase = "PLAY_HAND" }
+		eq(lr.loop.update(), "issued", "the carried elapsed already passed the target")
+	end)
+
+	test("the_dwell_table_is_copied_at_factory", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local caller_dwell = { card = 4 }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = caller_dwell,
+		})
+		caller_dwell.card = 0
+		eq(lr.loop.update(), "dwelling", "the factory copy keeps the original 4s dwell")
+	end)
+
+	test("an_unready_probe_does_not_capture_or_start_the_clock", function()
+		local state = { value = { ready = false } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+		})
+		for _ = 1, 10 do
+			eq(lr.loop.update(), "idle")
+			lr.clock.advance(1)
+		end
+		eq(lr.transport.sent, 0, "no capture/request while unready")
+		-- Readiness arrives: the full dwell starts now, not earlier.
+		state.value = { ready = true, phase = "PLAY_HAND", timer_remaining = nil }
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(3.9)
+		eq(lr.loop.update(), "dwelling")
+		eq(lr.transport.sent, 0)
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued")
+	end)
+
+	test("an_overlay_appearing_mid_dwell_does_not_advance_the_clock", function()
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 8,
+		})
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(2)
+		eq(lr.loop.update(), "dwelling", "2s of real thinking")
+		-- A soft overlay/pause appears: the clock freezes immediately.
+		state.value = { ready = false, block = "soft", phase = "PLAY_HAND" }
+		eq(lr.loop.update(), "idle", "freeze at t=2")
+		lr.clock.advance(5)
+		eq(lr.loop.update(), "idle", "still frozen after 5s of overlay")
+		-- It clears: only the remaining 2s of thinking are needed, so no overlay
+		-- time leaked into the decision.
+		state.value = { ready = true, phase = "PLAY_HAND" }
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(1.9)
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued", "the overlay time did not advance the dwell")
+	end)
+
+	test("a_persistent_soft_overlay_acts_after_the_bounded_grace", function()
+		local state = { value = { ready = false, block = "soft", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 2,
+		})
+		eq(lr.loop.update(), "idle")
+		lr.clock.advance(1.9)
+		eq(lr.loop.update(), "idle")
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued", "acts under the overlay after the grace")
+	end)
+
+	test("a_persistent_soft_overlay_never_exhausts_the_fatal_window", function()
+		-- Soft frames must not count toward the hard/fatal not-ready window.
+		local state = { value = { ready = false, block = "soft", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			dwell_max = 1000,
+			overlay_grace = 1000, -- never act within the test window
+			max_transient_seconds = 1,
+		})
+		for _ = 1, 50 do
+			lr.clock.advance(1)
+			eq(lr.loop.update(), "idle")
+		end
+		eq(lr.loop.is_stopped(), false, "50s of soft overlay never exhausts a 1s fatal window")
+		eq(lr.loop.stats().not_ready, 0)
+		is_true(lr.loop.stats().overlay_idle > 0)
+	end)
+
+	test("a_soft_overlay_preserves_the_no_action_cooldown", function()
+		-- Regression 1: the soft fallback must not bypass the no-action backoff.
+		local state = { value = { ready = false, block = "soft", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 0,
+			min_interval = 2,
+		})
+		eq(lr.loop.update(), "issued")
+		lr.transport.push({ sequence = 1, ok = false, code = "policy_no_action" })
+		eq(lr.loop.update(), "idle")
+		eq(lr.transport.sent, 1)
+		-- The immediate next update must idle, not re-issue, and keep one request.
+		eq(lr.loop.update(), "idle", "the no-action cooldown is respected under a soft overlay")
+		eq(lr.transport.sent, 1, "no repeated capture/request every frame")
+	end)
+
+	test("persistent_capture_failures_under_a_soft_overlay_hit_the_capture_bound", function()
+		-- Regression: a soft phase must not erase the broker CAPTURE-failure window.
+		local state = { value = { ready = false, block = "soft", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, { capture_fail_times = 10000 })
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 0,
+			max_transient_seconds = 1,
+		})
+		local stopped = false
+		for _ = 1, 20 do
+			lr.clock.advance(0.2)
+			if lr.loop.update() == "stopped" then
+				stopped = true
+				break
+			end
+		end
+		is_true(stopped, "persistent capture failures still hit the capture bound under a soft overlay")
+	end)
+
+	test("a_soft_overlay_does_not_clear_the_consecutive_error_budget", function()
+		-- A soft phase is genuine readiness progress, but it must not clear a
+		-- substantive broker error budget.
+		local state = ready_state("PLAY_HAND", nil)
+		local r = support.rig(repo, { dispatch_result = false })
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 0,
+			max_consecutive_errors = 2,
+		})
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(4.1)
+		eq(lr.loop.update(), "issued")
+		lr.transport.push({ sequence = 1, ok = true, action = play_action(r), reason = "x" })
+		eq(lr.loop.update(), "idle")
+		eq(lr.loop.stats().errors, 1)
+		state.value = { ready = false, block = "soft", phase = "PLAY_HAND" }
+		eq(lr.loop.update(), "issued", "acts under the overlay")
+		lr.transport.push({ sequence = 2, ok = true, action = play_action(r), reason = "x" })
+		eq(lr.loop.update(), "stopped", "the prior substantive error is not cleared by the soft phase")
+		eq(lr.loop.stats().errors, 2)
+	end)
+
+	test("a_soft_overlay_respects_the_min_interval", function()
+		local state = { value = { ready = false, block = "soft", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 0,
+			min_interval = 2,
+		})
+		eq(lr.loop.update(), "issued")
+		lr.transport.push({ sequence = 1, ok = false, code = "policy_no_action" })
+		eq(lr.loop.update(), "idle")
+		eq(lr.transport.sent, 1)
+		lr.clock.advance(1.9)
+		eq(lr.loop.update(), "idle", "still inside the min interval / backoff")
+		eq(lr.transport.sent, 1)
+		lr.clock.advance(0.2)
+		eq(lr.loop.update(), "issued")
+	end)
+
+	test("a_soft_overlay_keeps_the_verified_wait_backoff", function()
+		local state = { value = { ready = false, block = "soft", phase = "PLAY_HAND" } }
+		local wait = { value = "mp_ready_blind" }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 0,
+			wait_state = function() return wait.value end,
+		})
+		local status, code = lr.loop.update()
+		eq(status, "waiting")
+		eq(code, "loop_waiting_for_opponent")
+		eq(lr.loop.stats().waits, 1)
+		-- The wait cooldown suppresses the next frame (the wait is not re-held).
+		eq(lr.loop.update(), "idle")
+		eq(lr.loop.stats().waiting_polls, 1)
+	end)
+
+	test("soft_time_is_excluded_from_the_hard_deadline", function()
+		-- Regression 2: hard -> soft -> hard must not count the soft time toward
+		-- the hard fatal wall-clock deadline.
+		local state = { value = { ready = false, block = "hard", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 8,
+			max_transient_seconds = 1,
+		})
+		eq(lr.loop.update(), "idle") -- t0 hard
+		lr.clock.advance(0.2)
+		state.value = { ready = false, block = "soft", phase = "PLAY_HAND" }
+		eq(lr.loop.update(), "idle") -- t0.2 soft resets the hard window
+		lr.clock.advance(2)
+		eq(lr.loop.update(), "idle") -- t2.2 soft, under grace
+		state.value = { ready = false, block = "hard", phase = "PLAY_HAND" }
+		lr.clock.advance(0.1)
+		eq(lr.loop.update(), "idle", "soft time is excluded from the hard deadline") -- t2.3 hard, 0.1s
+		eq(lr.loop.is_stopped(), false)
+	end)
+
+	test("repeated_soft_episodes_do_not_accumulate_the_hard_deadline", function()
+		local state = { value = { ready = false, block = "hard", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 100,
+			max_transient_seconds = 1,
+		})
+		for i = 1, 6 do
+			state.value = { ready = false, block = "hard", phase = "PLAY_HAND" }
+			lr.clock.advance(0.5)
+			is_true(lr.loop.update() ~= "stopped", "hard episode " .. i .. " is bounded")
+			state.value = { ready = false, block = "soft", phase = "PLAY_HAND" }
+			lr.clock.advance(0.5)
+			lr.loop.update()
+		end
+		is_true(lr.loop.is_stopped() == false, "3s of alternating soft/hard never accumulates past the 1s window")
+	end)
+
+	test("a_continuous_hard_overlay_probe_still_stops", function()
+		-- A combined lock+overlay (or a persistent hard state) must still stop.
+		local state = { value = { ready = false, block = "hard", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			max_transient_seconds = 1,
+		})
+		local stopped = false
+		for _ = 1, 10 do
+			lr.clock.advance(0.5)
+			if lr.loop.update() == "stopped" then
+				stopped = true
+				break
+			end
+		end
+		is_true(stopped, "a persistent hard/combined state still stops within the window")
+	end)
+
+	test("a_zero_overlay_grace_acts_immediately", function()
+		local state = { value = { ready = false, block = "soft", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			overlay_grace = 0,
+		})
+		eq(lr.loop.update(), "issued", "a zero grace acts under the overlay at once")
+	end)
+
+	test("soft_overlay_churn_never_consumes_the_fatal_window", function()
+		local state = { value = { ready = true, phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			dwell_max = 1000,
+			overlay_grace = 1000,
+			max_transient_seconds = 1,
+		})
+		for i = 1, 40 do
+			-- Toggle overlay/pause on and off: the grace resets, and none of it
+			-- may count toward the fatal window.
+			if i % 2 == 0 then
+				state.value = { ready = false, block = "soft", phase = "PLAY_HAND" }
+			else
+				state.value = { ready = true, phase = "PLAY_HAND" }
+			end
+			lr.clock.advance(0.5)
+			lr.loop.update()
+		end
+		eq(lr.loop.stats().not_ready, 0, "soft churn never consumes the fatal window")
+	end)
+
+	test("a_persistent_hard_lock_still_stops_in_the_bounded_window", function()
+		local state = { value = { ready = false, block = "hard", phase = "PLAY_HAND" } }
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { card = 4 },
+			max_transient_seconds = 1,
+		})
+		local stopped = false
+		for _ = 1, 10 do
+			lr.clock.advance(0.5)
+			if lr.loop.update() == "stopped" then
+				stopped = true
+				break
+			end
+		end
+		is_true(stopped, "a persistent hard lock still stops within the bounded window")
+	end)
+
+	test("first_shop_inspection_uses_the_longer_dwell", function()
+		local state = ready_state("SHOP", nil)
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {
+			readiness = function() return state.value end,
+			dwell = { shop = 6, shop_first = 8 },
+		})
+		eq(lr.loop.update(), "dwelling")
+		lr.clock.advance(6.1)
+		eq(lr.loop.update(), "dwelling", "first inspection still needs 8s total")
+		lr.clock.advance(2)
+		eq(lr.loop.update(), "issued")
+	end)
+
+	test("instant_has_no_dwell", function()
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {})
+		eq(lr.loop.update(), "issued", "no readiness probe: legacy immediate path")
+		eq(lr.loop.describe().has_readiness, false)
+	end)
+
+	test("cooldown_idle_frames_are_counted_as_idle_not_rejections", function()
+		local r = support.rig(repo, {})
+		local lr = support.loop(r, {})
+		eq(lr.loop.update(), "issued")
+		-- A legitimate no-action answer backs off; the following cooldown frames
+		-- are plain idle ticks, counted separately and never as rejections.
+		lr.transport.push({ sequence = 1, ok = false, code = "policy_no_action" })
+		eq(lr.loop.update(), "idle")
+		eq(lr.loop.stats().no_action, 1)
+		local before = lr.loop.stats().rejected
+		eq(lr.loop.update(), "idle", "inside the no-action cooldown")
+		eq(lr.loop.stats().idle, 1, "idle ticks are their own metric")
+		eq(lr.loop.stats().rejected, before, "a cooldown idle tick never adds a rejection")
+	end)
+
+	test("dwell_options_are_validated", function()
+		local r = support.rig(repo, {})
+		local bad = support.loop(r, { dwell = { card = -1 } })
+		eq(bad.loop, nil)
+		eq(bad.code, "loop_bad_options")
+		local bad2 = support.loop(r, { dwell = "x" })
+		eq(bad2.loop, nil)
+		eq(bad2.code, "loop_bad_options")
+		local bad3 = support.loop(r, { readiness = "x" })
+		eq(bad3.loop, nil)
+		eq(bad3.code, "loop_bad_options")
+	end)
 end
 

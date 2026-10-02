@@ -124,6 +124,17 @@ MP_SOCKET_LUA = (
     "]]\n"
 )
 
+# R2: a minimal staged inbound-dispatch source carrying the exact pinned
+# ``networking/action_handlers.lua`` anchor line, so the new source observer is
+# bound to a real full line and not a loose fragment.
+MP_ACTION_HANDLERS_LUA = (
+    "local HANDLERS = {}\n"
+    "function MP.dispatch(parsedAction)\n"
+    "\tlocal handler = HANDLERS[parsedAction.action]\n"
+    "\tif handler then handler(parsedAction) end\n"
+    "end\n"
+)
+
 SMODS_LOGGING_LUA = (
     "function initializeSocketConnection()\n"
     '\tlocal socket = require("socket")\n'
@@ -171,6 +182,7 @@ def _make_mods(root: Path) -> Path:
     networking = mp / "networking"
     networking.mkdir(parents=True, exist_ok=True)
     (networking / "socket.lua").write_text(MP_SOCKET_LUA, encoding="utf-8")
+    (networking / "action_handlers.lua").write_text(MP_ACTION_HANDLERS_LUA, encoding="utf-8")
     smods = mods / "Steamodded" / "libs"
     (smods / "https").mkdir(parents=True)
     (smods / "https" / "smods-https.lua").write_text(SMODS_HTTPS_LUA, encoding="utf-8")
@@ -1268,6 +1280,172 @@ def test_p2_observer_anchor_problems_fail_closed_on_missing_or_duplicate_lines()
     assert any(problem.startswith("mp_p2_anchor_not_unique") for problem in problems)
     missing = good.replace(staging.MP_RECEIVE_LITERAL, "-- removed")
     assert any("mp_p2_anchor_not_unique" in problem for problem in staging.p2_observer_anchor_problems(missing, 8788))
+
+
+def test_inbound_observer_patch_binding_fails_closed():
+    patches = staging.mp_inbound_observer_patches()
+    assert len(patches) == 1
+    patch = patches[0]
+    assert patch["target"] == staging.MP_ACTION_HANDLERS_SOURCE_TARGET
+    assert patch["pattern"] == staging.MP_HANDLER_DISPATCH_LITERAL
+    assert patch["position"] == "before" and patch["times"] == 1
+    assert staging.MP_INBOUND_TAP_GLOBAL in patch["payload"]
+    assert staging.MP_INBOUND_OBSERVER_MARKERS[0] in patch["payload"]
+    # The observer is staged with the normal MP guard (production wiring).
+    staged = staging.staging_patches("C:/stage/save", "C:/stage/Mods", mp_guard=8788)
+    assert any(p["target"] == staging.MP_ACTION_HANDLERS_SOURCE_TARGET for p in staged)
+
+    good = "x = 1\n" + staging.MP_HANDLER_DISPATCH_LITERAL + "\ny = 2\n"
+    assert staging.mp_inbound_observer_anchor_problems(good) == []
+    duplicated = good + "\n" + staging.MP_HANDLER_DISPATCH_LITERAL + "\n"
+    assert any(
+        problem.startswith("mp_inbound_anchor_not_unique")
+        for problem in staging.mp_inbound_observer_anchor_problems(duplicated)
+    )
+    missing = good.replace(staging.MP_HANDLER_DISPATCH_LITERAL, "-- removed")
+    assert any(
+        "mp_inbound_anchor_not_unique" in problem
+        for problem in staging.mp_inbound_observer_anchor_problems(missing)
+    )
+    # Applying the patch preserves the original dispatch line exactly once and
+    # inserts the tap call before it.
+    patched = staging.apply_source_pattern_patch(good, patch)
+    assert patched.count(staging.MP_HANDLER_DISPATCH_LITERAL) == 1
+    assert "-- " + staging.MP_INBOUND_OBSERVER_MARKERS[0] in patched
+    assert patched.index("ai_inbound_tap") < patched.index(staging.MP_HANDLER_DISPATCH_LITERAL)
+
+
+def test_inbound_observer_patched_dispatch_loop_counts_and_preserves():
+    """Run the real pinned Game:update dispatch with the observer patch applied."""
+    source = staging.REFERENCE_MP_ACTION_HANDLERS
+    if not source.is_file():
+        raise AssertionError(
+            "pinned action_handlers reference missing; cannot run the dispatch observer regression"
+        )
+    try:
+        import lupa.lua51 as lua51
+        import lupa.luajit21 as luajit21
+    except Exception as error:  # noqa: BLE001
+        raise AssertionError(f"lupa lua51/luajit21 unavailable; cannot run dispatch regression: {error}")
+    text = source.read_text(encoding="utf-8")
+    assert staging.mp_inbound_observer_anchor_problems(text) == []
+    patched = staging.apply_source_pattern_patch(text, staging.mp_inbound_observer_patches()[0])
+    # The dispatch-loop Game:update is the one right after the networkToUi channel
+    # binding (the earlier Game:update ticks the disconnect countdowns).
+    anchor = patched.index("local network_to_ui_channel = love.thread.getChannel")
+    start = patched.index("function Game:update(dt)", anchor)
+    # Close on the pinned ``until not msg`` loop tail (the observer payload also
+    # emits a column-0 ``end``, so a plain first-``end`` search would truncate).
+    stop = patched.index("until not msg", start)
+    stop = patched.index("\nend", stop) + len("\nend")
+    function_source = patched[start:stop]
+
+    body = (
+        "local Game = {}\n"
+        "local HANDLERS = {}\n"
+        "-- Minimal decode over the real dispatch's ``json.decode`` contract: a\n"
+        "-- valid table (Lua literal) or nil for a malformed frame.\n"
+        "local function ai_load(source)\n"
+        "  local loader = loadstring or load\n"
+        "  return loader('return ' .. source)()\n"
+        "end\n"
+        "local json = { decode = function(source) return ai_load(source) end }\n"
+        "local function make(name)\n"
+        "  return function(payload)\n"
+        "    counts['handler_' .. name] = (counts['handler_' .. name] or 0) + 1\n"
+        "    local value = 'RET_' .. name\n"
+        "    counts['return_' .. name] = value\n"
+        "    return value\n"
+        "  end\n"
+        "end\n"
+        "HANDLERS['enemyDisconnected'] = make('enemyDisconnected')\n"
+        "HANDLERS['stopGame'] = make('stopGame')\n"
+        "HANDLERS['other'] = make('other')\n"
+        "local queue = { messages = messages, index = 0 }\n"
+        "function queue:pop() self.index = self.index + 1; return self.messages[self.index] end\n"
+        "local network_to_ui_channel = { pop = function() return queue:pop() end }\n"
+        "local love = { thread = { getChannel = function() return network_to_ui_channel end } }\n"
+        "local sendWarnMessage = function() warnings.n = (warnings.n or 0) + 1 end\n"
+        "local sendTraceMessage = function() end\n"
+        "local no_log_actions = {}\n"
+        "local Client = { send = function() end }\n"
+        "local MP = { UI = {}, ACTIONS = {} }\n"
+        "local game_update_ref = function() end\n"
+        "local AISP_INBOUND_TAP\n"
+        "if tap_mode == 'count' then\n"
+        "  AISP_INBOUND_TAP = function(action)\n"
+        "    counts['tap_' .. action] = (counts['tap_' .. action] or 0) + 1\n"
+        "    return 'ignored'\n"
+        "  end\n"
+        "elseif tap_mode == 'contract' then\n"
+        "  AISP_INBOUND_TAP = function(action)\n"
+        "    counts['seen'] = (counts['seen'] or 0) + 1\n"
+        "    if action == 'enemyDisconnected' or action == 'reconnecting' or action == 'stopGame' then\n"
+        "      counts['d_' .. action] = (counts['d_' .. action] or 0) + 1\n"
+        "    end\n"
+        "  end\n"
+        "elseif tap_mode == 'throw' then\n"
+        "  AISP_INBOUND_TAP = function() error('tap boom') end\n"
+        "end\n"
+        + function_source + "\n"
+        "return Game\n"
+    )
+    wrapped = "return function(messages, counts, warnings, tap_mode)\n" + body + "end"
+
+    def run(runtime_mod, messages, tap_mode="count"):
+        runtime = runtime_mod.LuaRuntime()
+        factory = runtime.execute(wrapped)
+        counts = runtime.table()
+        warnings = runtime.table()
+        game = factory(runtime.table_from(messages), counts, warnings, tap_mode)
+        game.update(game, 0.016)
+        return counts, warnings
+
+    message = lambda action: "{action='" + action + "'}"
+    for runtime_mod in (lua51, luajit21):
+        counts, warnings = run(
+            runtime_mod,
+            [message("enemyDisconnected"), message("enemyDisconnected"), message("stopGame"), message("other")],
+        )
+        assert counts["tap_enemyDisconnected"] == 2, counts
+        assert counts["tap_stopGame"] == 1, counts
+        assert counts["tap_other"] == 1, counts
+        assert counts["handler_enemyDisconnected"] == 2, counts
+        assert counts["handler_stopGame"] == 1, counts
+        assert counts["handler_other"] == 1, counts
+        assert counts["return_enemyDisconnected"] == "RET_enemyDisconnected", counts
+        assert warnings["n"] is None or warnings["n"] == 0
+
+        # A manual stage change with no inbound frame never calls the tap.
+        counts, _ = run(runtime_mod, [])
+        assert counts["tap_enemyDisconnected"] is None and counts["handler_stopGame"] is None
+
+        # stopGame is counted even though this harness changes no engine state.
+        counts, _ = run(runtime_mod, [message("stopGame")])
+        assert counts["tap_stopGame"] == 1 and counts["handler_stopGame"] == 1
+        assert counts["return_stopGame"] == "RET_stopGame"
+
+        # A malformed frame warns, never dispatches, and the loop continues.
+        counts, warnings = run(runtime_mod, ["{{{", message("enemyDisconnected")])
+        assert warnings["n"] == 1, warnings
+        assert counts["tap_enemyDisconnected"] == 1 and counts["handler_enemyDisconnected"] == 1
+
+        # A throwing tap is swallowed by pcall; dispatch and handler still run.
+        counts, _ = run(runtime_mod, [message("enemyDisconnected"), message("stopGame")], tap_mode="throw")
+        assert counts["handler_enemyDisconnected"] == 1 and counts["handler_stopGame"] == 1
+
+        # Observer liveness through the REAL patched loop: innocuous traffic
+        # advances the bounded total while the disruptive counts stay exact.
+        counts, _ = run(
+            runtime_mod,
+            [message("keepAlive"), message("keepAlive"), message("keepAlive"), message("enemyDisconnected")],
+            tap_mode="contract",
+        )
+        assert counts["seen"] == 4, counts
+        assert counts["d_enemyDisconnected"] == 1, counts
+        assert counts["d_reconnecting"] is None and counts["d_stopGame"] is None, counts
+        # No payload is ever exposed to the tap; only the action string is passed.
+        assert "pcall(ai_inbound_tap, parsedAction.action)" in function_source
 
 
 def _run_all() -> int:

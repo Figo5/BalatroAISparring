@@ -32,6 +32,10 @@ local COMPANION_STAGED = {
 }
 -- Loaded for both staged roles; never part of the AI-only policy set.
 local COMPANION_STAGED_CODEC = "ai/codec.lua"
+-- The typed Ranked canonical parity module is shared by BOTH staged roles: the
+-- human host also builds the source-pinned Ranked digest from the actual live
+-- configuration and reaches READY before any AI policy capability exists.
+local COMPANION_STAGED_RANKED_CONFIG = "integration/ranked_config.lua"
 local COMPANION_STAGED_AI = {
 	"integration/state_reader.lua",
 	"integration/engine_adapter.lua",
@@ -416,7 +420,19 @@ local function boot_staged(host_module, base, companion)
 	if codec_module == nil then
 		return { code = "companion_module_missing", detail = COMPANION_STAGED_CODEC, module_code = codec_code, fatal = true }
 	end
-	local modules = { MPDriver = loaded[5], codec = codec_module }
+	-- The Ranked parity module is COMMON to both staged roles for the same
+	-- reason as the codec: the driver reads the actual layered configuration and
+	-- binds it on the human host as well as the AI guest.
+	local ranked_config_module, ranked_config_code = load_module(COMPANION_STAGED_RANKED_CONFIG)
+	if ranked_config_module == nil then
+		return {
+			code = "companion_module_missing",
+			detail = COMPANION_STAGED_RANKED_CONFIG,
+			module_code = ranked_config_code,
+			fatal = true,
+		}
+	end
+	local modules = { MPDriver = loaded[5], codec = codec_module, ranked_config = ranked_config_module }
 	if descriptors.role == "ai" then
 		local policy, policy_missing, policy_code = load_all(COMPANION_STAGED_AI)
 		if policy == nil then
@@ -531,6 +547,22 @@ local function boot_staged(host_module, base, companion)
 end
 
 local function boot_companion(modules, companion)
+	local profile = load_module("integration/ranked_profile.lua")
+	if type(profile) ~= "table" then return { code = "ranked_profile_module_missing", fatal = true } end
+	-- Explicit preparation never constructs the runtime coordinator or policy.
+	if companion.role == "staged" and os.getenv("AISP_PROFILE_PREPARE") == "1" then
+		local encode = json_codec()
+		local instance = profile.preparation(G, SMODS, MP, love, encode, os.getenv, _RELEASE_MODE)
+		if type(Game) == "table" and type(Game.update) == "function" then
+			local original = Game.update
+			Game.update = function(self, dt, ...)
+				local result = original(self, dt, ...)
+				pcall(instance.update, dt)
+				return result
+			end
+		end
+		return { code = "companion_ok", role = "staged", booted = true, instance = instance }
+	end
 	local host_module, host_error = load_module("integration/companion_host.lua")
 	if host_module == nil then
 		return { code = "companion_module_missing", detail = host_error, fatal = true }
@@ -556,6 +588,12 @@ local function boot_companion(modules, companion)
 		mp_compatible = true,
 		logger = build_companion_logger(modules),
 		notify = sendWarnMessage,
+		-- Real readiness producers: the release-mode global is available at the
+		-- entrypoint; the approved dependency inventory is provisioned by the
+		-- deployment slice (nil here -> an honest unknown that blocks READY).
+		release_mode = _RELEASE_MODE,
+		approved_mods = companion.role == "staged" and profile.approved_mods() or nil,
+		ranked_profile_facts = function() return profile.facts(G, SMODS, MP, _RELEASE_MODE) end,
 	}
 	local detail
 	if companion.role == "live" then

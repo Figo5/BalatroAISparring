@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 TOOLS_DIR = Path(__file__).resolve().parent
 import sys
@@ -27,11 +27,24 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 import practice_service  # noqa: E402
+import ranked_effective_config  # noqa: E402
 import staging  # noqa: E402
 
 RULESET_REL_PATH = ("rulesets", "majorleague.lua")
 RULESET_ID_PREFIX = "ruleset_mp_"
 EXPECTED_GAMEMODE = "gamemode_mp_attrition"
+
+# Standard Ranked (production practice default). The authority is the pinned
+# Multiplayer source generation verified by ``docs/RANKED_SOURCE_PINS_V1.json``.
+RANKED_PINS_REL = ("docs", "RANKED_SOURCE_PINS_V1.json")
+
+# Strict, source-bound measured-catalog schema. The eligible deck count is a real
+# runtime fact (``MP.get_cocktail_decks`` against the live ``G.P_CENTERS`` and the
+# blacklist/whitelist), not a source constant, so it is reported by a trusted
+# runtime attestation. A missing/unverified catalog fails closed; a synthetic
+# count is never accepted in production.
+RANKED_CATALOG_SCHEMA = "aisparring.ranked_catalog.v1"
+_MAX_CATALOG_ENTRIES = 64
 
 # ``MP.LOBBY.config.key = <primitive>`` where the primitive is a Lua boolean,
 # integer or single-quoted/double-quoted string. No expressions, calls or field
@@ -212,12 +225,301 @@ def expected_config_digest(staging_root, role: str = "human", mod_dir=None) -> O
     return verdict.get("config_digest") if verdict.get("ok") else None
 
 
+def ranked_source_path(staging_root, role: str = "human", mod_dir=None) -> Path:
+    """Resolve the pinned staged Multiplayer mod dir for the Ranked authority."""
+    paths = staging.role_paths(staging_root, role)
+    return Path(staging._resolve_multiplayer_mod(paths, mod_dir=mod_dir))
+
+
+def ranked_pins_path() -> Path:
+    """The production pin file, anchored to the loaded authority module."""
+    return ranked_effective_config.production_pins_path()
+
+
+def expected_ranked_config(
+    staging_root,
+    role: str = "human",
+    mod_dir=None,
+    cocktail=None,
+    guest_cocktail=None,
+    pins_path=None,
+    selection=None,
+    catalog=None,
+    custom_seed=None,
+    draft=None,
+) -> dict:
+    """Derive the expected Standard Ranked configuration from the staged source.
+
+    Verifies every enumerated Multiplayer file's SHA-256 against the reviewed
+    pins before deriving values, so any byte drift fails closed. ``pins_path``
+    defaults to the anchored production pin file; a test/helper may pass an
+    explicit fixture pin path, but there is no repo-root or re-record override.
+    The returned ``config_digest`` is the new domain-separated
+    ``aisparring.ranked_effective_config.v1`` equality checksum; it never reuses
+    ``major_league_digest``.
+    """
+    try:
+        source_dir = ranked_source_path(staging_root, role=role, mod_dir=mod_dir)
+    except staging.StagingError as error:
+        return {"ok": False, "code": error.code, "problems": [error.code]}
+    if pins_path is None:
+        pins_path = ranked_pins_path()
+    verdict = ranked_effective_config.derive_effective_config(
+        source_dir,
+        pins_path,
+        cocktail=cocktail,
+        guest_cocktail=guest_cocktail,
+        selection=selection,
+        catalog=catalog,
+        custom_seed=custom_seed,
+    )
+    if not verdict.get("ok"):
+        return {
+            "ok": False,
+            "code": "ranked_contract_unproven",
+            "problems": list(verdict.get("problems") or ()),
+        }
+    resolved = verdict["resolved"]
+    result = {
+        "ok": True,
+        "code": "ranked_contract_ok",
+        "source": str(source_dir),
+        "ruleset_id": resolved["ruleset_id"],
+        "ruleset_key": resolved["ruleset_key"],
+        "gamemode": resolved["forced_gamemode"],
+        "declared_layers": resolved["declared_layers"],
+        "active_layer_chain": resolved["active_layer_chain"],
+        "config_digest": verdict["checksum"],
+        "canonical": verdict["canonical"],
+        "host": verdict["host"],
+        "guest": verdict["guest"],
+        "resolved": resolved,
+        "problems": [],
+    }
+    # The dedicated draft commitment is validated independently and carried
+    # separately from the canonical lobby configuration. A transcript/selection
+    # disagreement fails the whole derivation.
+    if draft is not None:
+        import ranked_draft as ranked_draft_authority
+
+        commitment = ranked_draft_authority.commitment_from_public(draft)
+        if not commitment.get("ok"):
+            return {
+                "ok": False,
+                "code": "ranked_draft_commitment_invalid",
+                "problems": list(commitment.get("problems") or ()),
+            }
+        if selection is not None and draft.get("final") != selection_option(selection, catalog):
+            return {
+                "ok": False,
+                "code": "ranked_draft_selection_mismatch",
+                "problems": ["ranked_draft_selection_mismatch"],
+            }
+        result["draft"] = dict(draft)
+        result["draft_digest"] = commitment["digest"]
+    return result
+
+
+def selection_option(selection, catalog):
+    """Map a validated selection back to its option id, or ``None``."""
+    if not isinstance(selection, Mapping) or not isinstance(catalog, Mapping):
+        return None
+    decks = catalog.get("decks")
+    stakes = catalog.get("stakes")
+    if not isinstance(decks, Mapping) or not isinstance(stakes, Mapping):
+        return None
+    deck_key = selection.get("deck_key")
+    stake_key = selection.get("stake_key")
+    entry = decks.get(deck_key) if isinstance(deck_key, str) else None
+    if not isinstance(entry, Mapping):
+        return None
+    if entry.get("center_key") != selection.get("back_key") or entry.get("name") != selection.get("back_name"):
+        return None
+    if stake_key not in stakes:
+        return None
+    return deck_key + "~" + stake_key
+
+
+def expected_ranked_checksum(staging_root, role: str = "human", **kwargs) -> Optional[str]:
+    verdict = expected_ranked_config(staging_root, role=role, **kwargs)
+    return verdict.get("config_digest") if verdict.get("ok") else None
+
+
+# The Cocktail Back center is the boot-generated composition container; it is
+# never a selectable draft deck and must be absent from both measured catalogs.
+COCKTAIL_BACK_KEY = "b_mp_cocktail"
+
+
+def _validate_catalog_shape(measurement, problems: list) -> None:
+    eligible = measurement.get("eligible_decks")
+    decks = measurement.get("decks")
+    stakes = measurement.get("stakes")
+    if not isinstance(eligible, (list, tuple)) or not eligible:
+        problems.append("ranked_catalog_eligible_missing")
+        return
+    if len(eligible) > _MAX_CATALOG_ENTRIES:
+        problems.append("ranked_catalog_too_large")
+        return
+    seen = set()
+    for key in eligible:
+        if not isinstance(key, str) or not (1 <= len(key) <= 64):
+            problems.append("ranked_catalog_eligible_invalid")
+            continue
+        if key in seen:
+            problems.append("ranked_catalog_eligible_duplicate")
+        seen.add(key)
+        if key == COCKTAIL_BACK_KEY:
+            problems.append("ranked_catalog_cocktail_present")
+    if not isinstance(decks, Mapping) or not isinstance(stakes, Mapping):
+        problems.append("ranked_catalog_mapping_missing")
+        return
+    if COCKTAIL_BACK_KEY in decks:
+        problems.append("ranked_catalog_cocktail_present")
+    for key, entry in decks.items():
+        if not isinstance(key, str) or not isinstance(entry, Mapping):
+            problems.append("ranked_catalog_deck_invalid")
+            continue
+        if not isinstance(entry.get("center_key"), str) or not isinstance(entry.get("name"), str):
+            problems.append("ranked_catalog_deck_invalid")
+        if entry.get("center_key") == COCKTAIL_BACK_KEY:
+            problems.append("ranked_catalog_cocktail_present")
+    for key, entry in stakes.items():
+        if not isinstance(key, str) or not isinstance(entry, Mapping):
+            problems.append("ranked_catalog_stake_invalid")
+            continue
+        index = entry.get("index")
+        max_index = entry.get("max_index", ranked_effective_config.MAX_STAKE_INDEX)
+        if isinstance(index, bool) or not isinstance(index, int):
+            problems.append("ranked_catalog_stake_invalid")
+        if isinstance(max_index, bool) or not isinstance(max_index, int) or max_index > ranked_effective_config.MAX_STAKE_INDEX:
+            problems.append("ranked_catalog_stake_invalid")
+
+
+def build_ranked_catalog(host_measurement, guest_measurement=None) -> dict:
+    """Validate the *shape* of a measured catalog and derive the Cocktail default.
+
+    This is a strict shape validator, NOT provenance: the measured catalogs are
+    produced by the real runtime (eligible Back centers from
+    ``MP.get_cocktail_decks``) and their authenticity is a future deployment
+    dependency. Both role measurements are required and must be equal; eligible
+    decks must be unique, Cocktail must be absent, and no count is guessed.
+    Returns ``{"ok", "cocktail", "decks", "stakes", "count"}`` or a failure.
+    """
+    problems: list[str] = []
+    if not isinstance(host_measurement, Mapping) or host_measurement.get("schema") != RANKED_CATALOG_SCHEMA:
+        return {"ok": False, "problems": ["ranked_catalog_schema_invalid"]}
+    if guest_measurement is None:
+        # Both measured role catalogs are mandatory; a single-role measurement
+        # is never accepted.
+        return {"ok": False, "problems": ["ranked_catalog_guest_missing"]}
+    if not isinstance(guest_measurement, Mapping) or guest_measurement.get("schema") != RANKED_CATALOG_SCHEMA:
+        return {"ok": False, "problems": ["ranked_catalog_guest_schema_invalid"]}
+    _validate_catalog_shape(host_measurement, problems)
+    _validate_catalog_shape(guest_measurement, problems)
+    if (
+        list(host_measurement.get("eligible_decks") or ()) != list(guest_measurement.get("eligible_decks") or ())
+        or dict(host_measurement.get("decks") or {}) != dict(guest_measurement.get("decks") or {})
+        or dict(host_measurement.get("stakes") or {}) != dict(guest_measurement.get("stakes") or {})
+    ):
+        problems.append("ranked_catalog_role_parity")
+    problems = sorted(set(problems))
+    if problems:
+        return {"ok": False, "problems": problems}
+    eligible = host_measurement["eligible_decks"]
+    try:
+        cocktail = ranked_effective_config.expected_cocktail_for_count(len(eligible))
+    except ranked_effective_config.RankedConfigError as error:
+        return {"ok": False, "problems": [error.code]}
+    return {
+        "ok": True,
+        "problems": [],
+        "cocktail": cocktail,
+        "decks": dict(host_measurement["decks"]),
+        "stakes": dict(host_measurement["stakes"]),
+        "count": len(eligible),
+    }
+
+
+def production_ranked_reader(catalog=None, guest_catalog=None, selection=None, custom_seed=None, draft=None):
+    """Build the production Standard Ranked reader for the host.
+
+    The reader verifies the pinned staged source and derives every value from it.
+    The measured catalogs (and therefore the exact Cocktail default) must be
+    supplied by the trusted deployment slice; until then the reader fails closed
+    with ``ranked_catalog_unmeasured``. A missing validated draft selection fails
+    closed with ``ranked_draft_unbound`` (never a Red Deck / White Stake
+    fallback). ``custom_seed`` is the trusted host gauntlet seed only.
+    """
+
+    def reader(staging_root, role: str = "human"):
+        if catalog is None:
+            return {
+                "ok": False,
+                "code": "ranked_catalog_unmeasured",
+                "problems": ["ranked_catalog_unmeasured"],
+            }
+        built = build_ranked_catalog(catalog, guest_measurement=guest_catalog)
+        if not built.get("ok"):
+            return {
+                "ok": False,
+                "code": "ranked_catalog_invalid",
+                "problems": list(built.get("problems") or ()),
+            }
+        # The Ranked schema requires BOTH the host-owned validated selection and
+        # the completed draft commitment: a selection-only launch is refused (no
+        # Red Deck / White Stake fallback).
+        if selection is None or draft is None:
+            return {
+                "ok": False,
+                "code": "ranked_draft_unbound",
+                "problems": ["ranked_draft_unbound"],
+            }
+        # The production pin path is anchored to the loaded authority module;
+        # there is no repo-root or caller pin override here.
+        verdict = expected_ranked_config(
+            staging_root,
+            role=role,
+            cocktail=built["cocktail"],
+            pins_path=ranked_effective_config.production_pins_path(),
+            selection=selection,
+            catalog={"decks": built["decks"], "stakes": built["stakes"]},
+            custom_seed=custom_seed,
+            draft=draft,
+        )
+        if not verdict.get("ok"):
+            return verdict
+        verdict = dict(verdict)
+        verdict["config_schema"] = ranked_effective_config.RANKED_CONFIG_SCHEMA
+        verdict["catalog"] = {
+            "decks": built["decks"],
+            "stakes": built["stakes"],
+            "count": built["count"],
+        }
+        # Carry the validated selection so the service can re-validate it and
+        # send it in SETUP (exact keys/types).
+        verdict["selection"] = dict(selection)
+        return verdict
+
+    # Tag the reader so the host can identify the trusted Standard Ranked
+    # authority (used to refuse an unsupported Ranked gauntlet pre-ACK).
+    reader.is_ranked = True
+    return reader
+
+
 __all__ = [
     "EXPECTED_GAMEMODE",
+    "RANKED_CATALOG_SCHEMA",
+    "RANKED_PINS_REL",
     "RULESET_ID_PREFIX",
     "RULESET_REL_PATH",
+    "build_ranked_catalog",
     "expected_config_digest",
+    "expected_ranked_checksum",
+    "expected_ranked_config",
     "expected_ruleset",
     "majorleague_source_path",
     "parse_ruleset_source",
+    "production_ranked_reader",
+    "ranked_pins_path",
+    "ranked_source_path",
 ]

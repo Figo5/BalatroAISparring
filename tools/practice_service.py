@@ -49,6 +49,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
+import ranked_draft as ranked_draft_authority
+import ranked_effective_config as ranked_authority
+
 TOOLS_DIR = Path(__file__).resolve().parent
 REPO_DIR = TOOLS_DIR.parent
 WORKER_PATH = TOOLS_DIR / "policy_worker.py"
@@ -146,6 +149,38 @@ TERMINAL_PHASES = (TERMINAL_NONE, TERMINAL_AWAITING_AI, TERMINAL_CLOSED)
 # Frozen Major League digest contract (docs/MAJOR_LEAGUE_DIGEST.md): FNV1a32
 # over a fixed canonical string, eight lowercase hex digits.
 MAJOR_LEAGUE_RULESET_ID = "ruleset_mp_majorleague"
+
+# The explicit versioned Ranked contract. Legacy fixtures/history keep their own
+# semantics; this value is never used to relabel the Major League digest.
+RANKED_CONFIG_SCHEMA = ranked_authority.RANKED_CONFIG_SCHEMA
+# The exact readiness record keys (primitives only) the runtime must report on
+# READY under the Ranked schema. Every value must be exactly true.
+RANKED_READINESS_KEYS = (
+    "unlock_check",
+    "all_unlocked",
+    "advertised_unlocked",
+    "advertised_preview",
+    "advertised_preview_valid",
+    "live_preview",
+    "preview_consistent",
+    "peer_unlocked",
+    "peer_cached",
+    "banned_mods_empty",
+    "mods_approved",
+    "release_mode",
+    "game_speed_ok",
+    "debug_disabled",
+    "animations_normal",
+    "handy_disabled",
+)
+# Raw integration evidence booleans may legitimately be false; every other key
+# must be exactly true.
+RANKED_READINESS_EVIDENCE_KEYS = frozenset({"advertised_preview", "live_preview"})
+# Receipt-counter schema. Version 2 counts a refused decision once per delivered
+# sequence; version 1 (and an absent field) is the historical idle-inflated
+# semantics. The service's own final summary always reports the current version.
+SERVICE_COUNTER_VERSION = 2
+LEGACY_COUNTER_VERSION = 1
 FNV1A32_OFFSET = 2166136261
 FNV1A32_PRIME = 16777619
 MAX_DIGEST_LEN = 64
@@ -430,6 +465,14 @@ class LocalLogger:
         "ai_decisions",
         "ai_rejected",
         "ai_errors",
+        "ai_counter_version",
+        "ai_loop_idle",
+        "ai_loop_transient",
+        "ai_loop_empty",
+        "ai_loop_no_action",
+        "ai_loop_waits",
+        "counter_version",
+        "human_counter_version",
         "result_conflict",
         "seed",
         "version",
@@ -829,6 +872,27 @@ class ServiceConfig:
     ruleset_id: str = MAJOR_LEAGUE_RULESET_ID
     gamemode: Optional[str] = None
     forced_options: Optional[Mapping] = None
+    # Explicit versioned Ranked contract (None = legacy Major League path). When
+    # set, the service performs a consistency check: it re-hashes the
+    # host-supplied typed views and requires the result to equal the digest the
+    # host pinned. This is NOT an independent source derivation; the host's
+    # pinned-source derivation and the immutable certificate remain the authority.
+    config_schema: Optional[str] = None
+    ranked_host: Optional[Mapping] = None
+    ranked_resolved: Optional[Mapping] = None
+    # Host-owned completed-draft selection and the validated catalog it binds
+    # against. Both are required under the Ranked schema; the service
+    # re-validates the exact selection keys/types and requires the canonical
+    # host view's back/stake to equal the selection.
+    selection: Optional[Mapping] = None
+    ranked_catalog: Optional[Mapping] = None
+    # The dedicated completed-draft commitment (public profile/first actor/pool/
+    # transcript/final) and its FNV1a-32 digest. When present the service
+    # independently re-validates the bounded transcript, requires the digest to
+    # match the host's expected value, and requires the final option to map back
+    # to the validated selection.
+    draft: Optional[Mapping] = None
+    expected_draft_digest: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.session_id, str) or not (1 <= len(self.session_id) <= 128):
@@ -861,6 +925,83 @@ class ServiceConfig:
                 if not isinstance(key, str) or not DIGEST_PATTERN.match(key):
                     raise PracticeError(CODE_BAD_REQUEST)
                 _digest_primitive(value)
+        if self.config_schema is not None:
+            if self.config_schema != RANKED_CONFIG_SCHEMA:
+                raise PracticeError(CODE_BAD_REQUEST)
+            # The Ranked contract pins the exact registry ruleset and gamemode;
+            # a caller cannot substitute another ruleset under this schema.
+            if self.ruleset_id != ranked_authority.RULESET_ID:
+                raise PracticeError(CODE_BAD_REQUEST)
+            if self.gamemode != ranked_authority.FORCED_GAMEMODE:
+                raise PracticeError(CODE_BAD_REQUEST)
+            if not isinstance(self.ranked_host, Mapping) or not isinstance(self.ranked_resolved, Mapping):
+                raise PracticeError(CODE_BAD_REQUEST)
+            # Consistency check (not an independent source derivation): the
+            # service re-hashes the typed host view it was handed and requires it
+            # to equal the digest the host pinned. The host's pinned-source
+            # derivation and the immutable certificate remain the authority.
+            try:
+                canonical = ranked_authority.canonical_bytes(self.ranked_host, self.ranked_resolved)
+                derived = ranked_authority.fnv1a32_hex(canonical)
+            except ranked_authority.RankedConfigError:
+                raise PracticeError(CODE_BAD_REQUEST)
+            if not hmac.compare_digest(derived.encode("utf-8"), self.expected_config_digest.encode("utf-8")):
+                raise PracticeError(CODE_BAD_REQUEST)
+            # A validated host-owned selection is mandatory; the service
+            # re-validates its exact keys/types against the catalog. There is no
+            # fixed-deck fallback.
+            if not isinstance(self.selection, Mapping) or not isinstance(self.ranked_catalog, Mapping):
+                raise PracticeError(CODE_BAD_REQUEST)
+            catalog = {
+                "decks": self.ranked_catalog.get("decks"),
+                "stakes": self.ranked_catalog.get("stakes"),
+            }
+            selection_verdict = ranked_authority.validate_selection(self.selection, catalog)
+            if not selection_verdict.get("ok"):
+                raise PracticeError(CODE_BAD_REQUEST)
+            # The canonical host view's back/stake must equal the validated
+            # selection independently; a host-supplied view that disagrees with
+            # its own selection is refused before service setup.
+            if (
+                self.ranked_host.get("back") != selection_verdict["back_name"]
+                or self.ranked_host.get("stake") != selection_verdict["stake_index"]
+            ):
+                raise PracticeError(CODE_BAD_REQUEST)
+            # The dedicated draft commitment is MANDATORY under the Ranked
+            # schema. The service independently re-validates the bounded
+            # transcript, requires the digest to match the host's dedicated
+            # expected value (a caller-supplied digest is never trusted), and
+            # requires the final option to map back to the validated selection.
+            if not isinstance(self.draft, Mapping):
+                raise PracticeError(CODE_BAD_REQUEST)
+            if not isinstance(self.expected_draft_digest, str) or not DIGEST_PATTERN.match(
+                self.expected_draft_digest
+            ):
+                raise PracticeError(CODE_BAD_REQUEST)
+            commitment = ranked_draft_authority.commitment_from_public(self.draft)
+            if not commitment.get("ok"):
+                raise PracticeError(CODE_BAD_REQUEST)
+            if not hmac.compare_digest(
+                commitment["digest"].encode("utf-8"), self.expected_draft_digest.encode("utf-8")
+            ):
+                raise PracticeError(CODE_BAD_REQUEST)
+            # Resolve the final option against the catalog and require it to
+            # equal the selection bound into the lobby view.
+            decks = self.ranked_catalog.get("decks")
+            stakes = self.ranked_catalog.get("stakes")
+            try:
+                final_selection = ranked_draft_authority.selection_for_option(
+                    {"decks": decks, "stakes": stakes}, commitment["final"]
+                )
+            except ranked_draft_authority.DraftError:
+                raise PracticeError(CODE_BAD_REQUEST)
+            if final_selection != dict(self.selection):
+                raise PracticeError(CODE_BAD_REQUEST)
+            # M2: the trusted host gauntlet-seed derivation/binding is not
+            # provisioned in this source pass, so a Ranked gauntlet is refused
+            # explicitly before any quit rather than failing after launch.
+            if self.mode == "gauntlet":
+                raise PracticeError(CODE_BAD_REQUEST)
         if self.mode == "gauntlet":
             if self.gauntlet not in GAUNTLET_SEEDS:
                 raise PracticeError(CODE_BAD_REQUEST)
@@ -991,6 +1132,18 @@ class PracticeService:
         self.difficulty = config.difficulty
         self.content_hash = config.content_hash
         self.expected_config_digest = config.expected_config_digest
+        # The reported ruleset label is the actual registry key, never the policy
+        # difficulty relabelled as a ruleset.
+        self.config_schema = config.config_schema
+        self.ranked_host = config.ranked_host
+        self.ranked_resolved = config.ranked_resolved
+        self.selection = config.selection
+        self.ranked_catalog = config.ranked_catalog
+        self.draft = config.draft
+        self.expected_draft_digest = config.expected_draft_digest
+        self.ruleset_label = (
+            ranked_authority.RULESET_KEY if config.config_schema == RANKED_CONFIG_SCHEMA else RULESET
+        )
         self.decision_timeout = float(decision_timeout)
         self.role_timeout = float(role_timeout)
         # Bounded pre-start deadline: measured only after attestation, so an
@@ -1537,7 +1690,13 @@ class PracticeService:
                 return {"ok": False, "code": CODE_FROZEN}
             self._state.hello[role] = {"version": version, "content_digest": digest}
         self._milestone(f"hello_{role}")
-        return {"ok": True, "code": CODE_OK, "role": role, "ruleset": RULESET}
+        return {
+            "ok": True,
+            "code": CODE_OK,
+            "role": role,
+            "ruleset": self.ruleset_label,
+            "config_schema": self.config_schema,
+        }
 
     def _op_lobby_code(self, payload) -> dict:
         data = self._payload_dict(payload)
@@ -1565,10 +1724,44 @@ class PracticeService:
 
     def _op_ready(self, role: str, payload) -> dict:
         data = self._payload_dict(payload)
-        if data is None or set(data.keys()) != {"config_digest"}:
+        allowed = {"config_digest", "config_schema", "readiness", "draft_digest"}
+        if data is None or not set(data.keys()).issubset(allowed) or "config_digest" not in data:
             return {"ok": False, "code": CODE_BAD_PAYLOAD}
         digest = self._bounded_field(data.get("config_digest"), MAX_DIGEST_LEN)
         if digest is None or not DIGEST_PATTERN.match(digest):
+            return {"ok": False, "code": CODE_BAD_PAYLOAD}
+        schema = data.get("config_schema")
+        if self.config_schema is not None:
+            # The versioned Ranked contract must be carried explicitly and agree
+            # with the pinned schema; it is never inferred or defaulted.
+            if schema != self.config_schema:
+                return {"ok": False, "code": CODE_CONFIG_MISMATCH}
+            # The exact readiness record must be present and every value exactly
+            # true. This is not a generic client field: it is the record the
+            # source-authenticated runtime produces over the control channel.
+            readiness = data.get("readiness")
+            if not isinstance(readiness, Mapping) or set(readiness.keys()) != set(RANKED_READINESS_KEYS):
+                return {"ok": False, "code": CODE_BAD_PAYLOAD}
+            for key in RANKED_READINESS_KEYS:
+                value = readiness.get(key)
+                if key in RANKED_READINESS_EVIDENCE_KEYS:
+                    if not isinstance(value, bool):
+                        return {"ok": False, "code": CODE_NOT_READY}
+                elif value is not True:
+                    return {"ok": False, "code": CODE_NOT_READY}
+        elif schema is not None or "readiness" in data or "draft_digest" in data:
+            return {"ok": False, "code": CODE_BAD_PAYLOAD}
+        # The dedicated draft commitment digest must be carried and match the
+        # host's expected value whenever a draft is bound to this session. The
+        # runtime derives it independently from the public transcript; a missing
+        # or wrong digest is a config mismatch, never an echo of another role.
+        draft_digest = data.get("draft_digest")
+        if self.draft is not None:
+            if not isinstance(draft_digest, str) or not DIGEST_PATTERN.match(draft_digest):
+                return {"ok": False, "code": CODE_BAD_PAYLOAD}
+            if not hmac.compare_digest(draft_digest.encode("utf-8"), self.expected_draft_digest.encode("utf-8")):
+                return {"ok": False, "code": CODE_CONFIG_MISMATCH}
+        elif draft_digest is not None:
             return {"ok": False, "code": CODE_BAD_PAYLOAD}
         # M10: the runtime-computed actual digest must equal the trusted
         # host-derived expected digest, never just the other role's value.
@@ -1577,7 +1770,11 @@ class PracticeService:
         with self._lock:
             if self._state.started:
                 return {"ok": False, "code": CODE_FROZEN}
-            self._state.ready[role] = {"config_digest": digest}
+            self._state.ready[role] = {
+                "config_digest": digest,
+                "config_schema": schema,
+                "draft_digest": draft_digest,
+            }
         self._milestone(f"ready_{role}")
         return {"ok": True, "code": CODE_OK, "role": role}
 
@@ -1593,6 +1790,16 @@ class PracticeService:
             return {"ok": False, "code": CODE_CONFIG_MISMATCH}
         if ready["human"]["config_digest"] != self.expected_config_digest:
             return {"ok": False, "code": CODE_CONFIG_MISMATCH}
+        if self.config_schema is not None:
+            for role in ROLES:
+                if ready[role].get("config_schema") != self.config_schema:
+                    return {"ok": False, "code": CODE_CONFIG_MISMATCH}
+        # Every role must have reported the same, expected draft commitment
+        # digest whenever a draft is bound.
+        if self.draft is not None:
+            for role in ROLES:
+                if ready[role].get("draft_digest") != self.expected_draft_digest:
+                    return {"ok": False, "code": CODE_CONFIG_MISMATCH}
         with self._lock:
             self._state.started = True
         self._milestone("match_started")
@@ -1640,7 +1847,8 @@ class PracticeService:
                 "ok": True,
                 "code": CODE_OK,
                 "role": role,
-                "ruleset": RULESET,
+                "ruleset": self.ruleset_label,
+                "config_schema": self.config_schema,
                 "started": state.started,
                 "ended": state.ended,
                 "aborted": state.aborted,
@@ -1683,14 +1891,25 @@ class PracticeService:
             "ok": True,
             "code": CODE_OK,
             "role": role,
-            "ruleset": RULESET,
+            "ruleset": self.ruleset_label,
+            "config_schema": config.config_schema,
             "ruleset_id": config.ruleset_id,
             "gamemode": config.gamemode,
             # Forced config key names only (keyset metadata): the runtime must
             # read the actual values from the live ruleset locally and compute
-            # its own digest, never echo the expected digest back.
+            # its own digest, never echo the expected digest back. The Ranked
+            # path carries no forced-option keyset: the runtime reads the actual
+            # layered configuration itself.
             "forced_options": list(config.forced_option_keys),
             "expected_config_digest": self.expected_config_digest,
+            # The host-owned completed draft selection (exact keys/types) is
+            # carried under the Ranked schema; the runtime independently binds
+            # its final deck/stake against the actual initialized lobby.
+            "selection": dict(self.selection) if (config.config_schema and self.selection) else None,
+            # The dedicated completed-draft commitment (bounded public transcript
+            # and final option). The runtime independently validates it and
+            # derives the digest; the expected digest is never sent as evidence.
+            "draft": dict(config.draft) if (config.config_schema and config.draft) else None,
             "difficulty": self.difficulty,
             "pacing": config.pacing,
             "mode": config.mode,
@@ -1722,6 +1941,17 @@ class PracticeService:
             "decisions",
             "rejected",
             "errors",
+            # Version-2 receipt-counter semantics (H3). `rejected` counts a refused
+            # decision once per delivered sequence; the loop_* fields are separate,
+            # bounded wait/backoff metrics so idle frames are never mis-read as
+            # refused choices. `counter_version` lets a consumer tell the honest
+            # count apart from the historical idle-inflated `ai_rejected` totals.
+            "counter_version",
+            "loop_idle",
+            "loop_transient",
+            "loop_empty",
+            "loop_no_action",
+            "loop_waits",
         }
         if data is None or not set(data.keys()).issubset(allowed):
             return {"ok": False, "code": CODE_BAD_PAYLOAD}
@@ -1732,7 +1962,31 @@ class PracticeService:
             if text is None or text not in TERMINAL_RESULTS:
                 return {"ok": False, "code": CODE_BAD_PAYLOAD}
             summary["result"] = text
-        for key in ("human_lives", "ai_lives", "ante", "round", "decisions", "rejected", "errors"):
+        # H3/M2: the receipt-counter schema version is explicit. Only the current
+        # version is accepted; its absence is an older (legacy) receipt whose
+        # `rejected` counted idle frames. Booleans, fractional or unknown versions
+        # are refused so a malformed receipt can never masquerade as current.
+        if "counter_version" in data:
+            version = data["counter_version"]
+            if isinstance(version, bool) or not isinstance(version, int) or version != SERVICE_COUNTER_VERSION:
+                return {"ok": False, "code": CODE_BAD_PAYLOAD}
+            summary["counter_version"] = SERVICE_COUNTER_VERSION
+        else:
+            summary["counter_version"] = LEGACY_COUNTER_VERSION
+        for key in (
+            "human_lives",
+            "ai_lives",
+            "ante",
+            "round",
+            "decisions",
+            "rejected",
+            "errors",
+            "loop_idle",
+            "loop_transient",
+            "loop_empty",
+            "loop_no_action",
+            "loop_waits",
+        ):
             if key in data:
                 value = _bounded_int(data[key], 0, MAX_SEQUENCE)
                 if value is None:
@@ -1857,6 +2111,10 @@ class PracticeService:
             return None
         client = client if isinstance(client, Mapping) else {}
         ai = state.ai_end if isinstance(state.ai_end, Mapping) else {}
+        # The human receipt is always stored on the state (whichever END closes
+        # the phase), so its own counter version is read from there and is
+        # independent of END order.
+        human = state.human_end if isinstance(state.human_end, Mapping) else {}
 
         def merged(key: str, service_value: int) -> int:
             value = client.get(key)
@@ -1878,9 +2136,18 @@ class PracticeService:
                 state.duration_seconds if state.duration_seconds is not None else client.get("duration_seconds")
             ),
             "decisions": merged("decisions", state.decisions),
+            # Legacy aggregate: the service's own refused-decision total (one per
+            # delivered rejection receipt it received), max-merged with the human
+            # client's count. It is NOT per-role and is NOT the AI's loop metric.
             "rejected": merged("rejected", state.rejected),
             "errors": merged("errors", state.failures),
             "no_action": state.no_action,
+            # H3/M2: the service's OWN final summary always reports the current
+            # receipt-counter schema version, independent of which END arrived
+            # first and of the human client (who has no loop). The human receipt's
+            # own version is kept separately for provenance.
+            "counter_version": SERVICE_COUNTER_VERSION,
+            "human_counter_version": human.get("counter_version"),
             "terminal": True,
             "terminal_phase": state.terminal_phase,
             "human_end_received": state.human_end is not None,
@@ -1894,6 +2161,16 @@ class PracticeService:
             "ai_decisions": ai.get("decisions"),
             "ai_rejected": ai.get("rejected"),
             "ai_errors": ai.get("errors"),
+            # Version-2 receipt-counter semantics: the AI's honest receipt count
+            # and its separate wait/backoff metrics. `ai_rejected` from a legacy
+            # (version-1) AI receipt counted idle frames and is not comparable;
+            # `ai_counter_version` states which semantics produced it.
+            "ai_counter_version": ai.get("counter_version"),
+            "ai_loop_idle": ai.get("loop_idle"),
+            "ai_loop_transient": ai.get("loop_transient"),
+            "ai_loop_empty": ai.get("loop_empty"),
+            "ai_loop_no_action": ai.get("loop_no_action"),
+            "ai_loop_waits": ai.get("loop_waits"),
             "result_conflict": bool(
                 human_result is not None and ai_result is not None and human_result != ai_result
             ),
