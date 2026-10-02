@@ -25,6 +25,19 @@ mods['lovely-compat-aisparring-staging']=nil;assert(profile.inventory_ok(smods,m
 mods['lovely-compat-aisparring-staging']=guard
 assert(profile.approved_mods()['lovely-compat-aisparring-staging']=='0.0.0')
 assert(profile.content_unlocked(G)==true)
+-- Stock clean restart restores unlock metadata only to j_/b_/v_ centers.
+G.P_BLINDS.a.unlocked=nil;G.P_TAGS.a.unlocked=nil
+G.P_CENTERS.m_base={};G.P_CENTERS.c_planet={}
+assert(profile.content_unlocked(G)==true)
+G.P_CENTERS.j_inherited=setmetatable({}, {__index={unlocked=true}})
+assert(profile.content_unlocked(G)==true)
+G.P_CENTERS.j_inherited=setmetatable({}, {__index=function()error('unlock fault')end})
+assert(profile.content_unlocked(G)==nil)
+G.P_CENTERS.j_inherited={};assert(profile.content_unlocked(G)==false)
+G.P_CENTERS.j_inherited=nil
+G.P_CENTERS.v_locked={unlocked=false};assert(profile.content_unlocked(G)==false)
+G.P_CENTERS.v_locked=nil
+G.P_BLINDS.a.unlocked=true;G.P_TAGS.a.unlocked=true
 local facts=profile.facts(G,smods,mp,true)
 assert(facts.debug_disabled==true and facts.animations_normal==true and facts.handy_disabled==true)
 assert(facts.tutorial_ready==true)
@@ -70,6 +83,6 @@ def main():
         runtime=module.LuaRuntime(unpack_returned_tuples=True)
         runtime.globals().PROFILE_PATH=str(REPO/'AISparring/integration/ranked_profile.lua')
         assert runtime.execute(SCRIPT)
-        print(name+': 21 readiness/catalog controls passed; no native unlock claim')
+        print(name+': 26 readiness/catalog controls passed; no native unlock claim')
     return 0
 if __name__=='__main__':sys.exit(main())

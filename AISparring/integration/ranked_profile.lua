@@ -59,10 +59,23 @@ function Profile.content_unlocked(G)
 	for _, pool in ipairs({ "P_CENTERS", "P_BLINDS", "P_TAGS" }) do
 		local objects = get(G, pool)
 		if type(objects) ~= "table" or next(objects) == nil then return nil end
-		for _, object in pairs(objects) do
-			if type(object) ~= "table" then return nil end
-			if not rawget(object, "demo") and not rawget(object, "wip")
-				and rawget(object, "unlocked") ~= true then return false end
+		for key, object in pairs(objects) do
+			if type(key) ~= "string" or type(object) ~= "table" then return nil end
+			local demo, demo_ok = object_field(object, "demo")
+			local wip, wip_ok = object_field(object, "wip")
+			local unlocked, unlocked_ok = object_field(object, "unlocked")
+			if not demo_ok or not wip_ok or not unlocked_ok then return nil end
+			if demo ~= nil and type(demo) ~= "boolean" then return nil end
+			if wip ~= nil and type(wip) ~= "boolean" then return nil end
+			if not demo and not wip then
+				-- Game:init_item_prototypes restores meta.unlocked only for j_,
+				-- b_ and v_ centers and places those in P_LOCKED. Blinds/tags
+				-- restore discovery, not unlocks; nil is their normal boot state.
+				local unlockable = pool == "P_CENTERS" and
+					(key:match("^j_") or key:match("^b_") or key:match("^v_"))
+				if unlockable and unlocked ~= true then return false end
+				if not unlockable and unlocked ~= nil and unlocked ~= true then return false end
+			end
 		end
 	end
 	return true
