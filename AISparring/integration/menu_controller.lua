@@ -908,6 +908,8 @@ function MenuController.factory(ports)
 			return nil, CODE.DRAFT_REJECTED
 		end
 		if type(draft.required_count) ~= "number" or #draft_selection ~= draft.required_count then
+			draft_error = "Select " .. tostring(draft.required_count) .. " choices before confirming."
+			instance.refresh_draft_overlay()
 			return nil, CODE.DRAFT_REJECTED
 		end
 		if type(host.draft_action) ~= "function" then

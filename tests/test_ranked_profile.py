@@ -7,12 +7,15 @@ SCRIPT = r'''
 local profile = assert(loadfile(PROFILE_PATH))()
 local mods = {
  Steamodded={version='1.0.0~BETA-1620a',can_load=true},Lovely={version='0.9.0',can_load=true},
- Multiplayer={version='0.5.5',can_load=true},AISparring={version='0.1.0-dev',can_load=true},Balatro={version='1.0.1o'},
+ Handy={version='2.0.6',can_load=true},Multiplayer={version='0.5.5',can_load=true},AISparring={version='0.1.0-dev',can_load=true},Balatro={version='1.0.1o'},
  ['lovely-compat-aisparring-staging']={version='0.0.0',can_load=true,lovely=true,lovely_only=true,meta_mod=true},
 }
 local smods = {booted=true,Mods=mods,stake_from_index=function(i)
  return ({'stake_white','stake_red','stake_green','stake_black','stake_blue','stake_purple','stake_orange','stake_gold'})[i]
 end}
+local handy={MP={mod_type='pre_release',current={}},is_mp_lobby_extension_active=function()return false end,
+ speed_multiplier={get_value=function()return 1 end},animation_skip={get_value=function()return 1 end},
+ dangerous_actions={is_sell_disabled_in_mp=function()return true end,is_remove_disabled_in_mp=function()return true end}}
 local G = {DEBUG=false,SETTINGS={profile=1,GAMESPEED=1,tutorial_complete=true},PROFILES={{all_unlocked=true}},
  P_CENTERS={b_red={set='Back',name='Red Deck',unlocked=true},b_blue={set='Back',name='Blue Deck',unlocked=true},
  j_test={unlocked=true},j_demo={demo=true}}, P_BLINDS={a={unlocked=true}},P_TAGS={a={unlocked=true}}}
@@ -38,11 +41,11 @@ G.P_CENTERS.j_inherited=nil
 G.P_CENTERS.v_locked={unlocked=false};assert(profile.content_unlocked(G)==false)
 G.P_CENTERS.v_locked=nil
 G.P_BLINDS.a.unlocked=true;G.P_TAGS.a.unlocked=true
-local facts=profile.facts(G,smods,mp,true)
-assert(facts.debug_disabled==true and facts.animations_normal==true and facts.handy_disabled==true)
+local facts=profile.facts(G,smods,mp,true,handy)
+assert(facts.debug_disabled==true and facts.animations_normal==true and facts.handy_ranked_safe==true)
 assert(facts.tutorial_ready==true)
-G.SETTINGS.tutorial_progress={};assert(profile.facts(G,smods,mp,true).tutorial_ready==false);G.SETTINGS.tutorial_progress=nil
-G.SETTINGS.tutorial_complete='true';assert(profile.facts(G,smods,mp,true).tutorial_ready==false);G.SETTINGS.tutorial_complete=true
+G.SETTINGS.tutorial_progress={};assert(profile.facts(G,smods,mp,true,handy).tutorial_ready==false);G.SETTINGS.tutorial_progress=nil
+G.SETTINGS.tutorial_complete='true';assert(profile.facts(G,smods,mp,true,handy).tutorial_ready==false);G.SETTINGS.tutorial_complete=true
 local catalog=profile.catalog(G,smods,mp)
 assert(catalog.decks.red.center_key=='b_red' and catalog.stakes.green.index==3 and catalog.stakes.gold.index==8)
 assert(catalog.stakes.orange==nil and catalog.stakes.blue==nil)
@@ -60,12 +63,16 @@ G.P_CENTERS.b_inherited=setmetatable({}, {__index=function()error('field fault')
 assert(profile.catalog(G,smods,mp)==nil)
 G.P_CENTERS.b_inherited=nil;G.P_CENTERS.b_mp_test=nil
 mp.get_cocktail_decks=function()return {'b_red','b_blue'}end
-G.DEBUG=true;assert(profile.facts(G,smods,mp,true).debug_disabled==false)
-G.DEBUG=nil;assert(profile.facts(G,smods,mp,true).debug_disabled=='unknown');G.DEBUG=false
+G.DEBUG=true;assert(profile.facts(G,smods,mp,true,handy).debug_disabled==false)
+G.DEBUG=nil;assert(profile.facts(G,smods,mp,true,handy).debug_disabled=='unknown');G.DEBUG=false
 G.P_TAGS.a.unlocked=false;assert(profile.content_unlocked(G)==false);G.P_TAGS.a.unlocked=true
 G.P_BLINDS=nil;assert(profile.content_unlocked(G)==nil);G.P_BLINDS={a={unlocked=true}}
-mods.Handy={version='2.0.6',can_load=true};assert(profile.inventory_ok(smods,mp)==false)
-assert(profile.catalog(G,smods,mp)==nil);mods.Handy=nil
+mods.Handy.version='2.0.5';assert(profile.inventory_ok(smods,mp)==false)
+assert(profile.catalog(G,smods,mp)==nil);mods.Handy.version='2.0.6'
+assert(profile.handy_safe(mp,nil)=='unknown')
+handy.animation_skip.get_value=function()return 2 end;assert(profile.handy_safe(mp,handy)==false)
+handy.animation_skip.get_value=function()error('fault')end;assert(profile.handy_safe(mp,handy)=='unknown')
+handy.animation_skip.get_value=function()return 1 end
 mods.Multiplayer.version='0.5.4';assert(profile.inventory_ok(smods,mp)==false);mods.Multiplayer.version='0.5.5'
 mods.AISparring.disabled=true;assert(profile.inventory_ok(smods,mp)==false);mods.AISparring.disabled=nil
 mp.INTEGRATIONS.Preview=true;assert(profile.inventory_ok(smods,mp)==false);mp.INTEGRATIONS.Preview=false

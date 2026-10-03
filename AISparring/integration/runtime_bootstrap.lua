@@ -1896,7 +1896,7 @@ function RuntimeBootstrap.factory(ports)
 		-- or prior-run value. A gauntlet run must agree with the SETUP seed. The
 		-- guest never reports a seed and no seed is ever exported to policy.
 		if not seed_reported then
-			local seed_value = resolved_run_seed(G)
+			local seed_value = mp_driver.is_started() and resolved_run_seed(G) or nil
 			if seed_value ~= nil then
 				if human_seed ~= nil and seed_value ~= human_seed then
 					coord_failure = CODE.SEED_MISMATCH
@@ -2350,7 +2350,7 @@ function RuntimeBootstrap.factory(ports)
 		end
 
 		-- The policy loop only runs once the real match has started (the guest
-		-- from the server start, the host from its start callback); before that
+		-- from the initialized RUN stage for both roles); before that
 		-- the service would refuse every decision as not-started and burn the
 		-- loop's error budget.
 		local match_running = false

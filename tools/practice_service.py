@@ -171,7 +171,7 @@ RANKED_READINESS_KEYS = (
     "game_speed_ok",
     "debug_disabled",
     "animations_normal",
-    "handy_disabled",
+    "handy_ranked_safe",
 )
 # Raw integration evidence booleans may legitimately be false; every other key
 # must be exactly true.

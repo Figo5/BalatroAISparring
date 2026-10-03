@@ -2511,6 +2511,711 @@
           "size": 3354
         }
       }
+    },
+    "Handy": {
+      "path": "work/reference/Handy-2.0.6-ranked",
+      "files": {
+        ".gitignore": {
+          "sha256": "aa95e88927dce579d1a6df79d6f9084ced9969a5a3e2aab052f0ec1815788f39",
+          "size": 22
+        },
+        "LICENSE": {
+          "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+          "size": 35823
+        },
+        "README.md": {
+          "sha256": "4ae26ce83ae71a467791e88ea241189f2ce6a24ad4f4ea6890d58eec05c13beb",
+          "size": 5992
+        },
+        "assets/1x/hint_arrow.png": {
+          "sha256": "7324c68614bac5aa3ce56622abc7961fcbc79cadac3a346623689238400e43e7",
+          "size": 2991
+        },
+        "assets/1x/icon.png": {
+          "sha256": "7c9ef1f696fa0072ef548590af579c942b7111af781aae2b675b81f0831e56dd",
+          "size": 514
+        },
+        "assets/1x/me.png": {
+          "sha256": "fc50ab111abc5ccddaa8c6a46d8c10f98a1c4d118f6da4e50d088ad8669466f5",
+          "size": 15801
+        },
+        "assets/1x/me_joker.png": {
+          "sha256": "99b4f2b71716c6ce1e26acb9d4c466bc2a0cc9d3d648f9f7452f37bd1fbb0fbf",
+          "size": 3933
+        },
+        "assets/2x/hint_arrow.png": {
+          "sha256": "6a6b62423aed45b90c95a3209c416add42bebad16edd2bd8dd3feb94ed035518",
+          "size": 4295
+        },
+        "assets/2x/icon.png": {
+          "sha256": "3dcb132f7f3f19376a097e0c439802d3d3c3864408d7d9529cbc383f17b19a07",
+          "size": 584
+        },
+        "assets/2x/me.png": {
+          "sha256": "01da9973415fdbf07e73b2d6d5753ce3b61f37d548f6ca5d16f5c03b46ef4054",
+          "size": 26746
+        },
+        "assets/2x/me_joker.png": {
+          "sha256": "de60bddb26c05f7c8b676461ee54a7112dbfcc0f50edeb4b00ea28310c071e7d",
+          "size": 4575
+        },
+        "icon.png": {
+          "sha256": "b877aa1d9da1a08fca62a1da32b5877889b6f6e09299245ba86ee1aaeab5fb54",
+          "size": 65063
+        },
+        "index.lua": {
+          "sha256": "ff8b1d3069305da01998265a9abdc8a346625e72b17c5d23f107107b3f2849aa",
+          "size": 4379
+        },
+        "loc_txt/_es_419.lua": {
+          "sha256": "f66abad280e28105510bd80a564aa871ddc4d900761855055af44c6ce958566d",
+          "size": 30097
+        },
+        "loc_txt/_es_ES.lua": {
+          "sha256": "a5f69eb95deded67150b9b33df83a1b6577c8bae8a2c98eb377d31ba86292ac7",
+          "size": 30321
+        },
+        "loc_txt/en-us.lua": {
+          "sha256": "383399920df96b2359bb1344efde23e184207a3e489e6bf1a1a3a31ccd7cd0fe",
+          "size": 42797
+        },
+        "loc_txt/ru.lua": {
+          "sha256": "c3b63bc139531c42ee271553bf5d9167cb09031e5536e7dffbedf2d57f660e52",
+          "size": 58149
+        },
+        "loc_txt/vi.lua": {
+          "sha256": "0eb61ae0e7127aa8b989db8d70fb37beae5b6ab8d94c9a9c3417c9c54d8a2eae",
+          "size": 47797
+        },
+        "loc_txt/zh_CN.lua": {
+          "sha256": "05d18d25efa4853e60d573593c3eaf9b73882bac5fd67785c14e34340c0dc98a",
+          "size": 40172
+        },
+        "lovely/controller.toml": {
+          "sha256": "11f3a30a344a8bf4050440399fc5d7dd40bf12db90d84cf9f2cd7b8c7367df5c",
+          "size": 3686
+        },
+        "lovely/controls/animation_skip.toml": {
+          "sha256": "9d7d7ad9b76d8c1c4c9e4c36811fd6cae386df779e54a8fc25ca31c42b9d1918",
+          "size": 7776
+        },
+        "lovely/controls/deselect_hand.toml": {
+          "sha256": "bfe9bd63a7fd86fc6cecbaf1d1cfc1653c3f03bac5801b3a6a30cb28ac33f486",
+          "size": 341
+        },
+        "lovely/controls/hand_selection.toml": {
+          "sha256": "99bae6643950f47fa067a560cdc890fc7cfd01970310c6c79691167ac5a7c298",
+          "size": 505
+        },
+        "lovely/controls/insta_booster_skip.toml": {
+          "sha256": "629e5780a2422658fe61b5e7f396ebc79e89e28438268cc9d6a05079ccfd1c5f",
+          "size": 319
+        },
+        "lovely/controls/insta_cash_out.toml": {
+          "sha256": "f4a5a113c8a66dba10d51b7b7a263486152b4ed9f96b3367526584477edb3124",
+          "size": 896
+        },
+        "lovely/controls/mp_extension.toml": {
+          "sha256": "09a51584260b2b6c47f1cfe56ef5d6c9df2194d49a7d3192a23b70df7daeba6f",
+          "size": 1043
+        },
+        "lovely/controls/regular_keybinds.toml": {
+          "sha256": "e4e33fe8dfeb0c2d9435f9c56e8c1fc8baf66e6b8f6e918b20c416b13d53f839",
+          "size": 986
+        },
+        "lovely/controls/scoring_hold.toml": {
+          "sha256": "82870674b410759838f22729da135ab67f60d6e8724ced084aa454140fe2c4c1",
+          "size": 553
+        },
+        "lovely/controls/show_deck_preview.toml": {
+          "sha256": "db94f2b78890f31c3806f65e9353464a063088b29bd62febf63caeb3da908de4",
+          "size": 289
+        },
+        "lovely/controls/speed_multiplier.toml": {
+          "sha256": "e5cdbcb584da48e3254313a796052af57929a62d4b4ed78b5826e997e3e1bb8a",
+          "size": 908
+        },
+        "lovely/index.toml": {
+          "sha256": "e29120d71585a1371e6023b9ed3e91ad88f467c276ec21cf068e56f2147ba75b",
+          "size": 1865
+        },
+        "lovely/me.toml": {
+          "sha256": "01df44b57334a40ea6305e12d27fb051819d07e65d7ad3f6f043e6be3739dda3",
+          "size": 2380
+        },
+        "lovely/preflight.toml": {
+          "sha256": "751b8c5b1f082590190680b999460373181ccb5160cc95eaf2080ee3ac64806e",
+          "size": 285
+        },
+        "lovely/ui.toml": {
+          "sha256": "eb1a43f28e9b76bbb914bc5852917f238acd3d876479880c02e5366f48198695",
+          "size": 10507
+        },
+        "lovely/ui_fixes.toml": {
+          "sha256": "fb8ccaafdd8319cb44c20f7968150fa78a9673497f51aae81be9cef3f804d3d9",
+          "size": 5761
+        },
+        "lovely/updater.toml": {
+          "sha256": "97abb83da72853ca63fdf1451fd7633004852fa110b91f3e5a505e143ab221af",
+          "size": 359
+        },
+        "lsp_def/api.lua": {
+          "sha256": "54f1c6efce29e4a217bdba65effc0147b99c8611e47e89ecd0e82b5fe990aefc",
+          "size": 29
+        },
+        "lsp_def/contexts.lua": {
+          "sha256": "ce222969d18f0262d00b81f8b17ab2d8cc8b37de7dd646324e7d012d9344f687",
+          "size": 4294
+        },
+        "lsp_def/control.lua": {
+          "sha256": "9697c0159bd2adf9ade9fcc4f3974aaf4b5b8ac7d657604ae910d528b304d0ad",
+          "size": 2627
+        },
+        "lsp_def/default_config.lua": {
+          "sha256": "43acd7cd057386fbdcf1af21f275995800023810a140fab4842ba912b1a7b376",
+          "size": 992
+        },
+        "lsp_def/dictionary.lua": {
+          "sha256": "91b09c9d5b9c0e7ae3a400595914bfe1294ccd81311b932764045b051c2a82cd",
+          "size": 4222
+        },
+        "lsp_def/e_mitter.lua": {
+          "sha256": "8a2fbe3b62a6fe4828d1b80075d5a268033c54340afeaa1cf000b77a45849e1e",
+          "size": 578
+        },
+        "lsp_def/keys.lua": {
+          "sha256": "b91c6d25d3257544d398042c0e25439ed72ec80fad2eaa6618c312de015983ca",
+          "size": 2085
+        },
+        "lsp_def/stack.lua": {
+          "sha256": "937ce5f99c2c3a0c7dcb424d72197fe1e333f9632e26ba4c5e130b1d76f9f22f",
+          "size": 1084
+        },
+        "lsp_def/stack_snapshot.txt": {
+          "sha256": "162535b1bb07ee3d2c427123cebb4e96a73446d826ae5a12c340ae8252e4da13",
+          "size": 7502
+        },
+        "manifest.json": {
+          "sha256": "731bf3984c77045f8df54754ff8ca007244406cc7caeb81af586ca223c3c4ac1",
+          "size": 234
+        },
+        "metadata.json": {
+          "sha256": "12530115e8460048a7f36bbc634e0986be6f11d15a36ed602061bf4aeddf683a",
+          "size": 361
+        },
+        "preflight.lua": {
+          "sha256": "62989b5aaba3475600750f46bb6e8c0fd78e054a76b86031be686f1bfd9021f7",
+          "size": 28
+        },
+        "src/controls/animation_skip/event_manager.lua": {
+          "sha256": "f5fb1f2c143c5e798e4fd967979a5fb06c422b197d890384d8bf92b0183af79e",
+          "size": 1979
+        },
+        "src/controls/animation_skip/event_queue_debug.lua": {
+          "sha256": "bcf14693f15d2b422f87ffaf83934a1bb471a3225c1e5cc0bd930ebdbb3dcbaf",
+          "size": 591
+        },
+        "src/controls/animation_skip/hooks.lua": {
+          "sha256": "09e984b48d6760848b7b9006c47649e4f9d8ed6ca9585055b77d6c9096fdb9eb",
+          "size": 5922
+        },
+        "src/controls/animation_skip/index.lua": {
+          "sha256": "e6472e49cfa09601252ba7082e1e9b319c18da016b709b23023dba0345ffe207",
+          "size": 8820
+        },
+        "src/controls/controller_sensitivity.lua": {
+          "sha256": "20f0d4cc5bc51a99d69003f13a6f050b9b74b2b28218249ebbf29ba7b7f3f7cc",
+          "size": 819
+        },
+        "src/controls/dangerous_actions/card_executing.lua": {
+          "sha256": "b10a0b33dd63886e97d406aecd32223b5d15237e785a98c83a2812ce6b3af59b",
+          "size": 2104
+        },
+        "src/controls/dangerous_actions/index.lua": {
+          "sha256": "6d58ccf21dde12fa70af4b7d79697b9f301965d74ee4b6bdf18f9581fa863d01",
+          "size": 7249
+        },
+        "src/controls/dangerous_actions/tag_executing.lua": {
+          "sha256": "f9036485f70c7ef4b1633247405dc0cf87d1587844e6d9892fa6a49f028fcd74",
+          "size": 1776
+        },
+        "src/controls/debug_things.lua": {
+          "sha256": "d5ee95a28b384da9089da0226a6a904f0c180802215fb4fd32fd1f82fd351430",
+          "size": 932
+        },
+        "src/controls/hand_selection.lua": {
+          "sha256": "2f2a9605aa6212e5b31562c5db0c900f8bf5a5d52cfabcaf8c91cb29f1427810",
+          "size": 4634
+        },
+        "src/controls/insta_actions/buttons.lua": {
+          "sha256": "59d0aad5d3bf881f0568eaba67ddf82392ba2ca121aefb70bfa86e1edfc9d369",
+          "size": 7587
+        },
+        "src/controls/insta_actions/card_executing.lua": {
+          "sha256": "e049cc6a2ca0135c2f8228fe943719c54c99bc3a73fa3d75693a0daa24486d56",
+          "size": 4757
+        },
+        "src/controls/insta_actions/index.lua": {
+          "sha256": "f6b99fcf29a59de891a9122aa7e70900c95f989f1aa14f604cc024e6f345e12b",
+          "size": 3225
+        },
+        "src/controls/move_highlight.lua": {
+          "sha256": "f4b2dec4e546ea50d592ac05365830ed136cb96378695fdb60fd05fad4e69b4f",
+          "size": 4677
+        },
+        "src/controls/presets_switch.lua": {
+          "sha256": "a62fb7a7e2b9d133418c1fd3eca93b83247d5c9ae894ff98ffc3a0cec8116e92",
+          "size": 2470
+        },
+        "src/controls/regular_keybinds/hooks.lua": {
+          "sha256": "0c605d2a4e5d27b5a2e833f17d58232f64435b7fe21da542558932753fa355ba",
+          "size": 840
+        },
+        "src/controls/regular_keybinds/index.lua": {
+          "sha256": "d2d285d267c9395bd6db48f5d87f6e7664a31f7687aeaeb1035baaa53241d5f3",
+          "size": 802
+        },
+        "src/controls/regular_keybinds/save_run.lua": {
+          "sha256": "e0c1318aa6a75d75a166878738940c518e8951f19533cd567bfeec617468838d",
+          "size": 2762
+        },
+        "src/controls/regular_keybinds/sorting.lua": {
+          "sha256": "09ac88db40626ec72d439d95a9a3ce90d0832778121a656c9791809fe0fd9801",
+          "size": 1732
+        },
+        "src/controls/regular_keybinds/swappable_menus.lua": {
+          "sha256": "45c1d9a8674d5a3aab6909b05031fce4476611db0951be78dceb3e2ab0a912bb",
+          "size": 2101
+        },
+        "src/controls/scoring_hold.lua": {
+          "sha256": "a488f6e007b708c30fc919d35efd2d64f462d966aa8839137ce1d1557a7f7755",
+          "size": 3516
+        },
+        "src/controls/speed_multiplier/hooks.lua": {
+          "sha256": "6eb77cd5ea9705965f49d42373baecebf059b185ee058e85012e81f47ab25bff",
+          "size": 2746
+        },
+        "src/controls/speed_multiplier/index.lua": {
+          "sha256": "f47d2bc4a13142306539bbca9074654cc76742bb7e92735f2772e9977844ad79",
+          "size": 9480
+        },
+        "src/core/api.lua": {
+          "sha256": "67df55583f63f8743642d828c08534b73707fbe446e122c695f918ceb969939a",
+          "size": 720
+        },
+        "src/core/buffer.lua": {
+          "sha256": "3174ed29ca9dfffd60cac514ce5490473350bf65a809e02831b889bcac4b51b3",
+          "size": 289
+        },
+        "src/core/config/default_config.lua": {
+          "sha256": "7ccb4e00e3c92a5103db16682087ea224182b054dbf7bcd7a97410563e45fd5a",
+          "size": 21035
+        },
+        "src/core/config/index.lua": {
+          "sha256": "31395a97a4e93a0432dea6b6f774cded874c70b342ba0abbe3e1fd6b363ced01",
+          "size": 11982
+        },
+        "src/core/config/module_overrides.lua": {
+          "sha256": "ec81cd238a44090f3e14f02e0b680f619ed13a85d34917d3d512ee3a86571aae",
+          "size": 603
+        },
+        "src/core/controller/binding.lua": {
+          "sha256": "6649282b2e1c2de14dc1ab2835c7449ec8da863fe8851b7b3075123d9672e0fe",
+          "size": 5612
+        },
+        "src/core/controller/contexts.lua": {
+          "sha256": "f1d444cf07cfeab842c66bcef5ce354cb3cd6a5d7e7970698f9ae343c40bc025",
+          "size": 10183
+        },
+        "src/core/controller/debugplus.lua": {
+          "sha256": "ce9aded7ad56c2f9a2f4b29b4fb634a8804d1cb844b590eee3e93459defffcba",
+          "size": 2473
+        },
+        "src/core/controller/device.lua": {
+          "sha256": "31223f2d0859f827f655288494c47f74c6fadd95720c27a8969bb12b7dc5146c",
+          "size": 1472
+        },
+        "src/core/controller/gamepad.lua": {
+          "sha256": "6c46de51c03225190f891600b76936ef36df62febe4e8befc5fa6b101cf366f7",
+          "size": 10831
+        },
+        "src/core/controller/index.lua": {
+          "sha256": "cfec68564b16167efd9900a4aa4a813c681e25aa9a8707ec2219da24df599cf2",
+          "size": 6786
+        },
+        "src/core/controller/key_states.lua": {
+          "sha256": "fc0995afdafdcc711f852b9b38cdf40764aa83cd2b307030068a2d25f122ddbf",
+          "size": 6397
+        },
+        "src/core/controller/keys.lua": {
+          "sha256": "54c0637c669ec5eeef6235ad957f680c9dd04c7c032dcaad6941e67b8e022e58",
+          "size": 6675
+        },
+        "src/core/controls.lua": {
+          "sha256": "6bfe9e1e711d1bacba6acc35c6f5aa7c0f1ca3967ebf2b78b89744b3330946d3",
+          "size": 5797
+        },
+        "src/core/dictionary.lua": {
+          "sha256": "e5da1bc70fe5bab386cb4cd076d70c3345a258d55b60cbad6bed27de53d21f59",
+          "size": 6547
+        },
+        "src/core/e_mitter.lua": {
+          "sha256": "1e16334b9ed1a7e86df6a83b7f17206ff9a107f995a0052a2c650cdf96c44228",
+          "size": 1452
+        },
+        "src/core/fake_events.lua": {
+          "sha256": "c93a730b61a5901380188593656c72f7b3f05feb7ef7e7f8e44b9d7f05974f48",
+          "size": 2064
+        },
+        "src/core/flags.lua": {
+          "sha256": "145580a2cbe151f4d63a290e05ddcb92fd5331828d94989cf55d5846c04edc2b",
+          "size": 1491
+        },
+        "src/core/index.lua": {
+          "sha256": "a7dda6a90a19e4a229130c788433794bd2c398d597c82e8c713f26b3500014e8",
+          "size": 559
+        },
+        "src/core/localization.lua": {
+          "sha256": "c8ff34841777fa5e114478bf0f96d241a475e5fcb8357a9aa6d57695a6f87e2b",
+          "size": 7485
+        },
+        "src/core/me.lua": {
+          "sha256": "5c9b2353e2286987a869fd14cb425ea11fa12a71675e4e96d66b48df8a00b1aa",
+          "size": 1483
+        },
+        "src/core/presets/default_config.lua": {
+          "sha256": "59489ee24999dc1d736da453f0595c1513109fa54379f6ce8b23a445e213db6d",
+          "size": 377
+        },
+        "src/core/presets/examples.lua": {
+          "sha256": "fa406968fe88eea1670adf6952cf3f2e91b79e6a2cc1b5de15ec01e801364572",
+          "size": 1984
+        },
+        "src/core/presets/index.lua": {
+          "sha256": "5929f8707e5ee7b1a9e90801f6e5572ac2583ed28d1951ef8e94c242bd9815f5",
+          "size": 4449
+        },
+        "src/core/stack.lua": {
+          "sha256": "9834a2c3aff0496ea07e36e7563d173cdaf95b099f5fb0a643a1654b64d91d3e",
+          "size": 5106
+        },
+        "src/core/updater/index.lua": {
+          "sha256": "401a9505c8021c409482fe3e5b22eb68dc03b12f3690e6b6ce04d1863256a844",
+          "size": 11334
+        },
+        "src/core/updater/updater_thread.lua": {
+          "sha256": "a21f3f0ca40b88b5ee0bf9afba83e9768722debd82274a369907171cd49f4980",
+          "size": 10859
+        },
+        "src/core/updater/versioner.lua": {
+          "sha256": "9c2e80c9c28091609f0c7a995562deda5b42906995f8b181284cfc19ecd41a64",
+          "size": 2263
+        },
+        "src/core/utils/dictionary.lua": {
+          "sha256": "f5a39c4539ccb9417b51b09b57b2291d2c94abcf943d1b3570cbf13c156b3c4b",
+          "size": 631
+        },
+        "src/core/utils/index.lua": {
+          "sha256": "cda4957403b84353543fc71a8a6f9b6d191f3341ab9fd58c5e377cb44672f9b1",
+          "size": 3382
+        },
+        "src/core/utils/keys_sort.lua": {
+          "sha256": "3b70c1b8ef0bf17199540b67ada19ae65d7adf29d0de2b94ca4a28c6fd8ef563",
+          "size": 2874
+        },
+        "src/core/utils/table.lua": {
+          "sha256": "45502fe25183294bf0ff786178a92b7da0b9d90131da8e9207f65055d096da92",
+          "size": 6468
+        },
+        "src/definitions/controls/animation_skip.lua": {
+          "sha256": "8e54738caa1fad83fa95b8723b2fa00a63e23db2258920e423e7ddcaca3db11d",
+          "size": 1106
+        },
+        "src/definitions/controls/dangerous_actions/mass_sell.lua": {
+          "sha256": "844dc913bf149f682193cc6f7a6e8280466688613b4fbd0da627667faff7e348",
+          "size": 3193
+        },
+        "src/definitions/controls/dangerous_actions/other.lua": {
+          "sha256": "dbc09580edf6758de47085f03c2580f4570b0590b9fd956594d606cc81c8ddcf",
+          "size": 1520
+        },
+        "src/definitions/controls/debug_things.lua": {
+          "sha256": "150ef0d23cde1eee46011133e44d883153443ebe0831c4c9dcc702353311d547",
+          "size": 1130
+        },
+        "src/definitions/controls/hand_selection.lua": {
+          "sha256": "a93cafd7822faf0306d791d32976574950286d2da9ac0f5d2f372024f73cfc68",
+          "size": 5596
+        },
+        "src/definitions/controls/insta_actions.lua": {
+          "sha256": "84de316e634d101756ad1cd9136a7829d38b9dc442f461f7aee3d6c386c91e39",
+          "size": 905
+        },
+        "src/definitions/controls/move_highlight.lua": {
+          "sha256": "1d3046c8d896fb2d5ff71fb66327bb183246629a1815c91d044c37b1ce71dfe0",
+          "size": 421
+        },
+        "src/definitions/controls/presets_switch.lua": {
+          "sha256": "72eb178c1e79ac8f21e465877947aafb78b1681313e4d88540f7404f14c97e44",
+          "size": 494
+        },
+        "src/definitions/controls/regular_keybinds/blind_select.lua": {
+          "sha256": "323be2cde0a4849c2b62fa1b9a894b7cc20cc5abdab886b2530747a3724c5ee7",
+          "size": 3087
+        },
+        "src/definitions/controls/regular_keybinds/game.lua": {
+          "sha256": "a09c02e5171d79a3bd066a4e6fad9e96a93978cc198af45fe6e249fcc57ce142",
+          "size": 6392
+        },
+        "src/definitions/controls/regular_keybinds/hand.lua": {
+          "sha256": "e319fb1dc5a56f6a1c8612a97b68345fe5de2f00c566613b4c3c18b210286b90",
+          "size": 3953
+        },
+        "src/definitions/controls/regular_keybinds/menus.lua": {
+          "sha256": "0ab3df4e7453a02e770ef63f51ddf17e2a5b4ac29b73e6482ff45ca117b35031",
+          "size": 2363
+        },
+        "src/definitions/controls/regular_keybinds/round.lua": {
+          "sha256": "33d37fa9a863315be6edb3e153df6d6fe7e35aa5bc73e4c2dc6f5d7965f52884",
+          "size": 2786
+        },
+        "src/definitions/controls/regular_keybinds/shop.lua": {
+          "sha256": "ec22a5e9e325d30492e2b7d946b29fac07a55f33f848faaa133114bf97cf1960",
+          "size": 3085
+        },
+        "src/definitions/controls/regular_keybinds/swappable_menus.lua": {
+          "sha256": "a36ebea1f4ef1a1461dd673a208d725613d1e55fd56ba5caa3795e94b3aba6e1",
+          "size": 3464
+        },
+        "src/definitions/controls/scoring_hold.lua": {
+          "sha256": "8aa174704ebd93cfab695e3c9df08f864577f48e6f74ae559bf655efe30d0d83",
+          "size": 493
+        },
+        "src/definitions/controls/speed_multiplier.lua": {
+          "sha256": "133f9f2fc5c73f365649d9714464c3dc36fb5e521e8c2c07485227398cfb9133",
+          "size": 1128
+        },
+        "src/definitions/dictionary/animation_skip.lua": {
+          "sha256": "5f8aa21d802eb996db32120de5cfd8b6c3e0a5f5c63261c3eb03dc39287529b6",
+          "size": 4554
+        },
+        "src/definitions/dictionary/appearance.lua": {
+          "sha256": "64335b908ba6770c61f298cb262929262440178f9488eb55d2f5369cf08b3a37",
+          "size": 3067
+        },
+        "src/definitions/dictionary/dangerous_actions.lua": {
+          "sha256": "3207d5f33e6ed003705cf7d42b422fcbca57f20196f12f81a27ec8f8d79149aa",
+          "size": 4461
+        },
+        "src/definitions/dictionary/debug_things.lua": {
+          "sha256": "815b26f722660f7ac57063682b66123eb48e99e9534dfb8b6a7eff1a6165c637",
+          "size": 1467
+        },
+        "src/definitions/dictionary/gamepad.lua": {
+          "sha256": "9a80bd5996cbba848ac2c7c3341bc9e80e3c0b9dc167048f02679f067a3eb374",
+          "size": 1060
+        },
+        "src/definitions/dictionary/general.lua": {
+          "sha256": "c74143037c6c27b0c68772da6e88782460688bddc6939c3d9f1d77d125caff57",
+          "size": 1951
+        },
+        "src/definitions/dictionary/hand_selection.lua": {
+          "sha256": "90601e6ccffa701bf4bc004634290c1ec3fd745d55222324f41689a64b8cfc6f",
+          "size": 4019
+        },
+        "src/definitions/dictionary/insta_actions.lua": {
+          "sha256": "29ecf9b0b8ff4f599ad21eb9ebcd34f3adb7c0f9021d4c6a1dbecf54cc1dd007",
+          "size": 3120
+        },
+        "src/definitions/dictionary/me.lua": {
+          "sha256": "8b7a8697f6e82f77ccba5e955790c23e3eec268767a485b19f029b91bd02f292",
+          "size": 937
+        },
+        "src/definitions/dictionary/move_highlight.lua": {
+          "sha256": "d778347de76ff556ef3b5d1613f7f28d5dc7e9806bee1ab30bcfa0489bfd32a8",
+          "size": 1837
+        },
+        "src/definitions/dictionary/mp_extension.lua": {
+          "sha256": "c8d1eb31f64d4d9c74e3f9ff78bc4712e68b1d65a6fc3b436ff6707fb5bf69a7",
+          "size": 281
+        },
+        "src/definitions/dictionary/presets.lua": {
+          "sha256": "d3c9722eb4257a0d7c05f9126966e83629a546bc4e9deba74970e444f39c86c9",
+          "size": 1647
+        },
+        "src/definitions/dictionary/regular_keybinds.lua": {
+          "sha256": "270494f4a731ee2e1a3fdf75d8b56fd58c8ff926d356c122d3410032d405eae1",
+          "size": 15317
+        },
+        "src/definitions/dictionary/scoring_hold.lua": {
+          "sha256": "bf579e35c94d737c11e781bcf4c96957dc592e6519ad0729c50de0209f5d2fbe",
+          "size": 656
+        },
+        "src/definitions/dictionary/speed_multiplier.lua": {
+          "sha256": "20ad8d5451e20d6b867378e7af3cf572118adbdd975472144b38d2bcb1d68c4e",
+          "size": 4112
+        },
+        "src/definitions/dictionary/updater.lua": {
+          "sha256": "8fa0423b870fc0abfa7ecd3acdc552c648b4feb2cf5c56a0520439c06345bb09",
+          "size": 1823
+        },
+        "src/definitions/stack/card.lua": {
+          "sha256": "899fe4d4f107290f8f665010dc8f449d77091ec37cd6e06024309d6923366c01",
+          "size": 1135
+        },
+        "src/definitions/stack/hold.lua": {
+          "sha256": "95d571a04c21149967780e0a4699f0864a6e138db8b473a8377e98683343fd0e",
+          "size": 1304
+        },
+        "src/definitions/stack/input.lua": {
+          "sha256": "ddcfd6585bae516b2e5ee0c24686897ef3941540ac848db351f95b358884a3f5",
+          "size": 8562
+        },
+        "src/definitions/stack/move.lua": {
+          "sha256": "6f8fee0ad45630fd18108a2b6ded75ee6d840341b2df162bb24376c8423833f2",
+          "size": 320
+        },
+        "src/definitions/stack/tag.lua": {
+          "sha256": "2e5c4ea61bac97a0548a3fce443ee436c1376a64424ac386897014a288b5d299",
+          "size": 610
+        },
+        "src/index.lua": {
+          "sha256": "5d682e0001dffa51df422e9aedc9e077629c2fb7ddfd5f45467961a87eebd446",
+          "size": 2459
+        },
+        "src/libs/json.lua": {
+          "sha256": "9918c1683579a0ba03f8c099cb278b0a0255764dc0bf2186bf5549450c88a8b2",
+          "size": 9461
+        },
+        "src/libs/nativefs.lua": {
+          "sha256": "6c77f1fc2314a098e09ffd0c76b4518e0ed65099105675567d835afed86cabfb",
+          "size": 15195
+        },
+        "src/mp_extension/base.lua": {
+          "sha256": "d443749e72fd0dfe4aa03673e2401252934b774d9bbfef89769371122fd41542",
+          "size": 418
+        },
+        "src/mp_extension/index.lua": {
+          "sha256": "fa64fe621b77d0e36afacf9bb88bbe4076b75e48d8409f9c46de7cc7b6a8d2aa",
+          "size": 2081
+        },
+        "src/mp_extension/mp_api.lua": {
+          "sha256": "300848312f55884c0a9773801405a888558899eeaa72b732332f9913e4632123",
+          "size": 1957
+        },
+        "src/mp_extension/pre_release.lua": {
+          "sha256": "e97bb03d3a47e6debf406b08460a02dec48dd80920f407b2654021a97ad73ca5",
+          "size": 15626
+        },
+        "src/preflight.lua": {
+          "sha256": "4622cb328a447c90e57b352aed29087438c4b95cd31ef33cd3689098c75dc854",
+          "size": 2247
+        },
+        "src/ui/assets.lua": {
+          "sha256": "1488d8b743ddd3fed695ec65e15bbd53c2d318d5b131688d325afbcd8a4da742",
+          "size": 1747
+        },
+        "src/ui/characters.lua": {
+          "sha256": "10b6bf1f704daec49be826dc63f6f6b979b10e7e3355779c6a92cc205af83e66",
+          "size": 10940
+        },
+        "src/ui/components/controls.lua": {
+          "sha256": "4d5cab050d282aaebc60b5d1c4af8b5672f07bc83d9e99ebc819a5ed80f0191c",
+          "size": 12817
+        },
+        "src/ui/components/dictionary.lua": {
+          "sha256": "08a5cca86819d3f16a13aa9e8a224509db54a2aaa331f6b49619ef2ef8905cd6",
+          "size": 20802
+        },
+        "src/ui/components/index.lua": {
+          "sha256": "016b0b9657336ff5fcbf7439d16afa000a27fc9173c9aedf7233795aafcc4f69",
+          "size": 120
+        },
+        "src/ui/components/layout.lua": {
+          "sha256": "a06e62eb9c75b5d0641c8731e09043ca8bd9c2938ee8d4acc2893b6c0b4b93bb",
+          "size": 7858
+        },
+        "src/ui/game_settings.lua": {
+          "sha256": "ceb040f64760431b67e82feb0dccb799eb98e1bfb598dde3c46143d1bf261a3e",
+          "size": 2230
+        },
+        "src/ui/gamepad.lua": {
+          "sha256": "f4c65c18e6503e47603599d0b65599e197e19b1373378b72c278cb2b3b99a7e6",
+          "size": 6638
+        },
+        "src/ui/index.lua": {
+          "sha256": "eebdf238ef53ea8e4eda43d0479a3d9f8a1cd5d9290f511d1c6c6583421f59fc",
+          "size": 2813
+        },
+        "src/ui/options.lua": {
+          "sha256": "d8cefa14a73c452c4995aeb2b9e57cf4d6fcae390f017bd14357cfe821eac56f",
+          "size": 5957
+        },
+        "src/ui/pages/appearance.lua": {
+          "sha256": "e2a1212546749ffc28a37c3dd84a1d072570276eaac7c963ac146a8206a18517",
+          "size": 4077
+        },
+        "src/ui/pages/dangerous.lua": {
+          "sha256": "3fe67d0ce1d5708df0827a74187cb7b4bb46f7c16535731120c2487675a4bd2e",
+          "size": 6932
+        },
+        "src/ui/pages/hand_selection.lua": {
+          "sha256": "6e8646a207688f0a588a23269070fb3f0d6085a72d6a9ccf51a3d121baa9fd75",
+          "size": 6764
+        },
+        "src/ui/pages/highlight_movement.lua": {
+          "sha256": "beb5485a6dc3cd4d4fb7e00c89c3af93f6373c8d5999018f50a438b4eb47126e",
+          "size": 3513
+        },
+        "src/ui/pages/insta_actions.lua": {
+          "sha256": "96fa119848b87ff90899948bc5d4767d7064ecaf649fa52cbc64991dfe8b5281",
+          "size": 8150
+        },
+        "src/ui/pages/mp_extension.lua": {
+          "sha256": "666d94aeccb1247ac40642d1ab964919c4f3319b1a60af07eb9dc1c4c0ae91be",
+          "size": 2201
+        },
+        "src/ui/pages/speed_n_animations.lua": {
+          "sha256": "f87a7ef9ec419f1d999072ef193f029c853c60cb5ce4145dd705bb83469e63d5",
+          "size": 13061
+        },
+        "src/ui/pages/updater.lua": {
+          "sha256": "c9fbdbe2dc31410b9ea0dd38a2d0b058c3eb83b4b44f5c74befd262171fefced",
+          "size": 11742
+        },
+        "src/ui/pages/vanilla_keybinds.lua": {
+          "sha256": "4eb5ec0bd7fd8464f382b0c8b50a09bf575332e45fd395ce8910a9544d93c386",
+          "size": 9686
+        },
+        "src/ui/side_panel.lua": {
+          "sha256": "68b1b88f4643c1e9b21ba72b910bc2477b6d8431a72a268737835f2cc4ba1e67",
+          "size": 3017
+        },
+        "src/ui/state_panel.lua": {
+          "sha256": "9f51842122a0e3daf38ed835d075df1432841912d64e432260dee99ff4d6bf5a",
+          "size": 6387
+        },
+        "src/ui/tabs/dictionary.lua": {
+          "sha256": "aea1b7bb0881ed5cefb23fe390e213aee579266d6e1f4b992dc9afa30d8eeae2",
+          "size": 15070
+        },
+        "src/ui/tabs/overall.lua": {
+          "sha256": "04a5bc10ce142e4dcffee1bc3d9e53b7d97b11c7b112d718cebddd4445e7ff9f",
+          "size": 6993
+        },
+        "src/ui/tabs/presets.lua": {
+          "sha256": "b9cc98ab83759c5c4fc6d85bbe7a6c07bcc7bb6bb2be605a6ebc0e251c5af62d",
+          "size": 8379
+        },
+        "src/ui/utils.lua": {
+          "sha256": "1f1ca9c7ab3ac194a5c3f4271cda6d2f0b76eab46995a2ba785ede10ddb26e65",
+          "size": 15651
+        },
+        "steamodded.lua": {
+          "sha256": "fe4adc23ab60229f87ec98f138824976aeedf94188f96d013729489bccd4cde5",
+          "size": 1467
+        }
+      }
     }
   },
   "lovely_sha256": "ccfed59e4d245b7802c684fc86708e0a937f584d6e07d1ecc11e8eae22f9fc1a"

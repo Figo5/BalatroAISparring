@@ -92,7 +92,7 @@ MPDriver.READINESS_KEYS = {
 	"game_speed_ok",
 	"debug_disabled",
 	"animations_normal",
-	"handy_disabled",
+	"handy_ranked_safe",
 }
 
 -- Raw integration evidence booleans: allowed to be false; a separate predicate
@@ -414,13 +414,14 @@ function MPDriver.factory(ports)
 	-- produced. Used for the source-derived expected/actual digest.
 	local forced_keys = nil
 	local forced_gamemode = nil
+	local start_requested = false
 
 	local function match_started()
 		if started then
 			return true
 		end
 		-- The pinned Multiplayer source has no `MP.is_started` and never sets
-		-- `MP.LOBBY.started` (only the human-only `host_start_game` does). The
+		-- `MP.LOBBY.started`. Sending startGame does not initialize a run. The
 		-- real, source-visible signal is the ordinary RUN stage reached by the
 		-- normal Multiplayer start while the lobby is joined. Latch it: once a
 		-- real match is running it never un-starts from a later teardown frame.
@@ -1009,12 +1010,12 @@ function MPDriver.factory(ports)
 		-- faulting producers remain unknown and block READY.
 		facts.debug_disabled = "unknown"
 		facts.animations_normal = "unknown"
-		facts.handy_disabled = "unknown"
+		facts.handy_ranked_safe = "unknown"
 		local producer = rawget(ports, "ranked_profile_facts")
 		if type(producer) == "function" then
 			local ok, actual = pcall(producer)
 			if ok and type(actual) == "table" then
-				for _, key in ipairs({ "debug_disabled", "animations_normal", "handy_disabled" }) do
+				for _, key in ipairs({ "debug_disabled", "animations_normal", "handy_ranked_safe" }) do
 					local value = rawget(actual, key)
 					if type(value) == "boolean" then facts[key] = value end
 				end
@@ -1135,6 +1136,24 @@ function MPDriver.factory(ports)
 		-- source-justified engine keys ruleset/gamemode. Any other raw key is an
 		-- injected field and is refused rather than silently dropped.
 		local allowed = { ruleset = true, gamemode = true }
+		-- Handy 2.0.6 adds these options in its real reset_lobby_config hook.
+		-- Only the complete, fixed Ranked-safe configuration is permitted;
+		-- forced speed/skip overrides and every unknown field remain refused.
+		local handy_options = {
+			handy_mp_extension = true, handy_allow_mp_extension = false,
+			handy_speed_multiplier_mode = 1, handy_animation_skip_mode = 1,
+			handy_dangerous_actions_mode = 1,
+		}
+		local has_handy = false
+		for key in pairs(handy_options) do
+			if rawget(config, key) ~= nil then has_handy = true end
+		end
+		if has_handy then
+			for key, value in pairs(handy_options) do
+				if rawget(config, key) ~= value then return nil, CODE.BAD_DIGEST end
+				allowed[key] = true
+			end
+		end
 		for i = 1, #ranked_config.LOBBY_ORDER do
 			allowed[ranked_config.LOBBY_ORDER[i]] = true
 		end
@@ -1442,6 +1461,15 @@ function MPDriver.factory(ports)
 								mp.LOBBY.config.different_decks = false
 								mp.LOBBY.config.random_loadout = false
 							end
+							-- Retain Handy's legal hotkeys, with its actual MP
+							-- extension unable to enable speed/animation overrides.
+							if mp.LOBBY.config.handy_mp_extension ~= nil then
+								mp.LOBBY.config.handy_allow_mp_extension = false
+								for _, feature in ipairs({ "speed_multiplier", "animation_skip", "dangerous_actions" }) do
+									mp.LOBBY.config["handy_" .. feature .. "_mode"] = 1
+									mp.LOBBY.config["handy_" .. feature .. "_mode_force"] = nil
+								end
+							end
 							-- The real `MP.current_ruleset()` is an empty
 							-- metatable proxy that answers every field through
 							-- its metatable, so the field must be read with
@@ -1636,7 +1664,7 @@ function MPDriver.factory(ports)
 		if not ok then
 			return nil, CODE.MISSING_CALLBACK
 		end
-		started = true
+		start_requested = true
 		return true, CODE.OK
 	end
 
@@ -1694,7 +1722,7 @@ function MPDriver.factory(ports)
 			if role ~= "human" then
 				return false
 			end
-			if match_started() then
+			if start_requested or match_started() then
 				return false
 			end
 			if action == "createLobby" then

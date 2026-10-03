@@ -34,13 +34,13 @@ function FakeUI.new()
 		args = args or {}
 		state.buttons[#state.buttons + 1] = {
 			id = args.id,
-			button = args.button,
+			button = args.button or "exit_overlay_menu",
 			label = args.label,
 			colour = args.colour,
 		}
 		return {
 			n = UIT.R,
-			config = { align = "cm", id = args.id, button = args.button, colour = args.colour },
+			config = { align = "cm", id = args.id, button = args.button or "exit_overlay_menu", colour = args.colour },
 			nodes = {
 				{ n = UIT.C, config = { align = "cm" }, nodes = {
 					{ n = UIT.T, config = { text = (args.label and args.label[1]) or "", scale = args.scale or 0.4 } },

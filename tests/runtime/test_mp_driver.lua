@@ -302,6 +302,17 @@ return function(ctx)
 		ctx.is_true(saw_start)
 	end)
 
+	test("host_start_request_waits_for_real_run_and_freezes_options_immediately", function()
+		local MP, funcs = fake_engine({ code = "ABC12", ready_to_start = true, is_host = true })
+		local G = { STAGES = { MAIN_MENU = 1, RUN = 2 }, STAGE = 1 }
+		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G })
+		ctx.is_true(driver.host_start_game())
+		ctx.eq(driver.is_started(), false, "queued start is still a menu frame")
+		ctx.eq(driver.guard_allows("lobbyOptions"), false, "options freeze before the reply")
+		G.STAGE = G.STAGES.RUN
+		ctx.is_true(driver.is_started(), "the actual initialized run opens the gate")
+	end)
+
 	test("send_guard_is_default_deny", function()
 		local MP, funcs = fake_engine()
 		local driver = MPDriver.factory({ role = "ai", mp = MP, funcs = funcs })
@@ -1152,7 +1163,7 @@ return function(ctx)
 		-- No reviewed producer yet: honest unknown.
 		ctx.eq(facts.debug_disabled, "unknown")
 		ctx.eq(facts.animations_normal, "unknown")
-		ctx.eq(facts.handy_disabled, "unknown")
+		ctx.eq(facts.handy_ranked_safe, "unknown")
 		-- Unknown facts refuse readiness; no caller flag can make it pass.
 		ctx.eq(driver.readiness_ok(), false)
 		-- A too-fast game speed is refused.
@@ -1279,7 +1290,7 @@ return function(ctx)
 		local G = { SETTINGS = { profile = 1, GAMESPEED = 1 }, PROFILES = { { all_unlocked = true } } }
 		for _, producer in ipairs({
 			function() error("producer fault") end,
-			function() return { debug_disabled = "true", animations_normal = 1, handy_disabled = {} } end,
+			function() return { debug_disabled = "true", animations_normal = 1, handy_ranked_safe = {} } end,
 		}) do
 			local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G,
 				ranked_profile_facts = producer })
@@ -1290,7 +1301,7 @@ return function(ctx)
 		end
 		local driver = MPDriver.factory({ role = "human", mp = MP, funcs = funcs, G = G,
 			ranked_profile_facts = function() return { debug_disabled = false, animations_normal = true,
-				handy_disabled = true, content_unlocked = false } end })
+				handy_ranked_safe = true, content_unlocked = false } end })
 		ctx.eq(driver.readiness_facts().debug_disabled, false)
 		ctx.eq(driver.readiness_facts().all_unlocked, false)
 		ctx.eq(driver.readiness_ok(), false)

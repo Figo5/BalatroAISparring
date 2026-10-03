@@ -4,6 +4,7 @@ local Profile = {}
 local VERSIONS = {
 	Steamodded = "1.0.0~BETA-1620a", Lovely = "0.9.0",
 	Multiplayer = "0.5.5", AISparring = "0.1.0-dev",
+	Handy = "2.0.6",
 	["lovely-compat-aisparring-staging"] = "0.0.0",
 }
 local function get(t, k)
@@ -23,6 +24,7 @@ function Profile.approved_mods()
 	-- Actual Multiplayer parse_modlist splits on the LAST dash.
 	return { ["Steamodded-1.0.0~BETA"] = "1620a", Lovely = "0.9.0",
 		Multiplayer = "0.5.5", ["AISparring-0.1.0"] = "dev",
+		Handy = "2.0.6",
 		["lovely-compat-aisparring-staging"] = "0.0.0" }
 end
 
@@ -81,15 +83,44 @@ function Profile.content_unlocked(G)
 	return true
 end
 
-function Profile.facts(G, smods, mp, release)
+-- Read effective values from the pinned mod's own Multiplayer predicates.
+-- No settings mutation, synthetic callbacks or policy access to Handy.
+function Profile.handy_safe(mp, handy)
+	local current = get(get(handy, "MP"), "current")
+	if type(current) ~= "table" or get(get(handy, "MP"), "mod_type") ~= "pre_release" then return "unknown" end
+	local lobby = get(mp, "LOBBY")
+	if get(lobby, "code") ~= nil then
+		local config = get(lobby, "config")
+		if get(config, "handy_mp_extension") ~= true or get(config, "handy_allow_mp_extension") ~= false then return false end
+		for _, feature in ipairs({ "speed_multiplier", "animation_skip", "dangerous_actions" }) do
+			if get(config, "handy_" .. feature .. "_mode") ~= 1
+				or get(config, "handy_" .. feature .. "_mode_force") ~= nil then return false end
+		end
+	end
+	for _, predicate in ipairs({ { handy, "is_mp_lobby_extension_active", false },
+		{ get(handy, "speed_multiplier"), "get_value", 1 },
+		{ get(handy, "animation_skip"), "get_value", 1 },
+		{ get(handy, "dangerous_actions"), "is_sell_disabled_in_mp", true },
+		{ get(handy, "dangerous_actions"), "is_remove_disabled_in_mp", true } }) do
+		local fn = get(predicate[1], predicate[2])
+		if type(fn) ~= "function" then return "unknown" end
+		local ok, value = pcall(fn)
+		if not ok then return "unknown" end
+		if value ~= predicate[3] then return false end
+	end
+	return true
+end
+
+function Profile.facts(G, smods, mp, release, handy)
 	local inventory = Profile.inventory_ok(smods, mp)
+	local handy_safe = inventory == true and Profile.handy_safe(mp, handy) or (inventory == nil and "unknown" or false)
 	local debug = get(G, "DEBUG")
 	local debug_disabled = "unknown"
 	if type(debug) == "boolean" then debug_disabled = debug == false end
 	return {
 		debug_disabled = debug_disabled,
-		animations_normal = inventory == nil and "unknown" or inventory,
-		handy_disabled = inventory == nil and "unknown" or inventory,
+		animations_normal = handy_safe,
+		handy_ranked_safe = handy_safe,
 		content_unlocked = Profile.content_unlocked(G),
 		tutorial_ready = get(get(G, "SETTINGS"), "tutorial_complete") == true
 			and get(get(G, "SETTINGS"), "tutorial_progress") == nil,
@@ -133,7 +164,7 @@ function Profile.catalog(G, smods, mp)
 	return { schema = "aisparring.ranked_catalog.v1", eligible_decks = eligible, decks = decks, stakes = stakes }
 end
 
-function Profile.preparation(G, smods, mp, love, encode, env, release)
+function Profile.preparation(G, smods, mp, love, encode, env, release, handy)
 	local elapsed = 0
 	local instance = {}
 	function instance.update(dt)
@@ -145,13 +176,13 @@ function Profile.preparation(G, smods, mp, love, encode, env, release)
 		if type(cached) ~= "string" or #cached == 0 then return end
 		local ok, parsed = pcall(get(utils, "parse_Hash"), cached)
 		local ok_unlock, unlocked = pcall(get(utils, "unlock_check"))
-		local facts = Profile.facts(G, smods, mp, release)
+		local facts = Profile.facts(G, smods, mp, release, handy)
 		local speed = get(get(G, "SETTINGS"), "GAMESPEED")
 		local report = {
 			schema = "aisparring.ranked_preparation.v1", nonce = env("AISP_PROBE_NONCE"),
 			role = env("BALATRO_AI_ROLE"), release_mode = release == true,
 			debug_disabled = facts.debug_disabled, animations_normal = facts.animations_normal,
-			handy_disabled = facts.handy_disabled, content_unlocked = facts.content_unlocked == true,
+			handy_ranked_safe = facts.handy_ranked_safe, content_unlocked = facts.content_unlocked == true,
 			tutorial_ready = facts.tutorial_ready,
 			unlock_check = ok_unlock and unlocked == true,
 			advertised_unlocked = ok and get(parsed, "unlocked") == true,

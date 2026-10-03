@@ -2064,7 +2064,7 @@ return function(ctx)
 		"unlock_check", "all_unlocked", "advertised_unlocked", "advertised_preview",
 		"advertised_preview_valid", "live_preview", "preview_consistent",
 		"peer_unlocked", "peer_cached", "banned_mods_empty", "mods_approved",
-		"release_mode", "game_speed_ok", "debug_disabled", "animations_normal", "handy_disabled",
+		"release_mode", "game_speed_ok", "debug_disabled", "animations_normal", "handy_ranked_safe",
 	}) do
 		READINESS_OK[key] = true
 	end
@@ -2111,6 +2111,41 @@ return function(ctx)
 		end
 		support.inbound(bctx, response)
 	end
+
+	test("ranked_async_host_start_never_checks_old_menu_selection_or_seed", function()
+		local notes = {}
+		local instance, _, bctx = support.bootstrap(ctx.repo_root, { role = "human", readiness_override = READINESS_OK,
+			logger = { record = function(fields) notes[#notes + 1] = tostring(fields.code or fields.event) end } })
+		local G = bctx.engine.G
+		local start_requests = 0
+		G.FUNCS.lobby_start_game = function() start_requests = start_requests + 1 end
+		G.GAME.selected_back = { effect = { center = { key = "b_blue" } } }
+		G.GAME.stake = 3
+		ctx.is_true(instance.install())
+		drain_envelopes(bctx)
+		support.inbound(bctx, { ok = true, code = "practice_ok" })
+		for _ = 1, 24 do
+			step(instance, bctx)
+			bctx.engine.MP.LOBBY.ready_to_start = true
+			for _, message in ipairs(support.drain_outbound(bctx)) do
+				if message.op == "setup" then
+					ranked_setup(bctx, { role = "human" })
+				else
+					support.inbound(bctx, { ok = true, code = "practice_ok", started = message.op == "start" })
+				end
+				ctx.eq(message.observation and message.observation.seed, nil, "old menu seed never reported")
+			end
+		end
+		ctx.eq(start_requests, 1, "start request sent exactly once: " .. table.concat(notes, ","))
+		ctx.is_true(instance.state() ~= "stopped", "old Blue/Green menu selection must not abort Red/White draft")
+		ctx.eq(bctx.engine.MP.LOBBY.code, "ABC12", "lobby remains joined")
+		G.GAME.selected_back = { effect = { center = { key = "b_red" } } }
+		G.GAME.stake = 1
+		bctx.engine.set_run()
+		for _ = 1, 3 do step(instance, bctx) end
+		ctx.is_true(instance.state() ~= "stopped", "initialized matching run passes")
+		instance.shutdown("test")
+	end)
 
 	test("ranked_ready_carries_schema_and_independent_digest", function()
 		local instance, _, bctx = support.bootstrap(ctx.repo_root, {

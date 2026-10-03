@@ -552,7 +552,7 @@ local function boot_companion(modules, companion)
 	-- Explicit preparation never constructs the runtime coordinator or policy.
 	if companion.role == "staged" and os.getenv("AISP_PROFILE_PREPARE") == "1" then
 		local encode = json_codec()
-		local instance = profile.preparation(G, SMODS, MP, love, encode, os.getenv, _RELEASE_MODE)
+		local instance = profile.preparation(G, SMODS, MP, love, encode, os.getenv, _RELEASE_MODE, Handy)
 		if type(Game) == "table" and type(Game.update) == "function" then
 			local original = Game.update
 			Game.update = function(self, dt, ...)
@@ -593,7 +593,7 @@ local function boot_companion(modules, companion)
 		-- deployment slice (nil here -> an honest unknown that blocks READY).
 		release_mode = _RELEASE_MODE,
 		approved_mods = companion.role == "staged" and profile.approved_mods() or nil,
-		ranked_profile_facts = function() return profile.facts(G, SMODS, MP, _RELEASE_MODE) end,
+		ranked_profile_facts = function() return profile.facts(G, SMODS, MP, _RELEASE_MODE, Handy) end,
 	}
 	local detail
 	if companion.role == "live" then

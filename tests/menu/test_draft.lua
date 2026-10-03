@@ -110,6 +110,13 @@ return function()
 		eq(fx.controller.handle_select("aisp:draft:pick:blue~white"), true, "pick one")
 		eq(fx.controller.draft_confirm(), nil, "one of two refused")
 		eq(#fx.draft_actions, 0, "no action sent")
+		eq(fx.controller.state(), "draft_active", "incomplete confirm stays in draft")
+		eq(fx.ustate.exits, 0, "no stock exit callback")
+		for _, button in ipairs(fx.ustate.buttons) do
+			if button.id == "aisp:draft:confirm" then
+				eq(button.button, "aisp_draft_confirm", "inactive confirm cannot default to overlay exit")
+			end
+		end
 		eq(fx.controller.handle_select("aisp:draft:pick:black~white"), true, "pick two")
 		eq(fx.controller.draft_confirm(), true, "two of two confirmed")
 		eq(#fx.draft_actions, 1, "action sent once")

@@ -240,7 +240,7 @@ function PracticeMenu.factory(ui)
 			row({ text("First: " .. tostring(draft.first_actor) .. "   Turn: " .. turn_label, 0.34) }, 0.04),
 		}
 		if status == "active" and current == "human" and type(operation) == "string" then
-			rows[#rows + 1] = row({ text("Required: " .. operation .. " " .. tostring(required), 0.34) }, 0.04)
+			rows[#rows + 1] = row({ text("Required: " .. operation .. " " .. tostring(required) .. "   Selected: " .. tostring(#pending), 0.34) }, 0.04)
 		end
 		local error_message = rawget(view, "draft_error")
 		if type(error_message) == "string" and #error_message > 0 then
@@ -267,7 +267,9 @@ function PracticeMenu.factory(ui)
 						minw = 4,
 						minh = 0.5,
 						scale = 0.32,
-						button = selectable and "aisp_draft_pick" or nil,
+						-- Stock UIBox_button turns nil into exit_overlay_menu.
+						-- The controller rejects inactive/stale choices safely.
+						button = "aisp_draft_pick",
 					})
 				end
 			end
@@ -315,7 +317,7 @@ function PracticeMenu.factory(ui)
 					minw = 3.5,
 					minh = 0.6,
 					scale = 0.4,
-					button = can_confirm and "aisp_draft_confirm" or nil,
+					button = "aisp_draft_confirm",
 				}),
 				button_builder({
 					id = "aisp:draft:cancel",

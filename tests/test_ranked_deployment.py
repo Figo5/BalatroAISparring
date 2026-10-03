@@ -13,8 +13,8 @@ def main():
     with tempfile.TemporaryDirectory(dir=REPO/'work') as temp:
         dest=Path(temp)/'minimal'
         rd.assemble(dest)
-        assert set(x.name for x in dest.iterdir())=={'smods','Multiplayer'}
-        assert not (dest/'Handy').exists()
+        assert set(x.name for x in dest.iterdir())=={'smods','Multiplayer','Handy'}
+        assert (dest/'Handy').is_dir()
         for name,spec in p['sources'].items():assert staging.hash_tree(dest/name)==spec['files']
         suppressed=staging.suppress_staged_network_paths(dest,Path(temp))
         assert suppressed['ok'] and staging.scan_network_suppressions(dest)['ok']
@@ -43,7 +43,7 @@ def main():
     # Exact inventory observed from the genuine 1620a/0.9 native preparation.
     # Missing guard, changed version and unrelated compatibility mods refuse.
     observed={'AISparring-0.1.0':'dev','Multiplayer':'0.5.5','Steamodded-1.0.0~BETA':'1620a',
-              'lovely-compat-aisparring-staging':'0.0.0','Lovely':'0.9.0'}
+              'lovely-compat-aisparring-staging':'0.0.0','Lovely':'0.9.0','Handy':'2.0.6'}
     changed=copy.deepcopy(report);changed['mods']=observed
     assert rd.validate_report(changed,'human','n')
     for bad in (dict(observed, **{'lovely-compat-aisparring-staging':'0.0.1'}),
