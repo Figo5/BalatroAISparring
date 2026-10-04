@@ -126,6 +126,7 @@ MENU_OPS = (
     # control channel BEFORE the start request. The menu renders only the
     # public state; human bans require real callbacks and are never automated.
     "draft_begin",
+    "selection_begin",
     "draft_action",
     "draft_cancel",
     "draft_status",
@@ -4133,6 +4134,8 @@ class HostDaemon:
             return self._op_poll(request)
         if op == "acknowledge":
             return self._op_acknowledge(request)
+        if op == "selection_begin":
+            return self._op_draft_begin(request, direct=True)
         if op == "draft_begin":
             return self._op_draft_begin(request)
         if op == "draft_action":
@@ -4198,7 +4201,7 @@ class HostDaemon:
 
     # -- draft ops -----------------------------------------------------------
 
-    def _op_draft_begin(self, request) -> dict:
+    def _op_draft_begin(self, request, *, direct=False) -> dict:
         if set(request.keys()) != DRAFT_BEGIN_KEYS:
             return {"ok": False, "code": CODE_BAD_REQUEST}
         difficulty = request.get("difficulty")
@@ -4223,7 +4226,8 @@ class HostDaemon:
         settings = {"mode": mode, "difficulty": difficulty, "pacing": pacing, "gauntlet": None}
         generation = self._generation_token()
         try:
-            draft = ranked_draft.RankedDraft(catalog, settings, generation, clock=self._clock)
+            draft_class = ranked_draft.RankedSelection if direct else ranked_draft.RankedDraft
+            draft = draft_class(catalog, settings, generation, clock=self._clock)
             draft.auto_ai()
         except ranked_draft.DraftError as error:
             return {"ok": False, "code": error.code}

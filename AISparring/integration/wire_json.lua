@@ -348,7 +348,7 @@ function WireJson.factory(base)
 		local body
 		if op == "start" then
 			body = host_start_body(request)
-		elseif op == "draft_begin" then
+		elseif op == "draft_begin" or op == "selection_begin" then
 			body = host_draft_begin_body(request)
 		elseif op == "draft_action" then
 			body = host_draft_action_body(request)

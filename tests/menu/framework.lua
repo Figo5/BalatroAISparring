@@ -224,6 +224,11 @@ function F.fixture(repo_root, cfg)
 		fx.draft_actions[#fx.draft_actions + 1] = action
 		return "draft-2"
 	end
+	host.selection_begin = function(payload)
+		fx.selection_begins = fx.selection_begins or {}
+		fx.selection_begins[#fx.selection_begins + 1] = payload
+		return "selection-1"
+	end
 	host.draft_cancel = function(draft_id)
 		fx.draft_cancels[#fx.draft_cancels + 1] = draft_id
 		return "draft-3"

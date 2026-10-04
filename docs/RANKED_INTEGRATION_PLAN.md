@@ -1,5 +1,14 @@
 # Ranked practice integration plan
 
+October 4 amendment, explicitly requested by the user: the practice menu replaces
+ban-pick with Player deck/stake selection from the full measured eligible catalog.
+The `player_choice.v1` commitment records exactly one human selection, with its
+own checksum domain. The legacy ban-pick implementation remains for compatibility
+and regression coverage; the production menu starts `selection_begin`. Actual
+Standard Ranked options, unlocked profiles, hidden-score fairness and the
+certificate/install gates remain mandatory. The earlier draft architecture below
+is retained as historical context.
+
 Status: architecture v3 incorporates Claude Opus 5.5 High's conditional v2 release, including independently verified R1 Cocktail boot normalization and R2 unlock advertising/restart amendments. Astra confirms the amendments and releases the bounded Ranked/draft/unlock/staging implementation. This is design permission only, not source/native/package acceptance. Installed 36da37a and its source generation remain frozen. This worktree begins at that commit on feature/ai-sparring-v1. No installation or certification reuse is authorized by this document.
 
 ## Result and scope

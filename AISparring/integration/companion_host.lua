@@ -1238,7 +1238,7 @@ function CompanionHost.live_host(ports)
 		return request_id, CODE.OK
 	end
 
-	function host.draft_begin(payload)
+	local function begin_choice(payload, operation)
 		local selection = validate_payload(payload)
 		if selection == nil or selection.draft_id ~= nil then
 			return nil, CODE.BAD_SELECTION
@@ -1251,7 +1251,15 @@ function CompanionHost.live_host(ports)
 		if selection.mode == "gauntlet" then
 			request.gauntlet = "Test" .. tostring(selection.gauntlet_index)
 		end
-		return send_draft("draft_begin", request)
+		return send_draft(operation, request)
+	end
+
+	function host.draft_begin(payload)
+		return begin_choice(payload, "draft_begin")
+	end
+
+	function host.selection_begin(payload)
+		return begin_choice(payload, "selection_begin")
 	end
 
 	function host.draft_action(action)

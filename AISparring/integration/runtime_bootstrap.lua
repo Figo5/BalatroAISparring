@@ -170,7 +170,9 @@ local function rpath(obj, a, b)
 end
 
 -- The service's bounded seed vocabulary (`practice_service.SEED_PATTERN`).
-local RUN_SEED_PATTERN = "^[0-9A-Za-z_%-]+$"
+-- Multiplayer's The Order prefixes the actual engine seed with one '*'. Keep
+-- that identity as human-only audit metadata; never pass it to AIObservation.
+local RUN_SEED_PATTERN = "^%*?[0-9A-Za-z_%-]+$"
 
 -- The actual, already-resolved run seed of a real initialized run: `Game:start_run`
 -- assigns `G.GAME.pseudorandom.seed` from the trusted `args.seed` (the gauntlet

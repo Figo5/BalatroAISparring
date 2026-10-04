@@ -176,6 +176,16 @@ return function(ctx)
 		eq(decoded.request.difficulty, "competitive", "difficulty")
 	end)
 
+	test("selection_begin emits a strict direct-choice request", function()
+		local encoded = wire.encode_host({ schema = "aisparring.practice_host.request.v1", op = "selection_begin",
+			auth = "secret", request = { difficulty = "competitive", pacing = "normal", mode = "normal" } })
+		is_true(encoded ~= nil, "encoded")
+		local decoded = smods.decode(encoded)
+		eq(decoded.op, "selection_begin", "direct operation")
+		is_true(has(encoded, '"gauntlet":null'), "explicit null")
+		eq(decoded.request.seed, nil, "no seed")
+	end)
+
 	test("draft_action emits the exact action keys and option array", function()
 		local text = wire.encode_host({
 			schema = "aisparring.practice_host.request.v1",

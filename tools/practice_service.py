@@ -192,7 +192,7 @@ REQUEST_KEYS = frozenset({"session", "credential", "role", "op", "sequence", "ob
 
 CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 LOBBY_PATTERN = re.compile(r"^[0-9A-Za-z_-]{1,32}$")
-SEED_PATTERN = re.compile(r"^[0-9A-Za-z_-]{1,32}$")
+SEED_PATTERN = re.compile(r"(?=.{1,32}\Z)\*?[0-9A-Za-z_-]+\Z")
 DIGEST_PATTERN = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 
 CODE_OK = "practice_ok"

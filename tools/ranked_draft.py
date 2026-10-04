@@ -37,6 +37,9 @@ from ranked_effective_config import (  # local authority module
 DRAFT_SCHEMA = "aisparring.ranked_draft.v1"
 DRAFT_COMMITMENT_DOMAIN = "aisparring.ranked_draft_commitment.v1"
 DRAFT_PROFILE_ID = "aisparring.ranked_draft_profile.standard_1_2_2.v1"
+DIRECT_PROFILE_ID = "aisparring.ranked_selection_profile.player_choice.v1"
+DIRECT_COMMITMENT_DOMAIN = "aisparring.ranked_selection_commitment.v1"
+MAX_SELECTION_OPTIONS = 128
 
 # Named local draft profile. The user's supplied middle counts (1, 2, 2) are the
 # released profile; only the four stages below exist and no private queue weight
@@ -204,6 +207,47 @@ def build_draft_pool(catalog) -> dict:
     }
 
 
+def build_selection_pool(catalog) -> dict:
+    """All measured deck/stake combinations, bounded and seed-independent."""
+    if not isinstance(catalog, Mapping):
+        return {"ok": False, "problems": ["ranked_draft_catalog_missing"]}
+    decks, stakes = catalog.get("decks"), catalog.get("stakes")
+    if not isinstance(decks, Mapping) or not isinstance(stakes, Mapping) or not decks or not stakes:
+        return {"ok": False, "problems": ["ranked_draft_catalog_invalid"]}
+    if len(decks) * len(stakes) > MAX_SELECTION_OPTIONS:
+        return {"ok": False, "problems": ["ranked_draft_pool_size"]}
+    pool = []
+    for deck in sorted(decks, key=lambda k: (k != "red", str(k))):
+        for stake in sorted(stakes, key=lambda k: (str(k) != "white", str(k))):
+            if not _key_ok(deck) or not _key_ok(stake):
+                return {"ok": False, "problems": ["ranked_draft_catalog_invalid"]}
+            option = option_id_for(deck, stake)
+            try:
+                selection = selection_for_option(catalog, option)
+            except DraftError as error:
+                return {"ok": False, "problems": [error.code]}
+            if not (1 <= selection["stake_index"] <= MAX_STAKE_INDEX):
+                return {"ok": False, "problems": ["ranked_draft_catalog_invalid"]}
+            pool.append(option)
+    return {"ok": True, "pool": pool}
+
+
+def validate_selection_transcript(pool, first_actor, transcript) -> dict:
+    if not 1 <= len(pool) <= MAX_SELECTION_OPTIONS or len(set(pool)) != len(pool):
+        return {"ok": False, "problems": ["ranked_draft_pool_size"]}
+    if first_actor != "human":
+        return {"ok": False, "problems": ["ranked_draft_first_actor_invalid"]}
+    if not isinstance(transcript, (list, tuple)) or len(transcript) != 1:
+        return {"ok": False, "problems": ["ranked_draft_transcript_shape"]}
+    step = transcript[0]
+    if not isinstance(step, Mapping) or step.get("actor") != "human" or step.get("operation") != "select":
+        return {"ok": False, "problems": ["ranked_draft_turn"]}
+    options = step.get("option_ids")
+    if not isinstance(options, (list, tuple)) or len(options) != 1 or options[0] not in pool:
+        return {"ok": False, "problems": ["ranked_draft_option_unavailable"]}
+    return {"ok": True, "final": options[0]}
+
+
 def selection_for_option(catalog, option_id) -> dict:
     """Resolve one option id into the canonical selection binding."""
     if not option_id_ok(option_id):
@@ -318,7 +362,7 @@ def _canonical_component(value: str) -> bool:
 
 def commitment_canonical(profile_id: str, first_actor: str, pool, transcript, final: str) -> str:
     """Domain-separated canonical string for the dedicated draft commitment."""
-    if profile_id != DRAFT_PROFILE_ID:
+    if profile_id not in (DRAFT_PROFILE_ID, DIRECT_PROFILE_ID):
         raise DraftError("ranked_draft_profile_invalid")
     if not _canonical_component(first_actor) or not _canonical_component(final):
         raise DraftError("ranked_draft_canonical_invalid")
@@ -347,7 +391,7 @@ def commitment_canonical(profile_id: str, first_actor: str, pool, transcript, fi
                 raise DraftError("ranked_draft_canonical_invalid")
         step_tokens.append(actor + ":" + operation + ":" + "+".join(options))
     parts = [
-        DRAFT_COMMITMENT_DOMAIN,
+        DIRECT_COMMITMENT_DOMAIN if profile_id == DIRECT_PROFILE_ID else DRAFT_COMMITMENT_DOMAIN,
         "profile=" + profile_id,
         "first=" + first_actor,
         "pool=" + ",".join(pool_tokens),
@@ -376,7 +420,7 @@ def commitment_from_public(public) -> dict:
         return {"ok": False, "problems": ["ranked_draft_commitment_missing"]}
     if public.get("schema") != DRAFT_SCHEMA:
         return {"ok": False, "problems": ["ranked_draft_commitment_schema"]}
-    if public.get("profile_id") != DRAFT_PROFILE_ID:
+    if public.get("profile_id") not in (DRAFT_PROFILE_ID, DIRECT_PROFILE_ID):
         problems.append("ranked_draft_profile_invalid")
     first_actor = public.get("first_actor")
     if first_actor not in ACTORS:
@@ -388,13 +432,14 @@ def commitment_from_public(public) -> dict:
     final = public.get("final")
     if problems:
         return {"ok": False, "problems": sorted(set(problems))}
-    verdict = validate_transcript(pool, first_actor, transcript)
+    validator = validate_selection_transcript if public["profile_id"] == DIRECT_PROFILE_ID else validate_transcript
+    verdict = validator(pool, first_actor, transcript)
     if not verdict.get("ok"):
         return {"ok": False, "problems": verdict.get("problems") or ["ranked_draft_transcript_invalid"]}
     if final != verdict["final"]:
         return {"ok": False, "problems": ["ranked_draft_final_mismatch"]}
     try:
-        digest = commitment_digest(DRAFT_PROFILE_ID, first_actor, pool, transcript, final)
+        digest = commitment_digest(public["profile_id"], first_actor, pool, transcript, final)
     except DraftError as error:
         return {"ok": False, "problems": [error.code]}
     return {"ok": True, "problems": [], "digest": digest, "final": final}
@@ -407,6 +452,9 @@ def commitment_from_public(public) -> dict:
 class RankedDraft:
     """Bounded host-owned draft. One instance == one named draft_id."""
 
+    profile_id = DRAFT_PROFILE_ID
+    pool_builder = staticmethod(build_draft_pool)
+
     def __init__(
         self,
         catalog,
@@ -417,7 +465,7 @@ class RankedDraft:
         draft_id: Optional[str] = None,
         clock=time.monotonic,
     ) -> None:
-        built = build_draft_pool(catalog)
+        built = self.pool_builder(catalog)
         if not built.get("ok"):
             raise DraftError((built.get("problems") or ["ranked_draft_catalog_invalid"])[0])
         self.catalog = {"decks": dict(catalog["decks"]), "stakes": dict(catalog["stakes"])}
@@ -482,7 +530,7 @@ class RankedDraft:
         state = {
             "schema": DRAFT_SCHEMA,
             "draft_id": self.draft_id,
-            "profile_id": DRAFT_PROFILE_ID,
+            "profile_id": self.profile_id,
             "status": "expired" if (self.status == "active" and self.expired()) else self.status,
             "revision": self.revision,
             "first_actor": self.first_actor,
@@ -511,7 +559,7 @@ class RankedDraft:
         verdict = commitment_from_public(
             {
                 "schema": DRAFT_SCHEMA,
-                "profile_id": DRAFT_PROFILE_ID,
+                "profile_id": self.profile_id,
                 "first_actor": self.first_actor,
                 "pool": list(self.pool),
                 "transcript": list(self.transcript),
@@ -526,7 +574,7 @@ class RankedDraft:
         digest = self.commitment["digest"]
         return {
             "schema": DRAFT_SCHEMA,
-            "profile_id": DRAFT_PROFILE_ID,
+            "profile_id": self.profile_id,
             "first_actor": self.first_actor,
             "pool": list(self.pool),
             "transcript": [
@@ -694,7 +742,24 @@ class RankedDraft:
         return dict(self.bound_settings) == dict(settings)
 
 
+class RankedSelection(RankedDraft):
+    """Player chooses one real combination; all launch guards remain shared."""
+
+    profile_id = DIRECT_PROFILE_ID
+    pool_builder = staticmethod(build_selection_pool)
+
+    def __init__(self, catalog, bound_settings, generation, **kwargs):
+        kwargs["first_actor"] = "human"
+        super().__init__(catalog, bound_settings, generation, **kwargs)
+
+    def _plan_stage(self):
+        if self.transcript:
+            return None
+        return {"stage": 0, "actor": "human", "operation": "select", "count": 1}
+
+
 __all__ = [
+    "RankedSelection", "DIRECT_PROFILE_ID", "DIRECT_COMMITMENT_DOMAIN",
     "ACTORS",
     "AI_DECK_PREFERENCE",
     "DRAFT_COMMITMENT_DOMAIN",

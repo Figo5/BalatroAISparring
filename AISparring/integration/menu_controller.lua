@@ -334,6 +334,7 @@ function MenuController.factory(ports)
 	local draft_selection = {}
 	local draft_error = nil
 	local completed_draft_id = nil
+	local direct_selection = false
 
 	-- Bounded local diagnostics: each allowlisted outcome code is logged at most
 	-- once for the lifetime of this instance, so repeated Play opens or frames
@@ -594,6 +595,13 @@ function MenuController.factory(ports)
 			end,
 			-- The attended Ranked draft. Human selections require these real
 			-- callbacks; nothing here automates a human ban or pick.
+			aisp_selection_begin = function()
+				instance.begin_draft(true)
+			end,
+			aisp_choice_cycle = function(event)
+				local id = type(event) == "table" and type(event.config) == "table" and event.config.id or nil
+				instance.choice_cycle(id)
+			end,
 			aisp_draft_begin = function()
 				instance.begin_draft()
 			end,
@@ -787,7 +795,8 @@ function MenuController.factory(ports)
 	end
 
 	function instance.refresh_draft_overlay()
-		local definition = menu.draft_definition(view_state())
+		local builder = direct_selection and menu.selection_definition or menu.draft_definition
+		local definition = type(builder) == "function" and builder(view_state()) or nil
 		if definition == nil then
 			return refuse(CODE.BAD_UI)
 		end
@@ -797,8 +806,9 @@ function MenuController.factory(ports)
 
 	-- Begin the host-owned draft. The host performs the pool generation and any
 	-- AI turns; the menu only renders the returned public state.
-	function instance.begin_draft()
-		if type(rawget(host, "draft_begin")) ~= "function" then
+	function instance.begin_draft(direct)
+		local begin = rawget(host, direct == true and "selection_begin" or "draft_begin")
+		if type(begin) ~= "function" then
 			return refuse(CODE.DRAFT_UNAVAILABLE)
 		end
 		if state == "draft_begin_pending" or state == "draft_action_pending" then
@@ -827,7 +837,7 @@ function MenuController.factory(ports)
 		if now == nil then
 			return fail(CODE.BAD_CLOCK)
 		end
-		local ok_call, request_id, reason = pcall(host.draft_begin, payload)
+		local ok_call, request_id, reason = pcall(begin, payload)
 		if not ok_call then
 			return fail(CODE.HOST_ERROR)
 		end
@@ -837,12 +847,56 @@ function MenuController.factory(ports)
 			end
 			return fail(CODE.HOST_ERROR)
 		end
+		direct_selection = direct == true
+		completed_draft_id = nil
 		draft_request_id = request_id
 		draft_request_started = now
 		draft_state = nil
 		draft_selection = {}
 		draft_error = nil
 		state = "draft_begin_pending"
+		instance.refresh_draft_overlay()
+		return true, CODE.OK
+	end
+
+	-- Only options returned by the authenticated host can be selected. Cycling
+	-- changes the pending choice; Continue is the sole committing action.
+	function instance.choice_cycle(id)
+		if not direct_selection or state ~= "draft_active" or type(id) ~= "string" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		local field, direction = string.match(id, "^aisp:choice:(%a+):(%a+)$")
+		if (field ~= "deck" and field ~= "stake") or (direction ~= "next" and direction ~= "prev") then
+			return nil, CODE.BAD_SELECTION
+		end
+		local draft = draft_state
+		if type(draft) ~= "table" or draft.status ~= "active" or draft.current_actor ~= "human" then
+			return nil, CODE.DRAFT_REJECTED
+		end
+		local pool = type(draft.pool) == "table" and draft.pool or {}
+		local current = nil
+		for i = 1, #pool do
+			if pool[i].option_id == draft_selection[1] then current = pool[i] end
+		end
+		if current == nil then return nil, CODE.BAD_SELECTION end
+		local choices, seen = {}, {}
+		local key = field .. "_key"
+		for i = 1, #pool do
+			local item = pool[i]
+			if (field == "deck" and item.stake_key == current.stake_key)
+				or (field == "stake" and item.deck_key == current.deck_key) then
+				if not seen[item[key]] then choices[#choices + 1] = item; seen[item[key]] = true end
+			end
+		end
+		if field == "stake" then
+			table.sort(choices, function(a, b) return a.stake_index < b.stake_index end)
+		end
+		local index = nil
+		for i = 1, #choices do if choices[i][key] == current[key] then index = i end end
+		if index == nil or #choices == 0 then return nil, CODE.BAD_SELECTION end
+		index = ((index - 1 + (direction == "next" and 1 or -1)) % #choices) + 1
+		draft_selection = { choices[index].option_id }
+		draft_error = nil
 		instance.refresh_draft_overlay()
 		return true, CODE.OK
 	end
@@ -1141,10 +1195,22 @@ function MenuController.factory(ports)
 				fail(CODE.HOST_ERROR)
 				return "failed", CODE.HOST_ERROR
 			end
+			if direct_selection and draft_state.profile_id ~= "aisparring.ranked_selection_profile.player_choice.v1" then
+				fail(CODE.HOST_ERROR)
+				return "failed", CODE.HOST_ERROR
+			end
 			if draft_state.status == "completed" then
 				state = "draft_complete"
+				if direct_selection then
+					completed_draft_id = draft_state.draft_id
+					instance.open_confirm()
+					return state, CODE.OK
+				end
 			else
 				state = "draft_active"
+				if direct_selection and type(draft_state.pool) == "table" and type(draft_state.pool[1]) == "table" then
+					draft_selection = { draft_state.pool[1].option_id }
+				end
 			end
 			instance.refresh_draft_overlay()
 			return state, CODE.OK

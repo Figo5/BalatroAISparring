@@ -173,7 +173,7 @@ function PracticeMenu.factory(ui)
 				minw = 6,
 				minh = 0.7,
 				scale = 0.45,
-				button = "aisp_draft_begin",
+				button = "aisp_selection_begin",
 			}),
 		}, 0.15)
 		return options_builder({
@@ -333,6 +333,45 @@ function PracticeMenu.factory(ui)
 		return options_builder({ no_back = true, no_esc = true, contents = rows })
 	end
 
+	function instance.selection_definition(view)
+		if not is_plain_table(view) then return nil, CODE.BAD_STATE end
+		local rows = { row({ text("Choose deck and stake", 0.55) }, 0.12) }
+		local draft, selected = view.draft, view.draft_pending
+		local chosen = nil
+		if is_plain_table(draft) and is_plain_table(draft.pool) and is_plain_table(selected) then
+			for i = 1, #draft.pool do
+				if draft.pool[i].option_id == selected[1] then chosen = draft.pool[i] end
+			end
+		end
+		if chosen ~= nil then
+			for _, field in ipairs({ "deck", "stake" }) do
+				local label = field == "deck" and chosen.deck_name or (chosen.stake_key:gsub("^%l", string.upper) .. " Stake")
+				rows[#rows + 1] = row({ text(field == "deck" and "Deck" or "Stake", 0.35) }, 0.04)
+				rows[#rows + 1] = row({
+					button_builder({ id = "aisp:choice:" .. field .. ":prev", label = { "<" }, colour = C.BLUE,
+						minw = 0.8, minh = 0.6, scale = 0.4, button = "aisp_choice_cycle" }),
+					text(label, 0.42),
+					button_builder({ id = "aisp:choice:" .. field .. ":next", label = { ">" }, colour = C.BLUE,
+						minw = 0.8, minh = 0.6, scale = 0.4, button = "aisp_choice_cycle" }),
+				}, 0.06)
+			end
+			rows[#rows + 1] = row({ text("The AI uses the same deck and stake.", 0.32) }, 0.08)
+		else
+			rows[#rows + 1] = row({ text("Contacting the practice launcher...", 0.35) }, 0.08)
+		end
+		if type(view.draft_error) == "string" then
+			rows[#rows + 1] = row({ text(view.draft_error, 0.32, C.RED) }, 0.04)
+		end
+		local ready = chosen ~= nil and draft.status == "active" and draft.current_actor == "human"
+		rows[#rows + 1] = row({
+			button_builder({ id = "aisp:choice:confirm", label = { "Continue" }, colour = ready and C.GREEN or C.BLACK,
+				minw = 4, minh = 0.6, scale = 0.4, button = "aisp_draft_confirm" }),
+			button_builder({ id = "aisp:choice:cancel", label = { "Cancel" }, colour = C.BLUE,
+				minw = 3, minh = 0.6, scale = 0.4, button = "aisp_draft_cancel" }),
+		}, 0.12)
+		return options_builder({ no_back = true, no_esc = true, contents = rows })
+	end
+
 	function instance.confirm_definition(view)
 		if not is_plain_table(view) then
 			return nil, CODE.BAD_STATE
@@ -368,6 +407,10 @@ function PracticeMenu.factory(ui)
 				}),
 			}, 0.15),
 		}
+		if is_plain_table(view.draft) and is_plain_table(view.draft.final_selection) then
+			local final = view.draft.final_selection
+			table.insert(rows, 5, row({ text(final.back_name .. " / " .. final.stake_key:gsub("^%l", string.upper) .. " Stake", 0.35) }, 0.06))
+		end
 		return options_builder({ no_back = true, no_esc = true, contents = rows })
 	end
 

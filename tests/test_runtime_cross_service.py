@@ -587,6 +587,15 @@ def _coordinate(module, tmp: Path, mode: str, gauntlet, run_seed: str, expect_se
     assert service._logger.seed == expect_seed
     # The guest joined the exact code the host's real lobby produced.
     assert ai.globals().boot_lobby_code() == "ABC12"
+    # Stay active beyond the exact 60-second bootstrap watchdog that caused
+    # the real The Order session to leave its lobby and lose both windows.
+    for _ in range(75):
+        human.globals().boot_step(1.0)
+        ai.globals().boot_step(1.0)
+    assert human.globals().boot_describe()["last_error"] is None
+    assert human.globals().boot_describe()["state"] != "stopped"
+    assert ai.globals().boot_describe()["state"] != "stopped"
+    assert human.globals().boot_op_count("status") == 1
     # No seed ever reaches the policy worker export.
     for request in runner.requests:
         observation = request.get("observation", {})
@@ -632,6 +641,18 @@ def run_two_bootstrap(display: str, module_name: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         _coordinate(module, Path(tmp), "gauntlet", "Test3", "AISP0003", "AISP0003")
         _coordinate(module, Path(tmp), "normal", None, "NORMALRUN7", "NORMALRUN7")
+        # Execute the pinned Multiplayer payload, rather than assuming what
+        # The Order does to an initialized ordinary run seed.
+        import tomllib
+        patch = tomllib.loads((REPO / "work/reference/certified-mods/Multiplayer/lovely/TheOrder.toml").read_text())
+        payload = next(p["pattern"]["payload"] for p in patch["patches"]
+                       if "self.GAME.pseudorandom.seed" in p.get("pattern", {}).get("payload", ""))
+        engine = module.LuaRuntime(unpack_returned_tuples=True)
+        engine.execute('self={GAME={pseudorandom={seed="9TPSLLA8"}}}; MP={should_use_the_order=function() return true end}')
+        engine.execute(payload)
+        actual_seed = engine.globals().self.GAME.pseudorandom.seed
+        assert actual_seed == "*9TPSLLA8"
+        _coordinate(module, Path(tmp), "normal", None, actual_seed, actual_seed)
 
 
 def run_wire_json_report(display: str, module_name: str) -> None:

@@ -1,5 +1,16 @@
 # AI Sparring practice menu
 
+Current Ranked entry (October 4, 2026): **Play → AI Sparring → Start → Choose
+deck and stake → Continue → Start**. The Player cycles through the host's measured
+eligible decks and Ranked stakes; the AI uses the same combination. No bans are
+required. Continue commits one human `select` operation under the independently
+validated `aisparring.ranked_selection_profile.player_choice.v1` profile. The
+final confirmation shows the chosen combination and launches only by its
+host-owned selection ID. Expiry, cancellation, settings/generation binding,
+pre-launch gates and one-time consumption remain enforced. Ranked Gauntlet is
+unsupported. The older slice description below is historical implementation
+context; its Major League and repository-only status do not describe this build.
+
 Status: implementation contract for the functional entry/settings UI and the trusted launcher transition. Repository-only; no live install, no process launch and no playability claim. This slice is **not playable** and contains **no dummy opponent**. The runtime host wiring, staged runtimes and policy worker remain other workers' files.
 
 ## Ownership and boundaries

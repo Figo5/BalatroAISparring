@@ -466,6 +466,9 @@ end
 RankedConfig.DRAFT_SCHEMA = "aisparring.ranked_draft.v1"
 RankedConfig.DRAFT_COMMITMENT_DOMAIN = "aisparring.ranked_draft_commitment.v1"
 RankedConfig.DRAFT_PROFILE_ID = "aisparring.ranked_draft_profile.standard_1_2_2.v1"
+RankedConfig.DIRECT_PROFILE_ID = "aisparring.ranked_selection_profile.player_choice.v1"
+RankedConfig.DIRECT_COMMITMENT_DOMAIN = "aisparring.ranked_selection_commitment.v1"
+RankedConfig.MAX_SELECTION_OPTIONS = 128
 RankedConfig.DRAFT_POOL_SIZE = 9
 RankedConfig.DRAFT_STAGE_COUNTS = { 1, 2, 2, 1 }
 RankedConfig.DRAFT_STAGE_OPS = { "ban", "ban", "ban", "select" }
@@ -496,7 +499,7 @@ end
 -- Domain-separated canonical string for the completed draft. Identical format to
 -- `ranked_draft.commitment_canonical` in the Python authority.
 function RankedConfig.draft_commitment_canonical(profile_id, first_actor, pool, transcript, final)
-	if profile_id ~= RankedConfig.DRAFT_PROFILE_ID then
+	if profile_id ~= RankedConfig.DRAFT_PROFILE_ID and profile_id ~= RankedConfig.DIRECT_PROFILE_ID then
 		return nil, "ranked_draft_profile_invalid"
 	end
 	if first_actor ~= "human" and first_actor ~= "ai" then
@@ -539,7 +542,7 @@ function RankedConfig.draft_commitment_canonical(profile_id, first_actor, pool, 
 		return nil, "ranked_draft_canonical_invalid"
 	end
 	local canonical = table.concat({
-		RankedConfig.DRAFT_COMMITMENT_DOMAIN,
+		profile_id == RankedConfig.DIRECT_PROFILE_ID and RankedConfig.DIRECT_COMMITMENT_DOMAIN or RankedConfig.DRAFT_COMMITMENT_DOMAIN,
 		"profile=" .. profile_id,
 		"first=" .. first_actor,
 		"pool=" .. table.concat(pool_tokens, ","),
@@ -574,15 +577,17 @@ function RankedConfig.validate_draft(draft)
 	if draft.schema ~= RankedConfig.DRAFT_SCHEMA then
 		return nil, "ranked_draft_commitment_schema"
 	end
-	if draft.profile_id ~= RankedConfig.DRAFT_PROFILE_ID then
+	if draft.profile_id ~= RankedConfig.DRAFT_PROFILE_ID and draft.profile_id ~= RankedConfig.DIRECT_PROFILE_ID then
 		return nil, "ranked_draft_profile_invalid"
 	end
+	local direct = draft.profile_id == RankedConfig.DIRECT_PROFILE_ID
 	local first = draft.first_actor
 	if first ~= "human" and first ~= "ai" then
 		return nil, "ranked_draft_first_actor_invalid"
 	end
 	local pool = draft.pool
-	if type(pool) ~= "table" or #pool ~= RankedConfig.DRAFT_POOL_SIZE then
+	if type(pool) ~= "table" or (direct and (#pool < 1 or #pool > RankedConfig.MAX_SELECTION_OPTIONS))
+		or (not direct and #pool ~= RankedConfig.DRAFT_POOL_SIZE) then
 		return nil, "ranked_draft_pool_size"
 	end
 	local pool_seen = {}
@@ -594,6 +599,22 @@ function RankedConfig.validate_draft(draft)
 		pool_seen[option] = true
 	end
 	local transcript = draft.transcript
+	if direct then
+		if first ~= "human" then return nil, "ranked_draft_first_actor_invalid" end
+		if type(transcript) ~= "table" or #transcript ~= 1 then return nil, "ranked_draft_transcript_shape" end
+		local step = transcript[1]
+		if type(step) ~= "table" or step.actor ~= "human" or step.operation ~= "select" then
+			return nil, "ranked_draft_turn"
+		end
+		local ids = step.option_ids
+		if type(ids) ~= "table" or #ids ~= 1 or pool_seen[ids[1]] ~= true then
+			return nil, "ranked_draft_option_unavailable"
+		end
+		if draft.final ~= ids[1] then return nil, "ranked_draft_final_mismatch" end
+		local digest, code = RankedConfig.draft_commitment_digest(draft.profile_id, first, pool, transcript, draft.final)
+		if digest == nil then return nil, code end
+		return digest, "ok", draft.final
+	end
 	if type(transcript) ~= "table" or #transcript ~= #RankedConfig.DRAFT_STAGE_COUNTS then
 		return nil, "ranked_draft_transcript_shape"
 	end
