@@ -335,7 +335,7 @@ function PracticeMenu.factory(ui)
 
 	function instance.selection_definition(view)
 		if not is_plain_table(view) then return nil, CODE.BAD_STATE end
-		local rows = { row({ text("Choose deck and stake", 0.55) }, 0.12) }
+		local rows = { row({ text("Choose deck and stake", 0.5) }, 0.15) }
 		local draft, selected = view.draft, view.draft_pending
 		local chosen = nil
 		if is_plain_table(draft) and is_plain_table(draft.pool) and is_plain_table(selected) then
@@ -346,16 +346,20 @@ function PracticeMenu.factory(ui)
 		if chosen ~= nil then
 			for _, field in ipairs({ "deck", "stake" }) do
 				local label = field == "deck" and chosen.deck_name or (chosen.stake_key:gsub("^%l", string.upper) .. " Stake")
-				rows[#rows + 1] = row({ text(field == "deck" and "Deck" or "Stake", 0.35) }, 0.04)
+				rows[#rows + 1] = row({ text(field == "deck" and "Deck" or "Stake", 0.32) }, 0.06)
+				-- Stock UIBox_button defaults to UIT.R. Horizontal siblings must
+				-- be columns, including the label, or the engine stacks the arrows.
 				rows[#rows + 1] = row({
 					button_builder({ id = "aisp:choice:" .. field .. ":prev", label = { "<" }, colour = C.BLUE,
-						minw = 0.8, minh = 0.6, scale = 0.4, button = "aisp_choice_cycle" }),
-					text(label, 0.42),
+						col = true, minw = 0.7, minh = 0.65, scale = 0.4, button = "aisp_choice_cycle" }),
+					{ n = UIT.C, config = { align = "cm", minw = 4, minh = 0.65, padding = 0.05 }, nodes = {
+						{ n = UIT.R, config = { align = "cm", maxw = 3.9 }, nodes = { text(label, 0.4) } },
+					} },
 					button_builder({ id = "aisp:choice:" .. field .. ":next", label = { ">" }, colour = C.BLUE,
-						minw = 0.8, minh = 0.6, scale = 0.4, button = "aisp_choice_cycle" }),
-				}, 0.06)
+						col = true, minw = 0.7, minh = 0.65, scale = 0.4, button = "aisp_choice_cycle" }),
+				}, 0.1)
 			end
-			rows[#rows + 1] = row({ text("The AI uses the same deck and stake.", 0.32) }, 0.08)
+			rows[#rows + 1] = row({ text("The AI uses the same deck and stake.", 0.3) }, 0.15)
 		else
 			rows[#rows + 1] = row({ text("Contacting the practice launcher...", 0.35) }, 0.08)
 		end
@@ -365,10 +369,10 @@ function PracticeMenu.factory(ui)
 		local ready = chosen ~= nil and draft.status == "active" and draft.current_actor == "human"
 		rows[#rows + 1] = row({
 			button_builder({ id = "aisp:choice:confirm", label = { "Continue" }, colour = ready and C.GREEN or C.BLACK,
-				minw = 4, minh = 0.6, scale = 0.4, button = "aisp_draft_confirm" }),
+				col = true, minw = 3.3, minh = 0.65, scale = 0.4, button = "aisp_draft_confirm" }),
 			button_builder({ id = "aisp:choice:cancel", label = { "Cancel" }, colour = C.BLUE,
-				minw = 3, minh = 0.6, scale = 0.4, button = "aisp_draft_cancel" }),
-		}, 0.12)
+				col = true, minw = 2.2, minh = 0.65, scale = 0.4, button = "aisp_draft_cancel" }),
+		}, 0.15)
 		return options_builder({ no_back = true, no_esc = true, contents = rows })
 	end
 
@@ -389,6 +393,7 @@ function PracticeMenu.factory(ui)
 			row({
 				button_builder({
 					id = "aisp:confirm:start",
+					col = true,
 					label = { "Start" },
 					colour = C.RED,
 					minw = 3,
@@ -398,6 +403,7 @@ function PracticeMenu.factory(ui)
 				}),
 				button_builder({
 					id = "aisp:confirm:cancel",
+					col = true,
 					label = { "Cancel" },
 					colour = C.BLUE,
 					minw = 3,
