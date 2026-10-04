@@ -630,9 +630,9 @@ return function(ctx)
 		ctx.eq(code, "driver_force_failed")
 	end)
 
-	-- End-screen Joker reveal (NATIVE_TEST_PROGRESS "First human-played match"):
+	-- Post-match build reveal (NATIVE_TEST_PROGRESS "First human-played match"):
 	-- blocked during play, allowed only once the match has legitimately ended,
-	-- and only in the direction that shows the AI's Jokers to the human.
+	-- and only in the direction that shows the AI's build to the human.
 	local function reveal_engine(role)
 		local MP, funcs = fake_engine({ code = "ABC12" })
 		MP.GAME = { won = false }
@@ -650,23 +650,27 @@ return function(ctx)
 		return driver, MP, G
 	end
 
-	test("end_game_jokers_blocked_before_and_during_the_match", function()
+	test("end_game_build_blocked_before_and_during_the_match", function()
 		for _, role in ipairs({ "human", "ai" }) do
 			local driver, MP, G = reveal_engine(role)
 			ctx.eq(driver.is_complete(), false)
 			ctx.eq(driver.guard_allows("getEndGameJokers"), false, role .. " lobby")
+			ctx.eq(driver.guard_allows("getNemesisDeck"), false, role .. " lobby")
 			ctx.eq(driver.guard_allows("receiveEndGameJokers"), false, role .. " lobby")
+			ctx.eq(driver.guard_allows("receiveNemesisDeck"), false, role .. " lobby")
 			G.STAGE = G.STAGES.RUN
 			ctx.is_true(driver.is_started())
 			for _, state in ipairs({ 1, 5 }) do
 				G.STATE = state
 				ctx.eq(driver.guard_allows("getEndGameJokers"), false, role .. " in play")
+				ctx.eq(driver.guard_allows("getNemesisDeck"), false, role .. " in play")
 				ctx.eq(driver.guard_allows("receiveEndGameJokers"), false, role .. " in play")
+				ctx.eq(driver.guard_allows("receiveNemesisDeck"), false, role .. " in play")
 			end
 		end
 	end)
 
-	test("end_game_jokers_terminal_signal_before_start_is_refused", function()
+	test("end_game_build_terminal_signal_before_start_is_refused", function()
 		-- A stray won/GAME_OVER before the real match started (e.g. a menu frame)
 		-- is not a legitimate match end.
 		local driver, MP, G = reveal_engine("human")
@@ -674,9 +678,10 @@ return function(ctx)
 		G.STATE = G.STATES.GAME_OVER
 		ctx.eq(driver.is_complete(), false)
 		ctx.eq(driver.guard_allows("getEndGameJokers"), false)
+		ctx.eq(driver.guard_allows("getNemesisDeck"), false)
 	end)
 
-	test("end_game_jokers_allowed_after_win_or_loss_in_reveal_direction_only", function()
+	test("end_game_build_allowed_after_win_or_loss_in_reveal_direction_only", function()
 		for _, outcome in ipairs({ "win", "loss" }) do
 			for _, role in ipairs({ "human", "ai" }) do
 				local driver, MP, G = reveal_engine(role)
@@ -689,34 +694,37 @@ return function(ctx)
 				end
 				ctx.is_true(driver.is_complete(), outcome)
 				ctx.eq(driver.guard_allows("getEndGameJokers"), role == "human", role .. " " .. outcome .. " get")
+				ctx.eq(driver.guard_allows("getNemesisDeck"), role == "human", role .. " " .. outcome .. " get")
 				ctx.eq(driver.guard_allows("receiveEndGameJokers"), role == "ai", role .. " " .. outcome .. " receive")
-				-- Deck/stats/ranked stay blocked after the match as well.
-				ctx.eq(driver.guard_allows("getNemesisDeck"), false)
-				ctx.eq(driver.guard_allows("receiveNemesisDeck"), false)
+				ctx.eq(driver.guard_allows("receiveNemesisDeck"), role == "ai", role .. " " .. outcome .. " receive")
+				-- Stats/ranked stay blocked after the match as well.
 				ctx.eq(driver.guard_allows("nemesisEndGameStats"), false)
 				ctx.eq(driver.guard_allows("submitResult"), false)
 			end
 		end
 	end)
 
-	test("end_game_jokers_reveal_closes_when_the_lobby_resets", function()
+	test("end_game_build_reveal_closes_when_the_lobby_resets", function()
 		local driver, MP, G = reveal_engine("ai")
 		G.STAGE = G.STAGES.RUN
 		ctx.is_true(driver.is_started())
 		MP.GAME.won = true
 		ctx.is_true(driver.guard_allows("receiveEndGameJokers"))
+		ctx.is_true(driver.guard_allows("receiveNemesisDeck"))
 		-- MP.reset_game_states on return to lobby clears the terminal signal.
 		MP.GAME = { won = false }
 		G.STAGE = G.STAGES.MAIN_MENU
 		G.STATE = 1
 		ctx.eq(driver.guard_allows("receiveEndGameJokers"), false)
+		ctx.eq(driver.guard_allows("receiveNemesisDeck"), false)
 		-- Leaving the lobby also closes it even if a stale won flag lingered.
 		MP.GAME.won = true
 		MP.LOBBY.code = nil
 		ctx.eq(driver.guard_allows("receiveEndGameJokers"), false)
+		ctx.eq(driver.guard_allows("receiveNemesisDeck"), false)
 	end)
 
-	test("end_game_jokers_refused_while_a_ghost_replay_is_active", function()
+	test("end_game_build_refused_while_a_ghost_replay_is_active", function()
 		local driver, MP, G = reveal_engine("human")
 		G.STAGE = G.STAGES.RUN
 		ctx.is_true(driver.is_started())
@@ -724,33 +732,40 @@ return function(ctx)
 		MP.GHOST.replay = {}
 		G.STATE = G.STATES.GAME_OVER
 		ctx.eq(driver.guard_allows("getEndGameJokers"), false)
+		ctx.eq(driver.guard_allows("getNemesisDeck"), false)
 		MP.GHOST.is_active = function()
 			error("boom")
 		end
 		ctx.eq(driver.guard_allows("getEndGameJokers"), false, "a failing ghost probe fails closed")
+		ctx.eq(driver.guard_allows("getNemesisDeck"), false, "a failing ghost probe fails closed")
 		MP.GHOST.is_active = function()
 			return false
 		end
 		ctx.is_true(driver.guard_allows("getEndGameJokers"))
+		ctx.is_true(driver.guard_allows("getNemesisDeck"))
 	end)
 
-	test("end_game_jokers_send_guard_passes_real_payload_after_end", function()
+	test("end_game_build_send_guard_passes_real_payload_after_end", function()
 		local driver, MP, G = reveal_engine("ai")
 		local sent = {}
 		local client = { send = function(message) sent[#sent + 1] = message.action return true end }
 		driver = MPDriver.factory({ role = "ai", mp = MP, funcs = {}, G = G, client = client })
 		ctx.is_true(driver.install_send_guard() ~= nil)
 		ctx.eq(client.send({ action = "receiveEndGameJokers", keys = "x" }), false)
+		ctx.eq(client.send({ action = "receiveNemesisDeck", cards = "S-A-m_base-none-none" }), false)
 		G.STAGE = G.STAGES.RUN
 		ctx.is_true(driver.is_started())
 		G.STATE = G.STATES.GAME_OVER
 		ctx.is_true(client.send({ action = "receiveEndGameJokers", keys = "x" }))
+		ctx.is_true(client.send({ action = "receiveNemesisDeck", cards = "S-A-m_base-none-none" }))
 		ctx.eq(client.send({ action = "getEndGameJokers" }), false)
-		ctx.eq(#sent, 1)
+		ctx.eq(client.send({ action = "getNemesisDeck" }), false)
+		ctx.eq(#sent, 2)
 		ctx.eq(sent[1], "receiveEndGameJokers")
+		ctx.eq(sent[2], "receiveNemesisDeck")
 	end)
 
-	test("end_game_reveal_table_is_exactly_two_role_bound_entries", function()
+	test("end_game_reveal_table_is_exactly_four_role_bound_entries", function()
 		local count = 0
 		for action, role in pairs(MPDriver.ENDGAME_REVEAL) do
 			count = count + 1
@@ -760,9 +775,11 @@ return function(ctx)
 			ctx.eq(MPDriver.GUEST_ONLY[action], nil, action .. " also guest-only")
 			ctx.eq(MPDriver.SEND_ALLOWLIST[action], nil, action .. " also always-allowed")
 		end
-		ctx.eq(count, 2)
+		ctx.eq(count, 4)
 		ctx.eq(MPDriver.ENDGAME_REVEAL.getEndGameJokers, "human")
 		ctx.eq(MPDriver.ENDGAME_REVEAL.receiveEndGameJokers, "ai")
+		ctx.eq(MPDriver.ENDGAME_REVEAL.getNemesisDeck, "human")
+		ctx.eq(MPDriver.ENDGAME_REVEAL.receiveNemesisDeck, "ai")
 	end)
 
 	test("end_game_reveal_requires_a_boolean_true_won_flag", function()
@@ -772,6 +789,7 @@ return function(ctx)
 			ctx.is_true(driver.is_started())
 			MP.GAME.won = value
 			ctx.eq(driver.guard_allows("getEndGameJokers"), false, tostring(value))
+			ctx.eq(driver.guard_allows("getNemesisDeck"), false, tostring(value))
 		end
 		-- The real reset leaves `won` unset rather than false.
 		local driver, MP, G = reveal_engine("human")
@@ -779,6 +797,7 @@ return function(ctx)
 		ctx.is_true(driver.is_started())
 		MP.GAME = {}
 		ctx.eq(driver.guard_allows("getEndGameJokers"), false)
+		ctx.eq(driver.guard_allows("getNemesisDeck"), false)
 	end)
 
 	test("end_game_reveal_stays_open_for_the_same_match_after_state_moves", function()
@@ -787,12 +806,15 @@ return function(ctx)
 		ctx.is_true(driver.is_started())
 		G.STATE = G.STATES.GAME_OVER
 		ctx.is_true(driver.guard_allows("receiveEndGameJokers"))
+		ctx.is_true(driver.guard_allows("receiveNemesisDeck"))
 		-- A queued engine event moves the state off GAME_OVER on the same match.
 		G.STATE = G.STATES.NEW_ROUND
 		ctx.is_true(driver.guard_allows("receiveEndGameJokers"), "latched for this match")
+		ctx.is_true(driver.guard_allows("receiveNemesisDeck"), "latched for this match")
 		-- A new match (reset_game_states builds a new MP.GAME) ends the latch.
 		MP.GAME = { won = false }
 		ctx.eq(driver.guard_allows("receiveEndGameJokers"), false, "new match closes it")
+		ctx.eq(driver.guard_allows("receiveNemesisDeck"), false, "new match closes it")
 	end)
 
 	test("end_game_reveal_through_the_human_send_wrapper", function()
@@ -804,11 +826,15 @@ return function(ctx)
 		G.STAGE = G.STAGES.RUN
 		ctx.is_true(driver.is_started())
 		ctx.eq(client.send({ action = "getEndGameJokers" }), false, "blocked during play")
+		ctx.eq(client.send({ action = "getNemesisDeck" }), false, "blocked during play")
 		MP.GAME.won = true
 		ctx.is_true(client.send({ action = "getEndGameJokers" }))
+		ctx.is_true(client.send({ action = "getNemesisDeck" }))
 		ctx.eq(client.send({ action = "receiveEndGameJokers", keys = "x" }), false, "human build never sent")
-		ctx.eq(#sent, 1)
+		ctx.eq(client.send({ action = "receiveNemesisDeck", cards = "S-A-m_base-none-none" }), false, "human build never sent")
+		ctx.eq(#sent, 2)
 		ctx.eq(sent[1], "getEndGameJokers")
+		ctx.eq(sent[2], "getNemesisDeck")
 	end)
 
 	test("known_mod_sends_are_suppressed_once_and_still_refused", function()

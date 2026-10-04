@@ -196,32 +196,30 @@ MPDriver.GUEST_ONLY = {
 	joinLobby = true,
 }
 
--- End-screen Joker reveal (docs/PROTOTYPE_GATES.md: no *pre-end*
--- getEndGameJokers). The pinned end screen (ui/game/game_end.lua:53) sends
--- `getEndGameJokers`; the pinned server relays it to the opponent
--- (src/actionHandlers.ts getEndGameJokersAction), whose handler answers with
--- `receiveEndGameJokers` carrying its own `G.jokers:save()`
--- (networking/action_handlers.lua:902-925). Each action is allowed only for the
--- one trusted role that needs it for the human to see the AI's Jokers, and only
--- once `match_complete()` holds. The reverse direction (the AI requesting the
--- human's Jokers) stays blocked, so the human's build never reaches the AI
--- runtime, even after the match.
+-- Post-match build reveal through the pinned Multiplayer end screen and its
+-- View Decks button (ui/game/game_end.lua:53-66,187-205,473-505). The server
+-- relays these requests to the opponent; its native handlers answer with its
+-- own Jokers or final playing-card collection (action_handlers.lua:902-938).
+-- Deck serialization includes suit/rank/enhancement/edition/seal, never the
+-- draw pile or RNG (lib/card_utils.lua:4-29). Each send requires the trusted
+-- role below and `match_complete()`. The AI cannot request the human's build,
+-- even after the match; these payloads never enter AIObservation.
 MPDriver.ENDGAME_REVEAL = {
 	getEndGameJokers = "human",
 	receiveEndGameJokers = "ai",
+	getNemesisDeck = "human",
+	receiveNemesisDeck = "ai",
 }
 
 -- Real wire actions that must never leave a staged runtime: ranked/server
--- logging, end-game stats exchange and private opponent deck queries, plus
+-- logging and end-game stats exchange, plus
 -- auth and modded actions.
 MPDriver.SEND_BLOCKED = {
 	submitLogHashes = true,
 	streamLogLines = true,
 	endGameStatsRequested = true,
 	sendGameStats = true,
-	getNemesisDeck = true,
 	nemesisEndGameStats = true,
-	receiveNemesisDeck = true,
 	auth = true,
 	authenticate = true,
 	rankedSubmit = true,

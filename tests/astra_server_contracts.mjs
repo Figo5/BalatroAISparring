@@ -147,4 +147,16 @@ test('server stopGame clears isInGame so a later drop is a plain leave', () => {
   disconnectFromLobby(p.human);
   assert.equal(has(p.humanMessages, 'enemyDisconnected'), false);
 });
+for (const loserRole of ['human', 'ai']) test(`post-match deck relay after ${loserRole} loses`, () => {
+  const p = pair(); A.startGame(p.human);
+  const loser = p[loserRole], winner = p[loserRole === 'human' ? 'ai' : 'human'];
+  loser.lives = 1; hand(winner, 100, 1); hand(loser, 50, 0);
+  p.humanMessages.length = p.aiMessages.length = 0;
+  A.getNemesisDeck(p.human);
+  assert.deepEqual(p.aiMessages, [{action: 'getNemesisDeck'}]);
+  assert.equal(p.humanMessages.length, 0);
+  const cards = ';S-A-m_base-none-none;H-T-m_bonus-foil-Red';
+  A.receiveNemesisDeck({cards}, p.ai);
+  assert.deepEqual(p.humanMessages, [{action: 'receiveNemesisDeck', cards}]);
+});
 console.log(`PASS ${passed} upstream server contracts; no game runtime or listener started`);
