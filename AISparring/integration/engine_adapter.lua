@@ -587,7 +587,7 @@ end
 -- A face-down or identity-masked card still appears positionally (a legal play)
 -- but never shapes a rank/suit group, so hidden identities cannot leak through
 -- the catalogue.
-local function grouping_identity(card)
+local function grouping_identity(card, smeared)
 	if not is_face_up(card) then
 		return nil, nil
 	end
@@ -608,6 +608,10 @@ local function grouping_identity(card)
 	end
 	local rank = no_rank and nil or base_rank(card)
 	local suit = no_suit and nil or base_suit(card)
+	if smeared then
+		if suit == "Diamonds" then suit = "Hearts" end
+		if suit == "Clubs" then suit = "Spades" end
+	end
 	return rank, suit
 end
 
@@ -687,6 +691,16 @@ local function card_xmult(card, center)
 end
 
 -- Playing-card record for hand/booster/target zones.
+local function public_chip_bonus(card)
+	if rget(card, "debuff") == true then return nil end
+	local ability = rget(card, "ability")
+	local bonus, permanent = rget(ability, "bonus"), rget(ability, "perma_bonus")
+	if bonus == nil and permanent == nil then return nil end
+	bonus, permanent = bonus or 0, permanent or 0
+	if not is_nat(bonus) or not is_nat(permanent) or bonus + permanent > 100000 then return nil end
+	return bonus + permanent
+end
+
 local function build_play_card(card)
 	if not is_face_up(card) then
 		return redacted()
@@ -700,6 +714,8 @@ local function build_play_card(card)
 	put(record, "edition", token_of(edition_type(card), 32))
 	put(record, "seal", seal_of(card))
 	put(record, "debuff", debuff_of(card))
+	local bonus = public_chip_bonus(card)
+	if bonus ~= nil then record.bonus_chips = bonus end
 	local xmult = card_xmult(card, center)
 	if xmult ~= nil then
 		record.xmult = xmult
@@ -713,6 +729,7 @@ end
 -- (docs/SCALING_VALUES_DESIGN.md). The state reader keeps an identical table
 -- and recomputes the value from the engine card.
 local SCALING_CURRENT = {
+	j_swashbuckler = { "mult", { "mult" } },
 	j_green_joker = { "mult", { "mult" }, { "extra", "hand_add" } },
 	j_ride_the_bus = { "mult", { "mult" }, { "extra" } },
 	j_trousers = { "mult", { "mult" }, { "extra" } },
@@ -915,6 +932,10 @@ local function decision_signature(G, MP, phase)
 	put_str("blind_on_deck", rget(game, "blind_on_deck"))
 	put_bool("block_play", rpath(game, "blind", "block_play"))
 	put_bool("blind_disabled", rpath(game, "blind", "disabled"))
+	local back_name = rpath(game, "selected_back", "name")
+	if type(back_name) == "string" then
+		put_bool("score_balanced", back_name == "Plasma Deck")
+	end
 	local current_round = rget(game, "current_round")
 	put_int("hands_left", rget(current_round, "hands_left"))
 	put_int("discards_left", rget(current_round, "discards_left"))
@@ -1379,7 +1400,7 @@ local RANK_VALUE = {
 -- from face-up, unmasked cards (`grouping_identity`): a face-down or
 -- Stone/no_rank/no_suit card appears positionally but never groups, so hidden
 -- identities cannot change or leak through the policy-visible catalogue.
-local function hand_selections(cards, count, max_k, cap, pad)
+local function hand_selections(cards, count, max_k, cap, pad, smeared, minimum, shortcut)
 	local out = {}
 	local seen = {}
 	local function add(selection)
@@ -1419,7 +1440,7 @@ local function hand_selections(cards, count, max_k, cap, pad)
 	local suit_order = {}
 	local rank_values = {}
 	for i = 1, count do
-		local rank, suit = grouping_identity(rawget(cards, i))
+		local rank, suit = grouping_identity(rawget(cards, i), smeared)
 		if rank ~= nil then
 			rank_values[i] = RANK_VALUE[rank]
 		end
@@ -1561,6 +1582,34 @@ local function hand_selections(cards, count, max_k, cap, pad)
 		add_type(full_house, 8)
 	end
 
+	-- Native Four Fingers / Shortcut candidates use only visible rank groups.
+	if minimum == 4 or shortcut then
+		local by_value = {}
+		for k = 1, #rank_order do
+			local value = RANK_VALUE[rank_order[k]]
+			if value ~= nil then by_value[value] = ranks[rank_order[k]][1] end
+		end
+		by_value[1] = by_value[14]
+		local straights = {}
+		for low = 1, 14 do
+			local run, gap = {}, 0
+			for rv = low, 14 do
+				if by_value[rv] ~= nil then
+					run[#run + 1], gap = by_value[rv], 0
+					if #run >= minimum and #run <= max_k then
+						local candidate = {}
+						for i = 1, #run do candidate[i] = run[i] end
+						straights[#straights + 1] = candidate
+					end
+					if #run >= max_k then break end
+				else
+					gap = gap + 1
+					if not shortcut or gap > 1 then break end
+				end
+			end
+		end
+		add_type(straights, 8)
+	else
 	-- 3. straights of five over visible ranks (Ace high and Ace low).
 	if max_k >= 5 then
 		local by_value = {}
@@ -1593,13 +1642,14 @@ local function hand_selections(cards, count, max_k, cap, pad)
 		add_type(straights, 8)
 	end
 
+	end
 	-- 4. flush candidates: the five highest-ranked cards of a visible suit
 	-- (ties by hand position), not merely the first five in hand order.
-	if max_k >= 5 then
+	if max_k >= (minimum or 5) then
 		local flushes = {}
 		for k = 1, #suit_order do
 			local group = suits[suit_order[k]]
-			if #group >= 5 then
+			if #group >= (minimum or 5) then
 				local sorted = {}
 				for g = 1, #group do
 					sorted[g] = group[g]
@@ -1611,7 +1661,8 @@ local function hand_selections(cards, count, max_k, cap, pad)
 					end
 					return a < b
 				end)
-				local top = { sorted[1], sorted[2], sorted[3], sorted[4], sorted[5] }
+				local top = {}
+				for i = 1, math.min(5, #sorted) do top[i] = sorted[i] end
 				table.sort(top)
 				flushes[#flushes + 1] = top
 				if #group > 5 then
@@ -1668,7 +1719,7 @@ end
 -- draw, lowest ranks first, never more than `max_k` and never a valuable card.
 -- Every candidate is still an ordinary visible-hand selection; the policy
 -- chooses among them and the executor re-checks the real discard gate.
-local function discard_selections(cards, count, max_k, cap)
+local function discard_selections(cards, count, max_k, cap, smeared)
 	local out = {}
 	local seen = {}
 	local function add(selection)
@@ -1693,7 +1744,7 @@ local function discard_selections(cards, count, max_k, cap)
 	local suit_order = {}
 	for i = 1, count do
 		local card = rawget(cards, i)
-		local rank, suit = grouping_identity(card)
+		local rank, suit = grouping_identity(card, smeared)
 		local value = rank ~= nil and RANK_VALUE[rank] or nil
 		info[i] = { value = value, suit = suit, keep = is_valuable(card) }
 		if value ~= nil then
@@ -1868,12 +1919,25 @@ local function selection_has_forced(selection, forced)
 	return true
 end
 
-local function cert_play_discard(builder, t, hand_cards, max_k, forced, pad)
+local function visible_rule(G, center)
+	local cards, count = area_cards(G, "jokers", LIMITS.jokers)
+	if cards ~= nil then
+		for i = 1, count do
+			local card = rawget(cards, i)
+			if is_face_up(card) and rget(card, "debuff") ~= true and center_key(card) == center then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function cert_play_discard(builder, t, hand_cards, max_k, forced, pad, smeared, minimum, shortcut)
 	local cap = LIMITS.selection
-	local selections = hand_selections(hand_cards, #hand_cards, max_k, cap, pad)
+	local selections = hand_selections(hand_cards, #hand_cards, max_k, cap, pad, smeared, minimum, shortcut)
 	if t == "DISCARD_CARDS" then
 		-- Targeted discards first, then the generic selections, same total cap.
-		local targeted = discard_selections(hand_cards, #hand_cards, max_k, 12)
+		local targeted = discard_selections(hand_cards, #hand_cards, max_k, 12, smeared)
 		local merged = {}
 		local seen = {}
 		for _, list in ipairs({ targeted, selections }) do
@@ -2426,10 +2490,10 @@ local function build_certificates(G, MP, phase, context, hand_cards, target)
 				-- The Psychic (public boss key, not disabled): pad plays to five.
 				local psychic = rpath(game, "blind", "config", "blind", "key") == "bl_psychic"
 					and rget(rget(game, "blind"), "disabled") ~= true
-				cert_play_discard(builder, "PLAY_CARDS", hand_cards, LIMITS.max_play, forced, psychic)
+				cert_play_discard(builder, "PLAY_CARDS", hand_cards, LIMITS.max_play, forced, psychic, visible_rule(G, "j_smeared"), visible_rule(G, "j_four_fingers") and 4 or 5, visible_rule(G, "j_shortcut"))
 			end
 			if is_int(discards_left) and discards_left > 0 then
-				cert_play_discard(builder, "DISCARD_CARDS", hand_cards, LIMITS.max_play, forced)
+				cert_play_discard(builder, "DISCARD_CARDS", hand_cards, LIMITS.max_play, forced, nil, visible_rule(G, "j_smeared"), visible_rule(G, "j_four_fingers") and 4 or 5, visible_rule(G, "j_shortcut"))
 			end
 		end
 		cert_sell_jokers(builder, G)

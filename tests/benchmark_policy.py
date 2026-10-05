@@ -98,6 +98,9 @@ CONTAINS = {
 
 # Reference Joker effects (public card text). kind: (effect, value, condition)
 JOKERS = {
+    "j_smeared": ("rule", 0, None),
+    "j_four_fingers": ("rule", 0, None), "j_shortcut": ("rule", 0, None),
+    "j_splash": ("rule", 0, None), "j_pareidolia": ("rule", 0, None),
     "j_joker": ("mult", 4, None),
     "j_greedy_joker": ("suit_mult", 3, "Diamonds"),
     "j_lusty_joker": ("suit_mult", 3, "Hearts"),
@@ -136,7 +139,7 @@ JOKERS = {
     "j_stuntman": ("chips", 250, None),
     "j_photograph": ("photo", 2, None),
 }
-JOKER_KEYS = sorted(JOKERS)
+JOKER_KEYS = sorted(key for key in JOKERS if key not in {"j_smeared", "j_four_fingers", "j_shortcut", "j_splash", "j_pareidolia"})
 
 
 def card_chips(card):
@@ -150,8 +153,8 @@ def card_chips(card):
     return RANK_VALUE[rank]
 
 
-def classify(cards):
-    """(hand_name, scoring_indices) under Balatro rules (no Four Fingers/Shortcut)."""
+def classify(cards, smeared=False, fingers=False, shortcut=False):
+    """(hand_name, scoring_indices), including visible hand-changing Jokers."""
     ranked = [i for i, c in enumerate(cards) if c.get("center") != "m_stone"]
     stones = [i for i, c in enumerate(cards) if c.get("center") == "m_stone"]
     counts = {}
@@ -159,30 +162,39 @@ def classify(cards):
         counts.setdefault(RANK_VALUE[cards[i]["rank"]], []).append(i)
     groups = sorted(counts.values(), key=lambda g: (-len(g), -RANK_VALUE[cards[g[0]]["rank"]]))
     n = len(cards)
-    flush = False
-    if n == 5 and len(ranked) == 5:
-        for suit in SUITS:
-            if all(cards[i]["suit"] == suit or cards[i].get("center") == "m_wild" for i in ranked):
-                flush = True
-    straight = False
-    if n == 5 and len(ranked) == 5 and len(counts) == 5:
-        values = sorted(counts)
-        if values[-1] - values[0] == 4 or values == [2, 3, 4, 5, 14]:
-            straight = True
+    needed = 4 if fingers else 5
+    flush_cards = []
+    for suit in ("Spades", "Hearts", "Clubs", "Diamonds"):
+        matching = [i for i in ranked if cards[i]["suit"] == suit or (cards[i].get("center") == "m_wild" and not cards[i].get("debuff")) or (smeared and (cards[i]["suit"] in ("Hearts", "Diamonds")) == (suit in ("Hearts", "Diamonds")))]
+        if len(matching) >= needed:
+            flush_cards = matching
+            break
+    straight_cards = []
+    rank_sets = [set(counts)]
+    if 14 in counts:
+        rank_sets.append((set(counts) - {14}) | {1})
+    for ranks in rank_sets:
+        for length in range(needed, min(5, len(ranks)) + 1):
+            for sequence in itertools.combinations(sorted(ranks), length):
+                if all(b - a <= (2 if shortcut else 1) for a, b in zip(sequence, sequence[1:])):
+                    match = [i for value in sequence for i in counts[14 if value == 1 else value]]
+                    if len(match) > len(straight_cards):
+                        straight_cards = match
+    flush, straight = bool(flush_cards), bool(straight_cards)
     sizes = [len(g) for g in groups]
     everything = list(range(n))
     if sizes and sizes[0] == 5:
         return ("flush_five" if flush else "five"), everything
     if straight and flush:
-        return "straight_flush", everything
+        return "straight_flush", sorted(set(straight_cards + flush_cards))
     if sizes and sizes[0] == 4:
         return "four", groups[0] + stones
     if len(sizes) >= 2 and sizes[0] == 3 and sizes[1] >= 2:
         return ("flush_house" if flush else "full_house"), everything
     if flush:
-        return "flush", everything
+        return "flush", sorted(set(flush_cards + stones))
     if straight:
-        return "straight", everything
+        return "straight", sorted(set(straight_cards + stones))
     if sizes and sizes[0] == 3:
         return "three", groups[0] + stones
     if len(sizes) >= 2 and sizes[0] == 2 and sizes[1] == 2:
@@ -216,7 +228,7 @@ def scaled_value(key, kind, value, step, hand, played, face, twos):
     return value
 
 
-def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=None):
+def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=None, balanced=False, flint=False):
     """Expected score of playing ``played`` with ``held`` left in hand.
 
     ``scaled`` maps an owned scaling Joker key to (kind, value, step), with
@@ -224,18 +236,23 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
     Abstract Joker (unmodelled ones included, as in the policy).
     """
     scaled = scaled or {}
-    hand, scoring = classify(played)
+    smeared = "j_smeared" in jokers
+    hand, scoring = classify(played, smeared, "j_four_fingers" in jokers, "j_shortcut" in jokers)
+    if "j_splash" in jokers:
+        scoring = list(range(len(played)))
     chips, mult = HAND_BASE[hand]
     if levels and hand in levels:
         chips, mult = levels[hand]["chips"], levels[hand]["mult"]
     chips, mult = float(chips), float(mult)
+    if flint:
+        chips, mult = max(0, int(chips / 2 + .5)), max(1, int(mult / 2 + .5))
     photo_index = None
     for index in sorted(scoring):
         card = played[index]
         if (
             not card.get("debuff")
-            and card.get("center") != "m_stone"
-            and card["rank"] in ("Jack", "Queen", "King")
+            and (card.get("center") != "m_stone" or "j_pareidolia" in jokers)
+            and (card["rank"] in ("Jack", "Queen", "King") or "j_pareidolia" in jokers)
         ):
             photo_index = index
             break
@@ -245,18 +262,19 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
         if card.get("debuff"):
             continue
         repeats = 2 if card.get("seal") == "Red" else 1
+        face = face or "j_pareidolia" in jokers or (card.get("center") != "m_stone" and card["rank"] in ("Jack", "Queen", "King"))
         if card.get("center") != "m_stone":
-            face = face or card["rank"] in ("Jack", "Queen", "King")
             twos += repeats if card["rank"] == "2" else 0
         for _ in range(repeats):
             chips += card_chips(card)
             center = card.get("center")
             # Enhancement (Lucky: 1 in 5 for +20 mult), then Glass, then edition.
-            if center == "m_bonus":
+            chips += card.get("bonus_chips", 0)
+            if center == "m_bonus" and "bonus_chips" not in card:
                 chips += 30
             elif center == "m_mult":
                 mult += 4
-            elif center == "m_stone":
+            elif center == "m_stone" and "bonus_chips" not in card:
                 chips += 50
             elif center == "m_lucky":
                 mult += 20 * 0.2
@@ -270,12 +288,12 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
             elif edition == "polychrome":
                 mult *= 1.5
             rank = card.get("rank") if center != "m_stone" else None
-            is_face = rank in ("Jack", "Queen", "King")
+            is_face = rank in ("Jack", "Queen", "King") or "j_pareidolia" in jokers
             for key in jokers:
                 if key in scaled:
                     continue
                 effect, value, condition = JOKERS[key]
-                if effect == "suit_mult" and rank is not None and (card["suit"] == condition or center == "m_wild"):
+                if effect == "suit_mult" and rank is not None and (card["suit"] == condition or center == "m_wild" or (smeared and (card["suit"] in ("Hearts", "Diamonds")) == (condition in ("Hearts", "Diamonds")))):
                     mult += value
                 elif effect == "face_chips" and is_face:
                     chips += value
@@ -337,7 +355,7 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
             mult += value
         elif effect == "abstract":
             mult += value * (len(jokers) if joker_count is None else joker_count)
-    return chips * mult
+    return int((chips + mult) // 2) ** 2 if balanced else chips * mult
 
 
 # Scenario families: game stage shapes the requirement, Joker count, hand
@@ -490,6 +508,7 @@ return function(repo, scenarios, difficulties)
 				center_set = c.center and "Enhanced" or "Default",
 				edition = c.edition, seal = c.seal, debuff = c.debuff,
 			})
+			if c.bonus_chips ~= nil then hand[i].ability.bonus = c.bonus_chips end
 		end
 		local jokers = {}
 		for i = 1, #sc.jokers do
@@ -513,6 +532,8 @@ return function(repo, scenarios, difficulties)
 			blind_pvp = sc.pvp or nil,
 		})
 		engine.G.GAME.blind.chips = sc.requirement
+		engine.G.GAME.blind.disabled = sc.blind_disabled == true
+		if sc.deck ~= nil then engine.G.GAME.selected_back = { name = sc.deck } end
 		if sc.levels ~= nil then
 			local hands = {}
 			for name, entry in pairs(sc.levels) do

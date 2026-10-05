@@ -1592,7 +1592,7 @@ def test_baseline_source_provider_renders_all_difficulties():
         return
     provider = ps.BaselineSourceProvider()
     # The rendered source is compacted, so match its signature tolerantly.
-    signature = re.compile(r"function\s*\(\s*observation\s*,\s*actions\s*\)")
+    signature = re.compile(r"return\s+function\s*\(\s*[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*\s*\)")
     sources = {difficulty: provider.source(difficulty) for difficulty in ps.DIFFICULTIES}
     for name in runtimes:
         lua = importlib.import_module(name).LuaRuntime(unpack_returned_tuples=True)

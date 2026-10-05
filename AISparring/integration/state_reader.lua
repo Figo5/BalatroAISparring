@@ -348,6 +348,7 @@ end
 -- adapter's table. The row comes from the engine card's own center, and the
 -- value and step are recomputed from its fields; the view must match exactly.
 local SCALING_CURRENT = {
+	j_swashbuckler = { "mult", { "mult" } },
 	j_green_joker = { "mult", { "mult" }, { "extra", "hand_add" } },
 	j_ride_the_bus = { "mult", { "mult" }, { "extra" } },
 	j_trousers = { "mult", { "mult" }, { "extra" } },
@@ -514,6 +515,15 @@ local function build_entity(record, card, kind)
 		if xmult ~= nil then
 			out.xmult = xmult
 		end
+	end
+	if kind == "card" and rawget(record, "bonus_chips") ~= nil then
+		local ability = rget(card, "ability")
+		local bonus, permanent = rget(ability, "bonus") or 0, rget(ability, "perma_bonus") or 0
+		local value = rawget(record, "bonus_chips")
+		if rget(card, "debuff") == true or not is_int(bonus) or not is_int(permanent)
+			or bonus < 0 or permanent < 0 or bonus + permanent > 100000
+			or not is_int(value) or value ~= bonus + permanent then return nil end
+		out.bonus_chips = value
 	end
 	return out
 end
@@ -799,6 +809,36 @@ local function build_match(G, MP, view)
 		end
 	end
 	local game = rget(G, "GAME")
+	-- Public own deck rule, derived from the real Back object, never the view.
+	-- Vanilla Back:trigger_effect balances only this name at final_scoring_step.
+	local back_name = rget(rget(game, "selected_back"), "name")
+	if type(back_name) == "string" then
+		out.score_balanced = back_name == "Plasma Deck"
+	end
+	-- Read the AI's own visible active countdown. Deriving it here keeps the
+	-- changing seconds out of the adapter's action epoch: elapsed time changes
+	-- strategy, but not legal-action identity. Never inspect the enemy timer.
+	local mp_game = rget(MP, "GAME")
+	local config = rget(rget(MP, "LOBBY"), "config")
+	local lobby_code = rget(rget(MP, "LOBBY"), "code")
+	local active = rget(mp_game, "timer_started") == true or rget(mp_game, "nemesis_timer_started") == true
+	if engine_pvp_boss(G) == true then
+		local is_layer = rget(MP, "is_layer_active")
+		local pvp_timer = true
+		if type(is_layer) == "function" then
+			local ok, value = pcall(is_layer, "pvp_timer")
+			if ok and type(value) == "boolean" then
+				pvp_timer = value
+			end
+		end
+		active = pvp_timer and rget(mp_game, "nemesis_timer_started") == true
+	end
+	local timer = rget(mp_game, "timer")
+	if active and rget(config, "timer") == true and rget(config, "disable_live_and_timer_hud") ~= true
+		and type(lobby_code) == "string" and #lobby_code > 0
+		and type(timer) == "number" and timer == timer and timer ~= math.huge and timer ~= -math.huge then
+		out.timer_remaining = math.max(0, math.min(INT_MAX, math.floor(timer)))
+	end
 	local resets = rget(game, "round_resets")
 	local ante = rget(resets, "ante")
 	if is_int(ante) and ante >= 0 then

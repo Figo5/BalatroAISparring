@@ -156,11 +156,13 @@ candidates are first analysed once per decision (`analyse_plays`):
   Moon and Photograph). Joker editions apply in Joker order, so ×mult after
   +mult is modelled.
 
-Unknowns count as neutral: boss-blind effects (for example The Flint halving
-base chips and mult), boss effects, probabilities beyond Lucky's expectation and any Joker not in the table.
-Abstract Joker counts every Joker, debuffed included. When a Joker that changes
-what a hand is (Four Fingers, Shortcut, Smeared, Splash, Pareidolia) is present,
-the estimate is not used at all and the category ranking decides. Estimates are
+Unmodelled effects count as neutral; see `AI_DECISION_REVIEW.md` for the current
+coverage and remaining gaps. Abstract Joker counts every Joker, debuffed included.
+Four Fingers, Shortcut, Smeared, Splash and Pareidolia are modelled throughout
+play estimates, discard search and shop panel evaluation. The final Plasma
+score is `floor((chips + mult) / 2)^2`, after all scoring effects. Displayed
+permanent chip bonuses replace fixed enhancement defaults when available.
+Estimates are
 clamped at 1e15, and NaN is clamped too. The estimate is for comparing plays,
 not an exact score.
 
@@ -232,9 +234,10 @@ hand types) and **The Mouth** (one hand type per round), the AI's own
 estimated at 0 in the play estimate, the discard search and the category
 fallback, so a discard wins when every play is blocked
 (docs/HAND_HISTORY_DESIGN.md). A disabled boss (`match.blind_disabled`)
-lifts every boss rule. The Flint scales scoring uniformly and is not modelled.
+lifts every boss rule. The Flint rounds and halves base hand chips/mult before
+card and Joker effects; it is applied only in active hand-scoring phases.
 
-**Category fallback.** Without an estimate (rule-changing Jokers, absurd
+**Category fallback.** Without an estimate (unreadable cards, absurd
 sizes), plays are ranked by hand category from `classify_scoring`, then the
 top scoring rank, then the rank sum. Discards sit between High Card and Pair.
 This replaced the older `evaluate()` ranking, which ignored Wild cards in

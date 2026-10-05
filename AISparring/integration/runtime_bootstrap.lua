@@ -1332,6 +1332,12 @@ function RuntimeBootstrap.factory(ports)
 		if driver == nil then
 			return nil, driver_code or CODE.ACTIVATE_FAILED
 		end
+		-- Only the authenticated staged AI reaches activation. Use the ordinary
+		-- game's legal 4x preference; no animation, timer or Handy overrides.
+		local settings = rawget(G, "SETTINGS")
+		if type(settings) == "table" then
+			settings.GAMESPEED = 4
+		end
 
 		activated = true
 		state = "active"

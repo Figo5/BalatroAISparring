@@ -190,6 +190,11 @@ local CONF = %s
 local PLAY = nil
 -- The displayed poker-hand levels (self.hand_levels) for this decision, or nil.
 local LEVELS = nil
+local SMEARED = false
+local BALANCED = false
+local TIME_PRESSURE = false
+local FLINT = false
+local RULES = {}
 -- Deterministic work meter, reset per decision: every score estimate charges
 -- (cards read) x (Jokers applied + 2), which tracks its VM instruction cost.
 -- Optional searches stop once their share is spent, so the sandbox budget is
@@ -276,8 +281,29 @@ end
 -- Suits by their first letter, either case.
 local SUIT_OF = { H = "H", h = "H", D = "D", d = "D", C = "C", c = "C", S = "S", s = "S" }
 
+local function merge_suit(sk)
+	if SMEARED then
+		if sk == "D" then return "H" end
+		if sk == "C" then return "S" end
+	end
+	return sk
+end
+
 local function suit_key(suit)
-	return type(suit) == "string" and SUIT_OF[string.sub(suit, 1, 1)] or nil
+	return merge_suit(type(suit) == "string" and SUIT_OF[string.sub(suit, 1, 1)] or nil)
+end
+
+local function set_rules(jokers)
+	RULES = {}
+	if type(jokers) == "table" then
+		for i = 1, #jokers do
+			local j = jokers[i]
+			if type(j) == "table" and j.debuff ~= true and j.redacted ~= true and type(j.center) == "string" then
+				RULES[j.center] = true
+			end
+		end
+	end
+	SMEARED = RULES.j_smeared == true
 end
 
 local function center_bonus(center)
@@ -327,7 +353,7 @@ local function edition_value(edition)
 	return 0
 end
 
-local function find_by_id(list, ref)
+local function by_ref(list, ref)
 	if type(list) ~= "table" or type(ref) ~= "string" then
 		return nil
 	end
@@ -341,11 +367,11 @@ local function find_by_id(list, ref)
 	return nil
 end
 
-local function cards_for(observation, refs)
+local function cards_for(obs, refs)
 	if type(refs) ~= "table" then
 		return nil
 	end
-	local s = observation.self
+	local s = obs.self
 	if type(s) ~= "table" then
 		return nil
 	end
@@ -356,7 +382,7 @@ local function cards_for(observation, refs)
 	local out = {}
 	local n = #refs
 	for i = 1, n do
-		local card = find_by_id(hand, refs[i])
+		local card = by_ref(hand, refs[i])
 		if card == nil then
 			return nil
 		end
@@ -387,8 +413,8 @@ local function is_stone(card)
 	return card.center == "m_stone"
 end
 
--- Hand name and the set of scoring positions (Balatro rules without
--- Four Fingers / Shortcut / Splash). Returns nil for unreadable cards.
+-- Hand name and scoring positions, including own visible hand-changing
+-- Jokers. Returns nil for unreadable cards.
 local function classify_scoring(cards)
 	local n = #cards
 	local groups = {}
@@ -425,39 +451,30 @@ local function classify_scoring(cards)
 		end
 		return a.rv > b.rv
 	end)
-	local flush = false
-	local straight = false
-	if n == 5 and #ranked == 5 then
-		local keys = { "H", "D", "C", "S" }
-		for k = 1, 4 do
-			local all = true
-			for i = 1, 5 do
-				local c = cards[ranked[i]]
-				if suit_key(c.suit) ~= keys[k] and c.center ~= "m_wild" then
-					all = false
-				end
-			end
-			if all then
-				flush = true
+	local needed = RULES.j_four_fingers and 4 or 5
+	local flush, straight
+	local keys = { "S", "H", "C", "D" }
+	for k = 1, 4 do
+		local g = {}
+		for i = 1, #ranked do
+			local c = cards[ranked[i]]
+			if suit_key(c.suit) == keys[k] or (c.center == "m_wild" and c.debuff ~= true) then g[#g + 1] = ranked[i] end
+		end
+		if #g >= needed then flush = g; break end
+	end
+	for low = 1, 14 do
+		local g, ranks, gap = {}, 0, 0
+		for rv = low, 14 do
+			local group = groups[rv == 1 and 14 or rv]
+			if group ~= nil then
+				ranks, gap = ranks + 1, 0
+				for i = 1, #group do g[#g + 1] = group[i] end
+			else
+				gap = gap + 1
+				if not RULES.j_shortcut or gap > 1 then break end
 			end
 		end
-		if #list == 5 then
-			local lo, hi = 99, 0
-			local has = {}
-			for i = 1, 5 do
-				local rv = list[i].rv
-				has[rv] = true
-				if rv < lo then
-					lo = rv
-				end
-				if rv > hi then
-					hi = rv
-				end
-			end
-			if hi - lo == 4 or (has[14] and has[2] and has[3] and has[4] and has[5]) then
-				straight = true
-			end
-		end
+		if ranks >= needed and (straight == nil or #g > #straight) then straight = g end
 	end
 	local scoring = {}
 	local function mark(g)
@@ -479,7 +496,8 @@ local function classify_scoring(cards)
 		mark_all()
 	elseif straight and flush then
 		name = "straight_flush"
-		mark_all()
+		mark(straight)
+		mark(flush)
 	elseif s1 == 4 then
 		name = "four"
 		mark(list[1].g)
@@ -488,10 +506,10 @@ local function classify_scoring(cards)
 		mark_all()
 	elseif flush then
 		name = "flush"
-		mark_all()
+		mark(flush)
 	elseif straight then
 		name = "straight"
-		mark_all()
+		mark(straight)
 	elseif s1 == 3 then
 		name = "three"
 		mark(list[1].g)
@@ -508,6 +526,7 @@ local function classify_scoring(cards)
 			scoring[list[1].g[1]] = true
 		end
 	end
+	if RULES.j_splash then mark_all() end
 	return name, scoring
 end
 
@@ -517,8 +536,8 @@ local CATEGORY = {
 	four = 8, straight_flush = 9, five = 10, flush_house = 11, flush_five = 12,
 }
 
-local function play_score(observation, action)
-	local cards = cards_for(observation, action.card_refs)
+local function play_score(obs, act)
+	local cards = cards_for(obs, act.card_refs)
 	if cards == nil or #cards == 0 then
 		return nil
 	end
@@ -536,7 +555,7 @@ local function play_score(observation, action)
 		return nil
 	end
 	if CONF.estimate_plays and PLAY ~= nil then
-		local value = PLAY.est[action.id]
+		local value = PLAY.est[act.id]
 		if value ~= nil then
 			-- Scaled to this decision's best estimate so late-game values keep
 			-- full resolution; strictly increasing in the estimate.
@@ -602,7 +621,7 @@ local CONTAINS = {
 	flush = { flush = true, straight_flush = true, flush_house = true, flush_five = true },
 }
 local JOKER_EFFECTS = {
-	j_joker = { "mult", 4 }, j_misprint = { "mult", 11 }, j_gros_michel = { "mult", 15 },
+	j_four_fingers = { "rule", 0 }, j_shortcut = { "rule", 0 }, j_splash = { "rule", 0 }, j_pareidolia = { "rule", 0 }, j_smeared = { "rule", 0 }, j_joker = { "mult", 4 }, j_misprint = { "mult", 11.5 }, j_gros_michel = { "mult", 15 },
 	j_cavendish = { "xmult", 3 }, j_stuntman = { "chips", 250 },
 	j_greedy_joker = { "suit_mult", 3, "D" }, j_lusty_joker = { "suit_mult", 3, "H" },
 	j_wrathful_joker = { "suit_mult", 3, "S" }, j_gluttenous_joker = { "suit_mult", 3, "C" },
@@ -669,9 +688,6 @@ end
 -- Joker kinds that score face cards: they reset Ride the Bus.
 local FACE_KINDS = { face_chips = true, face_mult = true, photo = true, kq_xmult = true }
 
-local RULE_JOKERS = {
-	j_four_fingers = true, j_shortcut = true, j_smeared = true, j_splash = true, j_pareidolia = true,
-}
 -- Estimates are clamped here (also NaN), far above any meaningful score.
 local ESTIMATE_CAP = 1e15
 -- Draw-aware discard search: at most this many candidates, best cheap
@@ -702,7 +718,7 @@ end
 
 -- Expected score of playing `played` while `held` stays in hand. `jokers` is
 -- the ordered visible Joker list, or nil to ignore Jokers.
-local function estimate_score(played, held, jokers)
+local function estimate(played, held, jokers)
 	local name, scoring = classify_scoring(played)
 	if name == nil then
 		return nil
@@ -716,6 +732,10 @@ local function estimate_score(played, held, jokers)
 			chips = level.chips
 			mult = level.mult
 		end
+	end
+	if FLINT then
+		chips = math.max(0, math.floor(chips * 0.5 + 0.5))
+		mult = math.max(1, math.floor(mult * 0.5 + 0.5))
 	end
 	local effects = {}
 	local joker_count = 0
@@ -742,7 +762,7 @@ local function estimate_score(played, held, jokers)
 	for i = 1, #played do
 		local c = played[i]
 		local rv = (not is_stone(c)) and rank_value(c.rank) or nil
-		if photo_index == nil and scoring[i] and c.debuff ~= true and rv ~= nil and rv >= 11 and rv <= 13 then
+		if photo_index == nil and scoring[i] and c.debuff ~= true and (RULES.j_pareidolia or (rv ~= nil and rv >= 11 and rv <= 13)) then
 			photo_index = i
 		end
 	end
@@ -755,11 +775,8 @@ local function estimate_score(played, held, jokers)
 				rv = rank_value(c.rank)
 			end
 			local sk = suit_key(c.suit)
-			if rv == 2 then
-				twos = twos + reps
-			elseif rv ~= nil and rv >= 11 and rv <= 13 then
-				face_scored = true
-			end
+			if rv == 2 then twos = twos + reps end
+			if RULES.j_pareidolia or (rv ~= nil and rv >= 11 and rv <= 13) then face_scored = true end
 			for _ = 1, reps do
 				if rv ~= nil then
 					chips = chips + card_chip_value(rv)
@@ -769,11 +786,14 @@ local function estimate_score(played, held, jokers)
 				-- then Glass (its projected effective own-card multiplier, x1.5
 				-- under Standard and x2 under vanilla/Major League), then the
 				-- card's edition.
-				if center == "m_bonus" then
+				if type(c.bonus_chips) == "number" then
+					chips = chips + c.bonus_chips
+				end
+				if center == "m_bonus" and c.bonus_chips == nil then
 					chips = chips + 30
 				elseif center == "m_mult" then
 					mult = mult + 4
-				elseif center == "m_stone" then
+				elseif center == "m_stone" and c.bonus_chips == nil then
 					chips = chips + 50
 				elseif center == "m_lucky" then
 					mult = mult + 4
@@ -789,12 +809,12 @@ local function estimate_score(played, held, jokers)
 				elseif c.edition == "polychrome" then
 					mult = mult * 1.5
 				end
-				local face = rv ~= nil and rv >= 11 and rv <= 13
+				local face = (RULES.j_pareidolia or (rv ~= nil and rv >= 11 and rv <= 13))
 				for k = 1, #effects do
 					local e = effects[k].e
 					if e then
 						local kind = e[1]
-						if kind == "suit_mult" and rv ~= nil and (sk == e[3] or center == "m_wild") then
+						if kind == "suit_mult" and rv ~= nil and (sk == merge_suit(e[3]) or center == "m_wild") then
 							mult = mult + e[2]
 						elseif kind == "face_chips" and face then
 							chips = chips + e[2]
@@ -892,6 +912,11 @@ local function estimate_score(played, held, jokers)
 		end
 	end
 	WORK = WORK + (#played + (held ~= nil and #held or 0)) * (#effects + 2)
+	if BALANCED then
+		-- Plasma balances after all scoring effects, flooring each half.
+		local half = math.floor((chips + mult) / 2)
+		return half * half, name
+	end
 	return chips * mult, name
 end
 
@@ -975,7 +1000,7 @@ local RANK_NAMES = { [2] = "2", [3] = "3", [4] = "4", [5] = "5", [6] = "6", [7] 
 -- Best estimated play among `cards` (<= 8) from its structural candidates:
 -- rank groups (with a second group for two pair / full house), the top five of
 -- a suit, five-rank straights and the single high card.
-local function best_play_value(cards, jokers)
+local function best_play(cards, jokers)
 	local best = 0
 	local function try(list)
 		if #list == 0 or #list > 5 or #list < MIN_CARDS then
@@ -991,7 +1016,7 @@ local function best_play_value(cards, jokers)
 				held[#held + 1] = cards[i]
 			end
 		end
-		local value, name = estimate_score(list, held, jokers)
+		local value, name = estimate(list, held, jokers)
 		if value ~= nil and value > best and not blocked_hand(name) then
 			best = value
 		end
@@ -1053,7 +1078,7 @@ local function best_play_value(cards, jokers)
 		end
 	end
 	for _, g in pairs(by_suit) do
-		if #g >= 5 then
+		if #g >= (RULES.j_four_fingers and 4 or 5) then
 			local sorted = {}
 			for i = 1, #g do
 				sorted[i] = g[i]
@@ -1065,24 +1090,23 @@ local function best_play_value(cards, jokers)
 				end
 				return byte_less(x.id or "", y.id or "")
 			end)
-			try({ sorted[1], sorted[2], sorted[3], sorted[4], sorted[5] })
+			local play = {}
+			for i = 1, math.min(5, #sorted) do play[i] = sorted[i] end
+			try(play)
 		end
 	end
-	for low = 1, 10 do
-		local run = {}
-		for v = low, low + 4 do
-			local rv = v
-			if v == 1 then
-				rv = 14
+	for low = 1, 14 do
+		local run, gap = {}, 0
+		for v = low, 14 do
+			local g = by_rank[v == 1 and 14 or v]
+			if g ~= nil then
+				run[#run + 1], gap = g[1], 0
+				if #run >= (RULES.j_four_fingers and 4 or 5) then try(run) end
+				if #run == 5 then break end
+			else
+				gap = gap + 1
+				if not RULES.j_shortcut or gap > 1 then break end
 			end
-			local g = by_rank[rv]
-			if g == nil then
-				break
-			end
-			run[#run + 1] = g[1]
-		end
-		if #run == 5 then
-			try(run)
 		end
 	end
 	return best
@@ -1096,8 +1120,8 @@ end
 -- number of cards: the current best of the kept cards, improved by the most
 -- valuable reachable target (flush, better rank group, straight) weighted by
 -- its hypergeometric chance.
-local function discard_ev(observation, discard_refs, jokers, need)
-	local s = observation.self
+local function discard_ev(obs, discard_refs, jokers, need)
+	local s = obs.self
 	local hand = s.hand
 	local drop = {}
 	for i = 1, #discard_refs do
@@ -1123,14 +1147,14 @@ local function discard_ev(observation, discard_refs, jokers, need)
 		end
 	end
 	local d = #discard_refs
-	-- Structural search cost that estimate_score does not charge.
+	-- Structural search cost that estimate does not charge.
 	WORK = WORK + #kept * (110 + 20 * d)
 	local pool = 52 - #hand
 	local deck = s.deck
 	if type(deck) == "table" and type(deck.total) == "number" and deck.total > 0 and deck.total < pool then
 		pool = deck.total
 	end
-	local base = best_play_value(kept, jokers)
+	local base = best_play(kept, jokers)
 	local ev = base
 	-- Chance that the follow-up play reaches `need` (last-hand ranking).
 	local p_clear = 0
@@ -1158,7 +1182,7 @@ local function discard_ev(observation, discard_refs, jokers, need)
 			local j = jokers[i]
 			local je = type(j) == "table" and j.debuff ~= true and JOKER_EFFECTS[j.center] or nil
 			if je ~= nil and je[1] == "suit_mult" then
-				bonus[je[3]] = true
+				bonus[merge_suit(je[3])] = true
 			end
 		end
 	end
@@ -1196,7 +1220,7 @@ local function discard_ev(observation, discard_refs, jokers, need)
 				end
 			end
 		end
-		local value, name = estimate_score(play, held, jokers)
+		local value, name = estimate(play, held, jokers)
 		if value == nil or blocked_hand(name) then
 			return
 		end
@@ -1246,7 +1270,8 @@ local function discard_ev(observation, discard_refs, jokers, need)
 	for k = 1, 4 do
 		local sk = suits[k]
 		local have = kept_suit[sk] or 0
-		local need = 5 - have
+		local target = RULES.j_four_fingers and 4 or 5
+		local need = target - have
 		if have >= 2 and need >= 1 and need <= d then
 			local play = kept_where(function(c)
 				return suit_key(c.suit) == sk
@@ -1261,7 +1286,7 @@ local function discard_ev(observation, discard_refs, jokers, need)
 				play[#play + 1] = synthetic(filler <= 14 and filler or 8, sk)
 				filler = filler + 2
 			end
-			consider(p_at_least(need, d, 13 - (seen_suit[sk] or 0), pool), play)
+			consider(p_at_least(need, d, (SMEARED and 26 or 13) - (seen_suit[sk] or 0), pool), play)
 		end
 	end
 	-- Rank groups: one more of a kept rank (pair -> three, three -> four,
@@ -1285,7 +1310,7 @@ local function discard_ev(observation, discard_refs, jokers, need)
 	local fill_rank = 0
 	for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
 		-- Prefer a suit no kept card shares, then one no suit Joker rewards.
-		local r = ((kept_suit[candidate_suit] or 0) == 0 and 2 or 0) + (bonus[candidate_suit] and 0 or 1)
+		local r = ((kept_suit[merge_suit(candidate_suit)] or 0) == 0 and 2 or 0) + (bonus[merge_suit(candidate_suit)] and 0 or 1)
 		if r > fill_rank then
 			fill_suit = candidate_suit
 			fill_rank = r
@@ -1424,21 +1449,21 @@ local function hand_aggregates(hand)
 	return counts, suitc
 end
 
-local function discard_score(observation, action)
-	local state = observation.self
+local function discard_score(obs, act)
+	local state = obs.self
 	if type(state) == "table" and state.hands == 0 then
 		return nil
 	end
-	local refs = action.card_refs
+	local refs = act.card_refs
 	if type(refs) ~= "table" or #refs == 0 then
 		return nil
 	end
-	local cards = cards_for(observation, refs)
+	local cards = cards_for(obs, refs)
 	if cards == nil then
 		return nil
 	end
 	local hand = nil
-	local s = observation.self
+	local s = obs.self
 	if type(s) == "table" then
 		hand = s.hand
 	end
@@ -1484,29 +1509,19 @@ local function discard_score(observation, action)
 	return score
 end
 
-local function analyse_plays(observation, actions, count)
+local function analyse_plays(obs, actions, count)
 	local info = {
 		est = {}, best = nil, remaining = nil, clears = false, discard_mode = false,
 		-- Per-decision Joker-order budget (see reorder_score).
 		reorders_left = REORDER_EST_LIMIT, panel_now = nil,
 	}
-	local s = observation.self
+	local s = obs.self
 	if type(s) ~= "table" or type(s.hand) ~= "table" then
 		return info
 	end
 	local jokers = nil
 	if CONF.est_jokers then
 		jokers = s.jokers
-	end
-	-- Jokers that change what a hand is (Four Fingers, Shortcut, Smeared,
-	-- Splash, Pareidolia) make the estimate wrong: keep the category ranking.
-	if type(s.jokers) == "table" then
-		for i = 1, #s.jokers do
-			local j = s.jokers[i]
-			if type(j) == "table" and RULE_JOKERS[j.center] then
-				return info
-			end
-		end
 	end
 	-- Projected estimate cost; past PLAY_WORK (only absurd hand and Joker
 	-- counts) keep the category ranking rather than risk the budget.
@@ -1525,9 +1540,9 @@ local function analyse_plays(observation, actions, count)
 	for i = 1, count do
 		local a = actions[i]
 		if type(a) == "table" and a.type == "PLAY_CARDS" then
-			local cards = cards_for(observation, a.card_refs)
+			local cards = cards_for(obs, a.card_refs)
 			if cards ~= nil and #cards > 0 then
-				local value, name = estimate_score(cards, held_after(s.hand, a.card_refs), jokers)
+				local value, name = estimate(cards, held_after(s.hand, a.card_refs), jokers)
 				if value ~= nil and (value ~= value or value >= ESTIMATE_CAP) then
 					value = ESTIMATE_CAP
 				end
@@ -1547,7 +1562,7 @@ local function analyse_plays(observation, actions, count)
 		end
 	end
 	info.best = best
-	if CONF.use_requirement and observation.phase ~= "MULTIPLAYER_PVP" then
+	if CONF.use_requirement and obs.phase ~= "MULTIPLAYER_PVP" then
 		local need = display_number(s.blind_requirement)
 		local have = display_number(s.current_score) or 0
 		if need ~= nil and need > 0 then
@@ -1576,7 +1591,7 @@ local function analyse_plays(observation, actions, count)
 		for i = 1, count do
 			local a = actions[i]
 			if type(a) == "table" and a.type == "DISCARD_CARDS" and type(a.card_refs) == "table" then
-				local h = discard_score(observation, a)
+				local h = discard_score(obs, a)
 				if h ~= nil then
 					ranked[#ranked + 1] = { a = a, h = h, id = type(a.id) == "string" and a.id or "" }
 				end
@@ -1596,7 +1611,7 @@ local function analyse_plays(observation, actions, count)
 		for i = 1, #ranked do
 			local a = ranked[i].a
 			if i <= DISCARD_EV_LIMIT and WORK < limit then
-				local value, p_clear = discard_ev(observation, a.card_refs, jokers, need)
+				local value, p_clear = discard_ev(obs, a.card_refs, jokers, need)
 				info.discard_ev[a.id] = value
 				if info.discard_clear ~= nil then
 					info.discard_clear[a.id] = p_clear
@@ -1628,8 +1643,8 @@ local function analyse_plays(observation, actions, count)
 	return info
 end
 
-local function spendable(observation)
-	local s = observation.self
+local function spendable(obs)
+	local s = obs.self
 	if type(s) ~= "table" then
 		return nil
 	end
@@ -1688,12 +1703,16 @@ end
 
 -- Weighted panel score for an ordered Joker list (nil Jokers = none).
 local function panel_total(jokers)
+	local previous = RULES
+	set_rules(jokers)
 	local total = 0
 	local panel = panel_hands()
 	for i = 1, #panel do
 		local hand = panel[i]
-		total = total + hand.w * (estimate_score(hand.play, hand.held, jokers) or 0)
+		total = total + hand.w * (estimate(hand.play, hand.held, jokers) or 0)
 	end
+	RULES = previous
+	SMEARED = RULES.j_smeared == true
 	return total
 end
 
@@ -1714,25 +1733,19 @@ local function joker_pinned(joker)
 	return PINNED[center] == true
 end
 
-local function joker_gain(observation, center, edition)
+local function joker_gain(obs, center, edition)
 	if type(center) ~= "string" then
 		return 0
 	end
-	local s = observation.self
+	local s = obs.self
 	local owned = {}
 	if type(s) == "table" and type(s.jokers) == "table" then
 		for i = 1, #s.jokers do
 			local j = s.jokers[i]
 			if type(j) == "table" then
 				owned[#owned + 1] = j
-				if RULE_JOKERS[j.center] then
-					return 0
-				end
 			end
 		end
-	end
-	if RULE_JOKERS[center] then
-		return 0
 	end
 	-- Place the new Joker where the reorder step would: an additive
 	-- (+mult/+chips) Joker goes before the trailing x-mult / Polychrome
@@ -1777,7 +1790,7 @@ local function joker_gain(observation, center, edition)
 	if offered and SCALING[center] ~= nil then
 		-- More rounds left to grow early: x1.25 at antes 1-2, x1 at 3-4,
 		-- x0.75 from ante 5 (only the part above x1 for x-mult).
-		local ante = type(observation.match) == "table" and observation.match.ante or nil
+		local ante = type(obs.match) == "table" and obs.match.ante or nil
 		local f = 1
 		if type(ante) == "number" then
 			f = ante <= 2 and 1.25 or (ante <= 4 and 1 or 0.75)
@@ -1847,8 +1860,8 @@ local function unusable(center)
 	return TARGETED[center] and not (CONF.hand_tarots and TAROT_FX[center])
 end
 
-local function harmful_use(observation, center)
-	local s = observation.self
+local function harmful_use(obs, center)
+	local s = obs.self
 	local jokers = 0
 	local money = 0
 	if type(s) == "table" then
@@ -1902,7 +1915,7 @@ local PACK_VALUE = {
 	{ "p_mp_standard", -20 },
 }
 
--- The poker hand each planet levels (observation hand_levels names).
+-- The poker hand each planet levels (obs hand_levels names).
 local PLANET_HAND = {
 	c_pluto = "high_card", c_mercury = "pair", c_uranus = "two_pair", c_venus = "three",
 	c_saturn = "straight", c_jupiter = "flush", c_earth = "full_house", c_mars = "four",
@@ -1911,9 +1924,9 @@ local PLANET_HAND = {
 
 -- true/false when the visible Joker count and slot limit are known (the limit
 -- already includes Negative Jokers' extra slots), nil when either is unknown.
-local function joker_room(observation)
-	local s = observation.self
-	local match = observation.match
+local function joker_room(obs)
+	local s = obs.self
+	local match = obs.match
 	if type(s) ~= "table" or type(s.jokers) ~= "table" or type(match) ~= "table" then
 		return nil
 	end
@@ -1936,12 +1949,12 @@ local function pack_prefix(center)
 	return nil
 end
 
-local function pack_value(observation, center)
+local function pack_value(obs, center)
 	local i = pack_prefix(center)
 	if i == nil then
 		return 0
 	end
-	if PACK_VALUE[i][1] == "p_buffoon" and joker_room(observation) ~= true then
+	if PACK_VALUE[i][1] == "p_buffoon" and joker_room(obs) ~= true then
 		-- Unknown room: no Buffoon preference either way.
 		return 0
 	end
@@ -1950,7 +1963,7 @@ end
 
 -- Pack pick: a planet for an already-levelled hand compounds (the policy
 -- keeps playing what it has levelled), so it gets points per displayed level.
-local function planet_pick_value(observation, center)
+local function planet_pick_value(obs, center)
 	if center == "c_black_hole" then
 		return 40
 	end
@@ -1958,7 +1971,7 @@ local function planet_pick_value(observation, center)
 	if hand == nil then
 		return 0
 	end
-	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
+	local levels = type(obs.self) == "table" and obs.self.hand_levels or nil
 	local level = 1
 	if type(levels) == "table" and type(levels[hand]) == "table" and type(levels[hand].level) == "number" then
 		level = levels[hand].level
@@ -2006,12 +2019,12 @@ local function kind_value(kind)
 	return 0
 end
 
-local function buy_score(observation, action)
-	local shop = observation.shop
+local function buy_score(obs, act)
+	local shop = obs.shop
 	if type(shop) ~= "table" then
 		return nil
 	end
-	local item = find_by_id(shop.items, action.item_ref)
+	local item = by_ref(shop.items, act.item_ref)
 	if item == nil or item.redacted == true then
 		return nil
 	end
@@ -2019,11 +2032,11 @@ local function buy_score(observation, action)
 	if type(cost) ~= "number" then
 		return nil
 	end
-	local spend = spendable(observation)
+	local spend = spendable(obs)
 	if spend == nil or spend < cost then
 		return nil
 	end
-	if item.kind == "consumable" and (harmful_use(observation, item.center) or unusable(item.center)) then
+	if item.kind == "consumable" and (harmful_use(obs, item.center) or unusable(item.center)) then
 		return nil
 	end
 	local score = kind_value(item.kind)
@@ -2032,7 +2045,7 @@ local function buy_score(observation, action)
 	if item.kind == "joker" and CONF.est_jokers and CONF.joker_gain_value > 0 then
 		-- Up to +3x the panel estimate; unknown Jokers keep the flat value and
 		-- scaling ones use their SCALING proxy.
-		local gain = joker_gain(observation, item.center, item.edition) * CONF.joker_gain_value
+		local gain = joker_gain(obs, item.center, item.edition) * CONF.joker_gain_value
 		if spend - cost < CONF.reserve then
 			-- Dipping under the reserve (or into Credit Card debt) needs a
 			-- clearly better Joker: halve the gain there.
@@ -2049,12 +2062,12 @@ end
 -- consulted when two actions already score exactly the same AND both expose a
 -- worth, so no comparison between different kinds or price/economy/reserve/
 -- edition outcomes can change; anything else keeps the established id order.
-local function buy_tiebreak(observation, action)
-	local shop = observation.shop
-	if type(action) ~= "table" or action.type ~= "BUY_ITEM" or type(shop) ~= "table" then
+local function buy_tiebreak(obs, act)
+	local shop = obs.shop
+	if type(act) ~= "table" or act.type ~= "BUY_ITEM" or type(shop) ~= "table" then
 		return nil
 	end
-	local item = find_by_id(shop.items, action.item_ref)
+	local item = by_ref(shop.items, act.item_ref)
 	if item == nil or item.kind ~= "consumable" then
 		return nil
 	end
@@ -2064,14 +2077,14 @@ end
 -- The best certified Joker purchase this shop decision, by its full buy score
 -- (edition, estimated gain and economy after its own price), or false. Only
 -- Jokers worth buying over leaving count. Computed once per decision.
-local function best_joker(observation, actions, count)
+local function best_joker(obs, actions, count)
 	local best = false
-	local spend = spendable(observation)
+	local spend = spendable(obs)
 	for i = 1, count do
 		local a = actions[i]
 		if type(a) == "table" and a.type == "BUY_ITEM" then
-			local item = find_by_id(observation.shop.items, a.item_ref)
-			local score = item ~= nil and item.kind == "joker" and buy_score(observation, a) or nil
+			local item = by_ref(obs.shop.items, a.item_ref)
+			local score = item ~= nil and item.kind == "joker" and buy_score(obs, a) or nil
 			if score ~= nil and type(a.id) == "string" then
 				BUY_SCORES[a.id] = score
 			end
@@ -2095,7 +2108,7 @@ end
 -- still loses.
 local JOKER_MARGIN = 50
 
-local function versus_joker(observation, spend, base, cost)
+local function versus_joker(obs, spend, base, cost)
 	local best = SHOP_BEST
 	if best then
 		if base > best.intrinsic - JOKER_MARGIN then
@@ -2109,12 +2122,12 @@ local function versus_joker(observation, spend, base, cost)
 	return score
 end
 
-local function voucher_score(observation, action)
-	local shop = observation.shop
+local function voucher_score(obs, act)
+	local shop = obs.shop
 	if type(shop) ~= "table" then
 		return nil
 	end
-	local item = find_by_id(shop.vouchers, action.voucher_ref)
+	local item = by_ref(shop.vouchers, act.voucher_ref)
 	if item == nil or item.redacted == true then
 		return nil
 	end
@@ -2122,7 +2135,7 @@ local function voucher_score(observation, action)
 	if type(cost) ~= "number" then
 		return nil
 	end
-	local spend = spendable(observation)
+	local spend = spendable(obs)
 	if spend == nil or spend < cost then
 		return nil
 	end
@@ -2133,17 +2146,17 @@ local function voucher_score(observation, action)
 		if value <= MINOR_VOUCHER and spend - cost < CONF.reserve then
 			return nil
 		end
-		return versus_joker(observation, spend, CONF.voucher + value, cost)
+		return versus_joker(obs, spend, CONF.voucher + value, cost)
 	end
 	return CONF.voucher + economy_bonus(spend - cost)
 end
 
-local function open_booster_score(observation, action)
-	local shop = observation.shop
+local function open_booster_score(obs, act)
+	local shop = obs.shop
 	if type(shop) ~= "table" then
 		return nil
 	end
-	local item = find_by_id(shop.boosters, action.item_ref)
+	local item = by_ref(shop.boosters, act.item_ref)
 	if item == nil or item.redacted == true then
 		return nil
 	end
@@ -2151,24 +2164,24 @@ local function open_booster_score(observation, action)
 	if type(cost) ~= "number" then
 		return nil
 	end
-	local spend = spendable(observation)
+	local spend = spendable(obs)
 	if spend == nil or spend < cost then
 		return nil
 	end
 	local base = CONF.item_booster
 	if CONF.smart_packs then
 		local i = pack_prefix(item.center)
-		if i ~= nil and PACK_VALUE[i][1] == "p_buffoon" and joker_room(observation) == false then
+		if i ~= nil and PACK_VALUE[i][1] == "p_buffoon" and joker_room(obs) == false then
 			-- Every Joker slot is full: only a Negative Joker could be taken.
 			return nil
 		end
-		return versus_joker(observation, spend, base + pack_value(observation, item.center), cost)
+		return versus_joker(obs, spend, base + pack_value(obs, item.center), cost)
 	end
 	return base + economy_bonus(spend - cost)
 end
 
-local function reroll_score(observation, action)
-	local shop = observation.shop
+local function reroll_score(obs, act)
+	local shop = obs.shop
 	if type(shop) ~= "table" then
 		return nil
 	end
@@ -2176,7 +2189,7 @@ local function reroll_score(observation, action)
 	if type(cost) ~= "number" then
 		return nil
 	end
-	local spend = spendable(observation)
+	local spend = spendable(obs)
 	if spend == nil or spend < cost then
 		return nil
 	end
@@ -2196,28 +2209,28 @@ local function reroll_score(observation, action)
 	return score
 end
 
-local function blind_score(observation, action)
-	if action.type == "SELECT_BLIND" then
+local function blind_score(obs, act)
+	if act.type == "SELECT_BLIND" then
 		return CONF.blind_select
 	end
 	return CONF.blind_skip
 end
 
-local function booster_select_score(observation, action)
-	local b = observation.booster
+local function booster_select_score(obs, act)
+	local b = obs.booster
 	if type(b) ~= "table" then
 		return nil
 	end
-	local refs = action.card_refs
+	local refs = act.card_refs
 	if type(refs) ~= "table" or #refs == 0 then
 		return nil
 	end
-	local card = find_by_id(b.cards, refs[1])
+	local card = by_ref(b.cards, refs[1])
 	if card == nil then
 		return nil
 	end
 	local kind = pack_card_kind(card)
-	if kind == "consumable" and harmful_use(observation, card.center) then
+	if kind == "consumable" and harmful_use(obs, card.center) then
 		return nil
 	end
 	local score = CONF.booster_good
@@ -2233,10 +2246,10 @@ local function booster_select_score(observation, action)
 			if kind == "joker" then
 				score = score + edition_value(card.edition)
 				if CONF.est_jokers and CONF.joker_gain_value > 0 then
-					score = score + math.floor(joker_gain(observation, card.center, card.edition) * CONF.joker_gain_value)
+					score = score + math.floor(joker_gain(obs, card.center, card.edition) * CONF.joker_gain_value)
 				end
 			elseif kind == "consumable" then
-				score = score + planet_pick_value(observation, card.center)
+				score = score + planet_pick_value(obs, card.center)
 			elseif kind == "card" then
 				-- Standard pack: an edition, seal or enhancement beats a plain card.
 				score = score + math.floor(edition_value(card.edition) / 2)
@@ -2253,51 +2266,51 @@ local function booster_select_score(observation, action)
 	return score
 end
 
-local function target_minimum(observation)
-	local target = observation.consumable_target
+local function target_minimum(obs)
+	local target = obs.consumable_target
 	if type(target) == "table" and type(target.min_targets) == "number" then
 		return target.min_targets
 	end
-	local context = observation.context
+	local context = obs.context
 	if type(context) == "table" and type(context.min_targets) == "number" then
 		return context.min_targets
 	end
 	return nil
 end
 
-local function target_or_use_score(observation, action)
-	if action.type == "SELECT_TARGETS" then
+local function target_or_use_score(obs, act)
+	if act.type == "SELECT_TARGETS" then
 		return CONF.select_targets
 	end
 	local source = nil
-	if type(observation.self) == "table" and type(action.source_ref) == "string" then
-		source = find_by_id(observation.self.consumables, action.source_ref)
+	if type(obs.self) == "table" and type(act.source_ref) == "string" then
+		source = by_ref(obs.self.consumables, act.source_ref)
 	end
-	if source == nil and type(observation.consumable_target) == "table" then
-		source = observation.consumable_target.source
+	if source == nil and type(obs.consumable_target) == "table" then
+		source = obs.consumable_target.source
 	end
 	local center = type(source) == "table" and source.center or nil
-	if type(center) == "string" and harmful_use(observation, center) then
+	if type(center) == "string" and harmful_use(obs, center) then
 		return nil
 	end
 	if center == "c_hermit" and CONF.hold_hermit then
 		-- The Hermit doubles money up to +$20: hold it until money reaches
 		-- $20, unless the shop's consumable slots are full of cards worth
 		-- keeping (a harmful or targeted card is sold instead).
-		local s = observation.self
+		local s = obs.self
 		local money = type(s) == "table" and type(s.money) == "number" and s.money or 0
-		local slots = type(observation.match) == "table" and observation.match.consumable_slots or nil
+		local slots = type(obs.match) == "table" and obs.match.consumable_slots or nil
 		local held = 0
 		if type(s) == "table" and type(s.consumables) == "table" then
 			for i = 1, #s.consumables do
 				local c = s.consumables[i]
 				local cc = type(c) == "table" and c.center or nil
-				if not (type(cc) == "string" and (unusable(cc) or harmful_use(observation, cc))) then
+				if not (type(cc) == "string" and (unusable(cc) or harmful_use(obs, cc))) then
 					held = held + 1
 				end
 			end
 		end
-		local full = observation.phase == "SHOP" and type(slots) == "number" and held >= slots
+		local full = obs.phase == "SHOP" and type(slots) == "number" and held >= slots
 		if money < 20 and not full then
 			return nil
 		end
@@ -2306,13 +2319,13 @@ local function target_or_use_score(observation, action)
 	if PLANETS[center] then
 		planet_bonus = 1000
 	end
-	local refs = action.target_refs
+	local refs = act.target_refs
 	local count = 0
 	if type(refs) == "table" then
 		count = #refs
 	end
-	if observation.phase == "CONSUMABLE_SELECTION" then
-		local minimum = target_minimum(observation)
+	if obs.phase == "CONSUMABLE_SELECTION" then
+		local minimum = target_minimum(obs)
 		if minimum == nil or count < minimum then
 			return nil
 		end
@@ -2415,8 +2428,8 @@ end
 -- ranked inversions against that target, so the inversion count is a potential
 -- that always decreases: no reverse/adjacent cycle is possible, and a target
 -- that is already ordered never reverses.
-local function reorder_score(observation, action)
-	local s = observation.self
+local function reorder_score(obs, act)
+	local s = obs.self
 	if type(s) ~= "table" then
 		return nil
 	end
@@ -2428,7 +2441,7 @@ local function reorder_score(observation, action)
 	if n < 2 then
 		return nil
 	end
-	local order = action.order
+	local order = act.order
 	if type(order) ~= "table" or #order ~= n then
 		return nil
 	end
@@ -2452,7 +2465,7 @@ local function reorder_score(observation, action)
 			return nil
 		end
 		seen[ref] = true
-		local joker = find_by_id(jokers, ref)
+		local joker = by_ref(jokers, ref)
 		if joker == nil then
 			return nil
 		end
@@ -2466,10 +2479,10 @@ local function reorder_score(observation, action)
 		local reordered = {}
 		for i = 1, n do
 			local joker = jokers[i]
-			if RULE_JOKERS[joker.center] or effect_of(joker) == nil or pinned[i] then
+			if effect_of(joker) == nil or pinned[i] then
 				known = false
 			end
-			reordered[i] = find_by_id(jokers, order[i])
+			reordered[i] = by_ref(jokers, order[i])
 		end
 		if known then
 			PLAY.reorders_left = PLAY.reorders_left - 1
@@ -2531,7 +2544,7 @@ end
 -- The `negative` edition supplies `ability.card_limit = 1` to the owned row
 -- (current Steamodded `handle_card_limit`, src/utils.lua:3919), so removing it
 -- lowers the area limit by the same slot it occupied: it frees nothing. An
--- edition the observation cannot classify is treated the same way -- the slot
+-- edition the obs cannot classify is treated the same way -- the slot
 -- effect cannot be inferred, so the card is never sold as a slot release rather
 -- than assuming its removal helps.
 local function slot_releasing(edition)
@@ -2541,16 +2554,16 @@ local function slot_releasing(edition)
 	return edition == "foil" or edition == "holo" or edition == "polychrome"
 end
 
-local function sell_consumable_score(observation, action)
+local function sell_consumable_score(obs, act)
 	-- Only a held card the safety floor would never use is worth its slot back.
-	if observation.phase ~= "SHOP" or type(observation.self) ~= "table" then
+	if obs.phase ~= "SHOP" or type(obs.self) ~= "table" then
 		return nil
 	end
-	local held = find_by_id(observation.self.consumables, action.consumable_ref)
+	local held = by_ref(obs.self.consumables, act.consumable_ref)
 	if held == nil or held.redacted == true or type(held.center) ~= "string" then
 		return nil
 	end
-	if not harmful_use(observation, held.center) and not unusable(held.center) then
+	if not harmful_use(obs, held.center) and not unusable(held.center) then
 		if not slot_releasing(held.edition) then
 			return nil
 		end
@@ -2561,8 +2574,8 @@ local function sell_consumable_score(observation, action)
 		-- Tarot is sacrificed (docs/CLAUDE_BATCH3_REVIEW.md M2). Only a card
 		-- that actually releases a slot is compared: a lower-worth Negative (or
 		-- any slot-providing/unknown edition) never blocks the regular card.
-		local slots = type(observation.match) == "table" and observation.match.consumable_slots or nil
-		local list = observation.self.consumables
+		local slots = type(obs.match) == "table" and obs.match.consumable_slots or nil
+		local list = obs.self.consumables
 		local worth = SLOT_WORTH[held.center]
 		if not (TAROT_FX[held.center] and type(slots) == "number" and type(list) == "table" and #list >= slots and worth ~= nil) then
 			return nil
@@ -2576,8 +2589,8 @@ local function sell_consumable_score(observation, action)
 				return nil
 			end
 		end
-		local spend = spendable(observation)
-		local shop = observation.shop
+		local spend = spendable(obs)
+		local shop = obs.shop
 		if spend == nil or type(shop) ~= "table" or type(shop.items) ~= "table" then
 			return nil
 		end
@@ -2596,7 +2609,7 @@ local function sell_consumable_score(observation, action)
 			local item = shop.items[i]
 			if type(item) == "table" and item.redacted ~= true and item.kind == "consumable"
 				and type(item.id) == "string" and type(item.cost) == "number" and spend - item.cost >= CONF.reserve then
-				local score = buy_score(observation, { type = "BUY_ITEM", item_ref = item.id })
+				local score = buy_score(obs, { type = "BUY_ITEM", item_ref = item.id })
 				if score ~= nil then
 					local w = SLOT_WORTH[item.center] or 0
 					if predicted == nil or score > predicted_score
@@ -2630,25 +2643,25 @@ end
 --   * the same visible center is on offer as a joker with a recognized
 --     non-negative edition (a strict, source-grounded upgrade of the same base);
 --   * that offered copy is already affordable from current spendable cash while
---     preserving the difficulty reserve (the observation exposes no sale
+--     preserving the difficulty reserve (the obs exposes no sale
 --     proceeds, so a sale is never assumed to fund the purchase).
 -- Every unclear case (unknown/face-down/different center, debuffed card, an
 -- already-editioned owned copy, a negative or unrecognized offered edition,
 -- unaffordable price, non-full board) yields no score, so a sell is never a
 -- fallback and the board is never dumped. Selling one copy drops the board below
 -- full, so no further sale can score in the following frame.
-local function sell_score(observation, action)
-	if action.type == "SELL_CONSUMABLE" then
-		return sell_consumable_score(observation, action)
+local function sell_score(obs, act)
+	if act.type == "SELL_CONSUMABLE" then
+		return sell_consumable_score(obs, act)
 	end
-	if action.type ~= "SELL_JOKER" then
+	if act.type ~= "SELL_JOKER" then
 		return nil
 	end
-	if observation.phase ~= "SHOP" then
+	if obs.phase ~= "SHOP" then
 		return nil
 	end
-	local s = observation.self
-	local shop = observation.shop
+	local s = obs.self
+	local shop = obs.shop
 	if type(s) ~= "table" or type(shop) ~= "table" then
 		return nil
 	end
@@ -2656,14 +2669,14 @@ local function sell_score(observation, action)
 	if type(jokers) ~= "table" then
 		return nil
 	end
-	local slots = observation.match
+	local slots = obs.match
 	if type(slots) ~= "table" or type(slots.joker_slots) ~= "number" then
 		return nil
 	end
 	if #jokers < slots.joker_slots then
 		return nil
 	end
-	local owned = find_by_id(jokers, action.joker_ref)
+	local owned = by_ref(jokers, act.joker_ref)
 	if owned == nil or owned.redacted == true or owned.debuff == true then
 		return nil
 	end
@@ -2676,7 +2689,7 @@ local function sell_score(observation, action)
 	if not recognized_joker(center) or (GROWS[center] and not (type(c) == "table" and c.value <= (c.kind == "xmult" and 100 or 0))) then
 		return nil
 	end
-	local spend = spendable(observation)
+	local spend = spendable(obs)
 	if spend == nil then
 		return nil
 	end
@@ -2703,15 +2716,15 @@ end
 -- its own share of work.
 local TARGET_WORK = 6000
 
-local function hand_tarot_score(observation, action)
-	local s = observation.self
+local function hand_tarot_score(obs, act)
+	local s = obs.self
 	if not CONF.hand_tarots or not CONF.estimate_plays or type(s) ~= "table" or type(s.hand) ~= "table"
 		or TAROT_WORK >= TARGET_WORK then
 		return nil
 	end
-	local source = find_by_id(s.consumables, action.source_ref)
+	local source = by_ref(s.consumables, act.source_ref)
 	local fx = type(source) == "table" and TAROT_FX[source.center] or nil
-	local refs = action.card_refs
+	local refs = act.card_refs
 	if fx == nil or type(refs) ~= "table" then
 		return nil
 	end
@@ -2727,7 +2740,7 @@ local function hand_tarot_score(observation, action)
 		at[c.id] = i
 	end
 	if TAROT_BEFORE == nil then
-		TAROT_BEFORE = best_play_value(hand, s.jokers)
+		TAROT_BEFORE = best_play(hand, s.jokers)
 	end
 	local idx = {}
 	for i = 1, #refs do
@@ -2767,7 +2780,7 @@ local function hand_tarot_score(observation, action)
 		end
 		hand[idx[1]] = c
 	end
-	local after = best_play_value(hand, s.jokers)
+	local after = best_play(hand, s.jokers)
 	TAROT_WORK = TAROT_WORK + WORK - w0
 	local before = TAROT_BEFORE
 	if before > 0 and after > before * 1.02 then
@@ -2780,24 +2793,37 @@ local function hand_tarot_score(observation, action)
 	return nil
 end
 
-local function score_of(observation, action)
-	if type(action) ~= "table" then
+local function score_of(obs, act)
+	if type(act) ~= "table" then
 		return nil
 	end
-	local kind = action.type
+	local kind = act.type
 	if type(kind) ~= "string" then
 		return nil
 	end
+	-- Preserve time for the remaining blinds. Immediate Joker purchases and
+	-- consumable uses remain available; optional shopping stops under pressure.
+	if TIME_PRESSURE and obs.phase == "SHOP" then
+		if kind == "OPEN_BOOSTER" or kind == "BUY_VOUCHER" or kind == "REROLL" or kind == "REORDER_JOKERS" then
+			return nil
+		end
+		if kind == "BUY_ITEM" then
+			local item = by_ref(type(obs.shop) == "table" and obs.shop.items or nil, act.item_ref)
+			if type(item) ~= "table" or item.kind ~= "joker" then
+				return nil
+			end
+		end
+	end
 	if kind == "PLAY_CARDS" then
-		return play_score(observation, action)
+		return play_score(obs, act)
 	end
 	if kind == "USE_CONSUMABLE_ON_HAND" then
-		return hand_tarot_score(observation, action)
+		return hand_tarot_score(obs, act)
 	end
 	if kind == "DISCARD_CARDS" then
-		local score = discard_score(observation, action)
+		local score = discard_score(obs, act)
 		if score ~= nil and PLAY ~= nil and PLAY.discard_ev ~= nil then
-			local value = PLAY.discard_ev[action.id]
+			local value = PLAY.discard_ev[act.id]
 			if value ~= nil then
 				-- Rank discards by expected follow-up play; the old per-card
 				-- heuristic only breaks ties.
@@ -2808,9 +2834,9 @@ local function score_of(observation, action)
 				if value ~= value or value > ESTIMATE_CAP then
 					value = ESTIMATE_CAP
 				end
-				if PLAY.discard_clear ~= nil and PLAY.discard_clear[action.id] ~= nil then
+				if PLAY.discard_clear ~= nil and PLAY.discard_clear[act.id] ~= nil then
 					-- Last hand: the chance to clear decides, EV breaks ties.
-					score = 200000 + 250000 * PLAY.discard_clear[action.id]
+					score = 200000 + 250000 * PLAY.discard_clear[act.id]
 						+ 50000 * value / (value + scale) + score / 1000
 				else
 					score = 200000 + 300000 * value / (value + scale) + score / 1000
@@ -2823,7 +2849,7 @@ local function score_of(observation, action)
 		return score
 	end
 	if kind == "SELECT_BLIND" or kind == "SKIP_BLIND" then
-		return blind_score(observation, action)
+		return blind_score(obs, act)
 	end
 	if kind == "START_TIMER" then
 		if CONF.start_timer > 0 then
@@ -2832,37 +2858,37 @@ local function score_of(observation, action)
 		return nil
 	end
 	if kind == "BUY_ITEM" then
-		if type(action.id) == "string" and BUY_SCORES[action.id] ~= nil then
-			return BUY_SCORES[action.id]
+		if type(act.id) == "string" and BUY_SCORES[act.id] ~= nil then
+			return BUY_SCORES[act.id]
 		end
-		return buy_score(observation, action)
+		return buy_score(obs, act)
 	end
 	if kind == "BUY_VOUCHER" then
-		return voucher_score(observation, action)
+		return voucher_score(obs, act)
 	end
 	if kind == "OPEN_BOOSTER" then
-		return open_booster_score(observation, action)
+		return open_booster_score(obs, act)
 	end
 	if kind == "REROLL" then
-		return reroll_score(observation, action)
+		return reroll_score(obs, act)
 	end
 	if kind == "LEAVE_SHOP" then
 		return CONF.leave_shop
 	end
 	if kind == "SELL_JOKER" or kind == "SELL_CONSUMABLE" then
-		return sell_score(observation, action)
+		return sell_score(obs, act)
 	end
 	if kind == "SELECT_BOOSTER_ITEM" then
-		return booster_select_score(observation, action)
+		return booster_select_score(obs, act)
 	end
 	if kind == "SKIP_BOOSTER" then
 		return CONF.booster_skip
 	end
 	if kind == "SELECT_TARGETS" or kind == "USE_CONSUMABLE" then
-		return target_or_use_score(observation, action)
+		return target_or_use_score(obs, act)
 	end
 	if kind == "REORDER_JOKERS" then
-		return reorder_score(observation, action)
+		return reorder_score(obs, act)
 	end
 	if kind == "REORDER_HAND" then
 		return nil
@@ -2870,8 +2896,8 @@ local function score_of(observation, action)
 	return CONF.unknown
 end
 
-return function(observation, actions)
-	if type(observation) ~= "table" or type(actions) ~= "table" then
+return function(obs, actions)
+	if type(obs) ~= "table" or type(actions) ~= "table" then
 		return nil
 	end
 	local limit = CONF.max_actions
@@ -2890,7 +2916,12 @@ return function(observation, actions)
 	CURRENT_EFF = {}
 	TAROT_BEFORE = nil
 	TAROT_WORK = 0
-	local match = observation.match
+	local match = obs.match
+	set_rules(type(obs.self) == "table" and obs.self.jokers or nil)
+	BALANCED = type(match) == "table" and match.score_balanced == true
+	TIME_PRESSURE = type(match) == "table" and type(match.timer_remaining) == "number" and match.timer_remaining <= 60
+	FLINT = CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and match.blind == "bl_flint"
+		and (obs.phase == "PLAY_HAND" or obs.phase == "MULTIPLAYER_PVP" or obs.phase == "CONSUMABLE_SELECTION")
 	-- The Psychic must play five cards (public blind key). Resolved here, before
 	-- the estimate, so the rule holds on every path that ranks by category
 	-- instead: the rule-Joker and play-work-cap early returns, and the fallback
@@ -2903,13 +2934,13 @@ return function(observation, actions)
 		-- 1-4 cards (so no five-card play can exist) and the certified catalogue
 		-- offers no scoreable discard. A missing five-card candidate at five or
 		-- more cards is a malformed catalogue and stays fail-closed.
-		local hand = type(observation.self) == "table" and observation.self.hand or nil
+		local hand = type(obs.self) == "table" and obs.self.hand or nil
 		local size = type(hand) == "table" and #hand or nil
 		if size ~= nil and size >= 1 and size <= 4 then
 			local discardable = false
 			for i = 1, count do
 				local a = actions[i]
-				if type(a) == "table" and a.type == "DISCARD_CARDS" and discard_score(observation, a) ~= nil then
+				if type(a) == "table" and a.type == "DISCARD_CARDS" and discard_score(obs, a) ~= nil then
 					discardable = true
 					break
 				end
@@ -2917,7 +2948,7 @@ return function(observation, actions)
 			PSYCHIC_TERMINAL = not discardable
 		end
 	end
-	local levels = type(observation.self) == "table" and observation.self.hand_levels or nil
+	local levels = type(obs.self) == "table" and obs.self.hand_levels or nil
 	if CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and type(levels) == "table"
 		and (match.blind == "bl_eye" or match.blind == "bl_mouth") then
 		local played = nil
@@ -2940,7 +2971,7 @@ return function(observation, actions)
 	end
 	BUY_SCORES = {}
 	INTEREST_CAP = CONF.interest_cap
-	local owned_vouchers = type(observation.self) == "table" and observation.self.vouchers or nil
+	local owned_vouchers = type(obs.self) == "table" and obs.self.vouchers or nil
 	if type(owned_vouchers) == "table" then
 		for i = 1, #owned_vouchers do
 			local v = owned_vouchers[i]
@@ -2952,28 +2983,28 @@ return function(observation, actions)
 			end
 		end
 	end
-	if CONF.use_levels and type(observation.self) == "table" and type(observation.self.hand_levels) == "table" then
-		LEVELS = observation.self.hand_levels
+	if CONF.use_levels and type(obs.self) == "table" and type(obs.self.hand_levels) == "table" then
+		LEVELS = obs.self.hand_levels
 	end
 	if CONF.estimate_plays then
-		PLAY = analyse_plays(observation, actions, count)
+		PLAY = analyse_plays(obs, actions, count)
 	end
-	if (CONF.smart_packs or CONF.voucher_values) and type(observation.shop) == "table" then
-		SHOP_BEST = best_joker(observation, actions, count)
+	if (CONF.smart_packs or CONF.voucher_values) and type(obs.shop) == "table" then
+		SHOP_BEST = best_joker(obs, actions, count)
 	end
 	local best = nil
 	local best_score = nil
 	local best_id = nil
 	local best_tie = nil
 	for i = 1, count do
-		local action = actions[i]
-		local score = score_of(observation, action)
+		local act = actions[i]
+		local score = score_of(obs, act)
 		if score ~= nil and type(score) == "number" then
-			local id = action.id
+			local id = act.id
 			if type(id) ~= "string" then
 				id = ""
 			end
-			local tie = buy_tiebreak(observation, action)
+			local tie = buy_tiebreak(obs, act)
 			local take = best == nil or score > best_score
 			if not take and score == best_score then
 				if tie ~= nil and best_tie ~= nil then
@@ -2983,7 +3014,7 @@ return function(observation, actions)
 				end
 			end
 			if take then
-				best = action
+				best = act
 				best_score = score
 				best_id = id
 				best_tie = tie
@@ -3034,8 +3065,8 @@ end
 -- Drop a space outside quotes when a neighbour is punctuation, unless that
 -- would join "--" (a comment), "." with "." or a digit (a different
 -- operator or a malformed number) or open a long bracket ("[[" / "[=").
--- Line breaks are kept, so the token stream and line numbers are unchanged
--- (tests compare Lua 5.1 bytecode).
+-- Both compact and loose renderings join statement lines before squeezing,
+-- retaining identical token streams and line metadata for the bytecode check.
 local PUNCT = {}
 for c in string.gmatch("=+-*/,(){}[]<>~.#%^;:", ".") do
 	PUNCT[c] = true
@@ -3084,10 +3115,11 @@ local function strip_template(text, squeeze)
 			return nil
 		end
 		if #kept > 0 then
-			out[#out + 1] = squeeze and squeeze_line(kept) or kept
+			out[#out + 1] = kept
 		end
 	end
-	return table.concat(out, "\n") .. "\n"
+	local joined = table.concat(out, " ")
+	return (squeeze and squeeze_line(joined) or joined) .. "\n"
 end
 
 local STRIPPED = strip_template(TEMPLATE, true)

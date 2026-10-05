@@ -1120,19 +1120,29 @@ return function(ctx)
 		eq(lr.loop.update(), "issued", "same shop visit uses 6s")
 	end)
 
-	test("own_timer_cap_shortens_the_dwell", function()
-		local state = ready_state("PLAY_HAND", 10)
-		local r = support.rig(repo, {})
-		local lr = support.loop(r, {
-			readiness = function() return state.value end,
-			dwell = { card = 4 },
-		})
-		-- cap = min(4, max(0, 10-2), 0.2*10) = 2.
-		eq(lr.loop.update(), "dwelling")
-		lr.clock.advance(1.9)
-		eq(lr.loop.update(), "dwelling")
-		lr.clock.advance(0.2)
-		eq(lr.loop.update(), "issued")
+	test("active_ante_timer_caps_every_decision_class_early", function()
+		for _, phase in ipairs({ "PLAY_HAND", "MULTIPLAYER_PVP", "SHOP", "BOOSTER_SELECTION", "BLIND_SELECTION" }) do
+			local state = ready_state(phase, 150)
+			local r = support.rig(repo, {})
+			local lr = support.loop(r, {
+				readiness = function() return state.value end,
+				dwell = { blind = 2, card = 4, pvp = 4, shop = 6, shop_first = 8, booster = 4 },
+			})
+			eq(lr.loop.update(), "dwelling", phase)
+			lr.clock.advance(0.9)
+			eq(lr.loop.update(), "dwelling", phase)
+			lr.clock.advance(0.2)
+			eq(lr.loop.update(), "issued", phase .. " caps the pause at one second")
+		end
+	end)
+
+	test("last_thirty_seconds_add_no_thinking_pause", function()
+		for _, timer in ipairs({ 30, 10, 2, 0 }) do
+			local state = ready_state("PLAY_HAND", timer)
+			local r = support.rig(repo, {})
+			local lr = support.loop(r, { readiness = function() return state.value end, dwell = { card = 4 } })
+			eq(lr.loop.update(), "issued", "own countdown " .. timer)
+		end
 	end)
 
 	test("terminal_during_dwell_stops_without_dispatch", function()

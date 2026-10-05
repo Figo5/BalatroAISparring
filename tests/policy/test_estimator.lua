@@ -64,14 +64,14 @@ return function(ctx)
 		end
 	end)
 
-	test("rule_changing_joker_falls_back_to_category_ranking", function()
+	test("four_fingers_keeps_requirement_aware_discarding", function()
 		-- Four Fingers makes four-card flushes real; the estimate would call
-		-- them high cards, so the policy must not use it (and must not enter
-		-- estimate-driven discard mode).
+		-- them high cards without its rule. A weak pair must still trigger
+		-- requirement-aware discarding under a $1000 blind.
 		local frame = Support.requirement_frame("1000", 2, 3, nil, { Support.joker("j_four_fingers") })
 		local result = Support.run(env, "major_league", frame)
 		ctx.is_true(result.ok == true)
-		ctx.eq(result.action.type, "PLAY_CARDS")
+		ctx.eq(result.action.type, "DISCARD_CARDS")
 	end)
 
 	test("last_hand_without_a_clearing_play_discards_first", function()
@@ -268,7 +268,7 @@ return function(ctx)
 		error("reordering did not settle within 8 steps")
 	end)
 
-	test("rule_changing_joker_owned_disables_shop_gain", function()
+	test("splash_keeps_marginal_shop_gain", function()
 		local frame = Support.shop_frame()
 		frame.self.money = 30
 		frame.self.jokers = { Support.joker("j_splash") }
@@ -281,9 +281,8 @@ return function(ctx)
 			{ type = "BUY_ITEM", certified = true, item_ref = "shop:2", capacity_ok = true },
 			{ type = "LEAVE_SHOP", certified = true },
 		}
-		-- With the estimate off both Jokers score the flat kind value: the
-		-- canonical id tie-break picks the first.
-		ctx.eq(Support.run(env, "major_league", frame).action.item_ref, "shop:1")
+		-- Splash keeps actual chips in the panel: Stuntman is the larger gain.
+		ctx.eq(Support.run(env, "major_league", frame).action.item_ref, "shop:2")
 	end)
 
 	local function draw_frame(hand, discards)

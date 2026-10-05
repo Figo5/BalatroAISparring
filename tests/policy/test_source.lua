@@ -22,7 +22,7 @@ return function(ctx)
 			ctx.truthy(#source > 0, name .. "_nonempty")
 			ctx.truthy(#source <= 65536, name .. "_cap")
 			ctx.neq(string.byte(source, 1), 27, name .. "_not_bytecode")
-			ctx.truthy(string.find(source, "return function(observation,actions)", 1, true) ~= nil, name .. "_entry")
+			ctx.truthy(string.find(source, "return function(obs,actions)", 1, true) ~= nil, name .. "_entry")
 			ctx.vector("src_len_" .. name, #source)
 			ctx.vector("src_hash_" .. name, env.codec.hash_string(source))
 		end
@@ -100,7 +100,7 @@ return function(ctx)
 	end)
 
 	test("squeezed_source_compiles_to_identical_bytecode", function()
-		-- The render-time space squeeze keeps line breaks, so under Lua 5.1
+		-- Both renderings join statement lines before the space squeeze. Lua 5.1
 		-- (whose bytecode records lines but not columns) the stripped and the
 		-- unsqueezed sources must compile to byte-identical functions. LuaJIT
 		-- dumps are not byte-stable between loads, so only Lua 5.1 checks.

@@ -393,6 +393,11 @@ local function convert_entity(kind, zone, add_ref)
 			end
 			out.xmult = xmult
 		end
+		if kind == "card" and rawget(item, "bonus_chips") ~= nil then
+			local code, value = read_int(item, "bonus_chips", 0, 100000)
+			if code ~= nil or value == nil then return CODE.BAD_ENTITY end
+			out.bonus_chips = value
+		end
 		return nil, out
 	end
 end
@@ -469,6 +474,8 @@ local function read_match(t)
 		{ "ruleset", "token", 64 },
 		{ "blind", "display", 32 },
 		{ "blind_disabled", "bool" },
+		{ "score_balanced", "bool" },
+		{ "timer_remaining", "int" },
 		{ "timer", "display", 16 },
 		{ "ante", "int" },
 		{ "round", "int" },

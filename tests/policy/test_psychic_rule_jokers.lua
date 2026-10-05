@@ -255,7 +255,7 @@ return function(ctx)
 		}
 		for _, d in ipairs(STRONG) do
 			local frame = psychic_frame(hand, { items = items, disabled = true, jokers = { Support.joker("j_splash") } })
-			ctx.eq(decides(d, frame), 2, d .. " disabled")
+			ctx.eq(decides(d, frame), 5, d .. " Splash adds the three kickers with Psychic disabled")
 		end
 	end)
 
@@ -267,7 +267,7 @@ return function(ctx)
 		for _, d in ipairs(STRONG) do
 			local frame = psychic_frame(hand, { jokers = { Support.joker("j_splash") } })
 			frame.match.blind = "bl_small"
-			ctx.eq(decides(d, frame), 2, d .. " small blind")
+			ctx.eq(decides(d, frame), 5, d .. " Splash adds scoring kickers")
 		end
 	end)
 

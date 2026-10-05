@@ -831,6 +831,14 @@ function DecisionLoop.factory(options)
 		end
 		local target = base
 		if is_nat_int(timer) then
+			-- A Ranked ante deadline covers several blinds and shops, not just
+			-- the next action. Stop adding long pauses as soon as it is active.
+			if target > 1 then
+				target = 1
+			end
+			if timer <= 30 then
+				target = 0
+			end
 			local reserve_cap = timer - dwell_timer_reserve
 			if reserve_cap < 0 then
 				reserve_cap = 0
