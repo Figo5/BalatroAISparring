@@ -194,7 +194,7 @@ local SMEARED = false
 local DRAW_PROFILE = nil
 local BALANCED = false
 local TIME_PRESSURE = false
-local FLINT = false
+local HAND_BLIND = nil
 local RULES = {}
 -- Deterministic work meter, reset per decision: every score estimate charges
 -- (cards read) x (Jokers applied + 2), which tracks its VM instruction cost.
@@ -611,9 +611,10 @@ end
 -- hand levels and boss effects are unknown and ignored, so this is a relative
 -- estimate for choosing between plays, not an exact score.
 local HAND_BASE = {
-	high_card = { 5, 1 }, pair = { 10, 2 }, two_pair = { 20, 2 }, three = { 30, 3 },
-	straight = { 30, 4 }, flush = { 35, 4 }, full_house = { 40, 4 }, four = { 60, 7 },
-	straight_flush = { 100, 8 }, five = { 120, 12 }, flush_house = { 140, 14 }, flush_five = { 160, 16 },
+	-- Level-one chips/mult, then native per-level chips/mult increments.
+	high_card = { 5, 1, 10, 1 }, pair = { 10, 2, 15, 1 }, two_pair = { 20, 2, 20, 1 }, three = { 30, 3, 20, 2 },
+	straight = { 30, 4, 30, 3 }, flush = { 35, 4, 15, 2 }, full_house = { 40, 4, 25, 2 }, four = { 60, 7, 30, 3 },
+	straight_flush = { 100, 8, 40, 4 }, five = { 120, 12, 35, 3 }, flush_house = { 140, 14, 40, 4 }, flush_five = { 160, 16, 50, 3 },
 }
 local CONTAINS = {
 	pair = { pair = true, two_pair = true, three = true, full_house = true, four = true, five = true, flush_house = true, flush_five = true },
@@ -752,9 +753,18 @@ local function estimate(played, held, jokers)
 		if type(level) == "table" and type(level.chips) == "number" and type(level.mult) == "number" then
 			chips = level.chips
 			mult = level.mult
+			-- The Arm lowers this hand before scoring. Only forecast a visible
+			-- native linear level progression; altered/unknown growth stays at
+			-- the displayed estimate, without inventing unseen parameters.
+			if HAND_BLIND == "bl_arm" and type(level.level) == "number" and level.level > 1
+				and chips == base[1] + base[3] * (level.level - 1)
+				and mult == base[2] + base[4] * (level.level - 1) then
+				chips = chips - base[3]
+				mult = mult - base[4]
+			end
 		end
 	end
-	if FLINT then
+	if HAND_BLIND == "bl_flint" then
 		chips = math.max(0, math.floor(chips * 0.5 + 0.5))
 		mult = math.max(1, math.floor(mult * 0.5 + 0.5))
 	end
@@ -3006,8 +3016,8 @@ return function(obs, actions)
 	PANEL = nil
 	BALANCED = type(match) == "table" and match.score_balanced == true
 	TIME_PRESSURE = type(match) == "table" and type(match.timer_remaining) == "number" and match.timer_remaining <= 60
-	FLINT = CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and match.blind == "bl_flint"
-		and (obs.phase == "PLAY_HAND" or obs.phase == "MULTIPLAYER_PVP" or obs.phase == "CONSUMABLE_SELECTION")
+	HAND_BLIND = CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true
+		and (obs.phase == "PLAY_HAND" or obs.phase == "MULTIPLAYER_PVP" or obs.phase == "CONSUMABLE_SELECTION") and match.blind or nil
 	-- The Psychic must play five cards (public blind key). Resolved here, before
 	-- the estimate, so the rule holds on every path that ranks by category
 	-- instead: the rule-Joker and play-work-cap early returns, and the fallback

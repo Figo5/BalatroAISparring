@@ -36,7 +36,7 @@ The policy does not execute engine calculations or inspect global game state.
 | Decks and stakes | Actual own hand size, hands/discards, money, displayed levels and legal offers are projected from the selected game. Plasma's distinct scoring is explicit. Initial-deck draw priors and shop panels distinguish standard, Checkered and Abandoned. Erratic avoids assuming a distribution. Depletion and cards added/removed still make these priors approximate. |
 | Hand rules | All twelve native categories and the five hand-changing Jokers are modelled. Adapter candidates remain bounded; a best offered play is not necessarily the best possible subset or order. Straight draw targets still favour ordinary consecutive-rank patterns, so Shortcut draws can be undervalued. |
 | Jokers | Static scoring effects and allowlisted shown scaling values are supported. Other Jokers are neutral in score estimates and receive coarse shopping heuristics. Blueprint/Brainstorm copy compatible known effects and shown scaling values; bounded legal placements and purchases are scored. Joker retriggers and many conditional effects remain gaps. |
-| Bosses | Psychic, Eye, Mouth and Flint have explicit policy handling; visible card/Joker debuffs and forced selections are respected. Arm's upcoming level loss and other predictive boss effects are not all modelled. Engine legality does not by itself establish a good strategic choice. |
+| Bosses | Psychic, Eye, Mouth, Flint and Arm have explicit policy handling; visible card/Joker debuffs and forced selections are respected. Arm's one-level loss is forecast only for visible native linear hand progressions. Unknown growth and other predictive boss effects remain gaps. Engine legality does not by itself establish a good strategic choice. |
 | Random effects | Lucky and Misprint use expectations, without sampling future RNG. Nonlinear Plasma scoring makes an expected-component estimate approximate. |
 | Economy/build planning | Bounded gains, reserves, interest, voucher/pack values and harmful-consumable refusals. No full-run search, exact future shop prediction, or complete build synergy model. |
 | Fairness | Only the AI's own visible active countdown and public own deck rules are added. No enemy cards/hidden score, hidden draw order, future RNG, timer increase, removed animations or runtime external AI calls. |
@@ -92,3 +92,24 @@ include held King/Queen examples for held-card effects. These are bounded
 representative comparisons, not an exact model of the current unseen deck or
 a complete build planner. Native certification checks delivery/isolation;
 human testing of opponent strength remains outstanding.
+
+## Follow-up after the October 5 playtest
+
+The user reported that Expert was definitely stronger, but left the match
+early. This confirms perceived improvement without establishing a completed
+match result or win rate. The next refinement anticipates The Arm lowering the
+played hand's level before scoring. It affects play and draw estimates while
+the boss is active; disabled bosses and shop decisions retain displayed levels.
+Level one is unchanged. Only displayed chips/mult consistent with native
+initial values and per-level increments receive the forecast. Altered or
+unknown growth remains a conservative displayed-value estimate. No new
+observation fields or access to hidden information are added.
+
+`tests/test_arm_forecast.py` reads private native hand definitions and executes
+the actual installed Blind, hand-level and Steamodded upgrade functions.
+It covers twelve categories, levels zero/one/two/four/100000, disabled bosses,
+preview versus committed effects, both scoring decks, and 189 legal decision
+choices on each Lua engine. Independent scores use the native post-boss levels.
+A crafted hand now chooses a 292-point flush instead of a pair whose displayed
+375-point estimate actually becomes 240 points under The Arm. Generated policy
+text stays within the unchanged source guard and decisions retain their budget.

@@ -62,7 +62,7 @@ def model_probe(lua):
     readable = policy['readable_source']('expert')
     prefix = readable[:readable.index('return function(obs, actions)')]
     return lua.execute(prefix + '''return function(jokers)
-        set_rules(jokers); CURRENT_EFF={}; JOKER_CACHE={}; BALANCED=false; FLINT=false; LEVELS=nil
+        set_rules(jokers); CURRENT_EFF={}; JOKER_CACHE={}; BALANCED=false; HAND_BLIND=nil; LEVELS=nil
         return estimate({{rank='King',suit='Spades'},{rank='King',suit='Hearts'}},{},jokers)
     end''')
 
@@ -72,7 +72,7 @@ def check_shop_gains(lua):
     readable=policy['readable_source']('expert')
     prefix=readable[:readable.index('return function(obs, actions)')]
     probe=lua.execute(prefix+'''return function(keys,center)
-        CURRENT_EFF={}; JOKER_CACHE={}; GAIN_CACHE={}; DRAW_PROFILE=nil; PANEL=nil; LEVELS=nil; BALANCED=false; FLINT=false
+        CURRENT_EFF={}; JOKER_CACHE={}; GAIN_CACHE={}; DRAW_PROFILE=nil; PANEL=nil; LEVELS=nil; BALANCED=false; HAND_BLIND=nil
         local owned={}; for _,key in ipairs(keys) do owned[#owned+1]={center=key} end
         return joker_gain({self={jokers=owned},match={ante=1}},center,nil),panel_hands()
     end''')

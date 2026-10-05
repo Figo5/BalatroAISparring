@@ -32,7 +32,7 @@ def main():
             assert(DRAW_PROFILE~='abandoned' or rank<=10 or rank==14,'impossible Abandoned draw rank')''')
         probe=lua.execute(prefix+'''return function(profile,bonus)
             DRAW_PROFILE=profile; CURRENT_EFF={}; JOKER_CACHE={}; WORK=0; MIN_CARDS=0;
-            BALANCED=false; FLINT=false; LEVELS=nil; PANEL=nil
+            BALANCED=false; HAND_BLIND=nil; LEVELS=nil; PANEL=nil
             local jokers=bonus and {{center='j_lusty_joker'},{center='j_wrathful_joker'}} or {{center='j_droll'}}; set_rules(jokers)
             local ranks=bonus and {'6','7','8','9','King'} or {'2','4','6','8','10'}
             local hand={}; for i,rank in ipairs(ranks) do
