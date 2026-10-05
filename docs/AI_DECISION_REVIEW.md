@@ -33,13 +33,13 @@ The policy does not execute engine calculations or inspect global game state.
 
 | Area | Current treatment and limit |
 |---|---|
-| Decks and stakes | Actual own hand size, hands/discards, money, displayed levels and legal offers are projected from the selected game. Plasma's distinct scoring is explicit. Draw probabilities still use a standard-deck prior, so Checkered, Abandoned and modified decks can be misvalued. |
-| Hand rules | All twelve native categories and the five hand-changing Jokers are modelled. Adapter candidates remain bounded; a best offered play is not necessarily the best possible subset or order. |
-| Jokers | Static scoring effects and allowlisted shown scaling values are supported. Other Jokers are neutral in score estimates and receive coarse shopping heuristics. Blueprint/Brainstorm copying, Joker retriggers, and many conditional effects remain gaps. |
+| Decks and stakes | Actual own hand size, hands/discards, money, displayed levels and legal offers are projected from the selected game. Plasma's distinct scoring is explicit. Initial-deck draw priors and shop panels distinguish standard, Checkered and Abandoned. Erratic avoids assuming a distribution. Depletion and cards added/removed still make these priors approximate. |
+| Hand rules | All twelve native categories and the five hand-changing Jokers are modelled. Adapter candidates remain bounded; a best offered play is not necessarily the best possible subset or order. Straight draw targets still favour ordinary consecutive-rank patterns, so Shortcut draws can be undervalued. |
+| Jokers | Static scoring effects and allowlisted shown scaling values are supported. Other Jokers are neutral in score estimates and receive coarse shopping heuristics. Blueprint/Brainstorm copy compatible known effects and shown scaling values; bounded legal placements and purchases are scored. Joker retriggers and many conditional effects remain gaps. |
 | Bosses | Psychic, Eye, Mouth and Flint have explicit policy handling; visible card/Joker debuffs and forced selections are respected. Arm's upcoming level loss and other predictive boss effects are not all modelled. Engine legality does not by itself establish a good strategic choice. |
 | Random effects | Lucky and Misprint use expectations, without sampling future RNG. Nonlinear Plasma scoring makes an expected-component estimate approximate. |
 | Economy/build planning | Bounded gains, reserves, interest, voucher/pack values and harmful-consumable refusals. No full-run search, exact future shop prediction, or complete build synergy model. |
-| Fairness | Only the AI's own visible active countdown and public own deck rule are added. No enemy cards/hidden score, hidden draw order, future RNG, timer increase, removed animations or runtime external AI calls. |
+| Fairness | Only the AI's own visible active countdown and public own deck rules are added. No enemy cards/hidden score, hidden draw order, future RNG, timer increase, removed animations or runtime external AI calls. |
 
 ## Verification
 
@@ -61,3 +61,34 @@ native certification phases and exact backed-up installed-byte verification.
 The next human playtest must assess scoring decisions and completed rounds
 under a live timer. Remaining unsupported interactions need dedicated native
 fixtures before claiming broader strength.
+
+## Copying and deck refinement
+
+`tests/test_copying_strategy.py` pins every supported Joker's copy compatibility
+against installed native centers, then compares 219 bounded copy-chain cases
+with actual native `Card:calculate_joker` and `SMODS.blueprint_effect` calls.
+Independent shop-gain checks cover 250 copy purchases and placements.
+Another 216 synthetic hands pass through the real restricted decision pipeline
+on both Lua engines, with an independent scorer checking best offered plays.
+Cycles, absent targets, debuffs, hidden identities and copier/target editions
+have separate checks. The adapter offers real permutations for placing
+Blueprint beside a target and moving Brainstorm's target to the first slot.
+Unknown effects retain conservative placement handling; reserved certificate
+capacity and the bounded reorder search can still limit available placements.
+
+Copy effects and shop gains are cached only within one observation. Copy
+routing consumes extra optional-search work; stress checks keep a 12-card hand
+with seven copiers and a crowded copying-Joker shop within one million
+instructions, below the unchanged two-million worker ceiling. Generated text
+stays within the unchanged 57,344-byte guard. A Lua 5.1 bytecode-format test
+compares every executable instruction, constant, register count and nested
+prototype of compact versus readable policies, excluding only debug metadata.
+
+`tests/test_deck_draw_priors.py` checks native initial-deck definitions and
+independent flush probabilities. Checkered uses 26 Hearts/26 Spades, Abandoned
+uses 40 cards without Jacks/Queens/Kings, and Erratic skips numerical draw
+probabilities. Synthetic shop panels use the same initial constraints and
+include held King/Queen examples for held-card effects. These are bounded
+representative comparisons, not an exact model of the current unseen deck or
+a complete build planner. Native certification checks delivery/isolation;
+human testing of opponent strength remains outstanding.

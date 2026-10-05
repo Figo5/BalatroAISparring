@@ -191,6 +191,7 @@ local PLAY = nil
 -- The displayed poker-hand levels (self.hand_levels) for this decision, or nil.
 local LEVELS = nil
 local SMEARED = false
+local DRAW_PROFILE = nil
 local BALANCED = false
 local TIME_PRESSURE = false
 local FLINT = false
@@ -220,6 +221,8 @@ local TAROT_BEFORE = nil
 local TAROT_WORK = 0
 -- Effects derived from owned scaling Jokers' shown values, per decision.
 local CURRENT_EFF = {}
+local JOKER_CACHE = {}
+local GAIN_CACHE = {}
 
 local function blocked_hand(name)
 	if EYE_PLAYED ~= nil and EYE_PLAYED[name] then
@@ -621,6 +624,7 @@ local CONTAINS = {
 	flush = { flush = true, straight_flush = true, flush_house = true, flush_five = true },
 }
 local JOKER_EFFECTS = {
+	j_blueprint = { "copy", 0 }, j_brainstorm = { "copy", 0 },
 	j_four_fingers = { "rule", 0 }, j_shortcut = { "rule", 0 }, j_splash = { "rule", 0 }, j_pareidolia = { "rule", 0 }, j_smeared = { "rule", 0 }, j_joker = { "mult", 4 }, j_misprint = { "mult", 11.5 }, j_gros_michel = { "mult", 15 },
 	j_cavendish = { "xmult", 3 }, j_stuntman = { "chips", 250 },
 	j_greedy_joker = { "suit_mult", 3, "D" }, j_lusty_joker = { "suit_mult", 3, "H" },
@@ -685,6 +689,23 @@ local function effect_of(j)
 	return e
 end
 
+-- Known scoring effects are native Blueprint-compatible (pinned by tests).
+-- Resolve only the visible own row, with a hard bound for copy cycles. Rule
+-- Jokers are incompatible, and copied editions belong to the copier itself.
+local function copied_effect(jokers, index)
+	for _ = 1, #jokers do
+		local j = jokers[index]
+		if type(j) ~= "table" or j.redacted == true or j.debuff == true then return nil end
+		if j.center == "j_blueprint" then index = index + 1
+		elseif j.center == "j_brainstorm" then index = 1
+		else
+			local e = effect_of(j)
+			return e and e[1] ~= "rule" and e or nil
+		end
+	end
+	return nil
+end
+
 -- Joker kinds that score face cards: they reset Ride the Bus.
 local FACE_KINDS = { face_chips = true, face_mult = true, photo = true, kq_xmult = true }
 
@@ -737,24 +758,36 @@ local function estimate(played, held, jokers)
 		chips = math.max(0, math.floor(chips * 0.5 + 0.5))
 		mult = math.max(1, math.floor(mult * 0.5 + 0.5))
 	end
-	local effects = {}
-	local joker_count = 0
-	if jokers ~= nil then
-		for i = 1, #jokers do
-			local j = jokers[i]
-			if type(j) == "table" then
-				-- Abstract Joker counts every Joker, debuffed ones included.
-				joker_count = joker_count + 1
-			end
-			if type(j) == "table" and j.debuff ~= true then
-				local e = effect_of(j)
-				if e ~= nil then
-					effects[#effects + 1] = { e = e, edition = j.edition }
-				else
-					effects[#effects + 1] = { e = false, edition = j.edition }
+	local cached = jokers ~= nil and JOKER_CACHE[jokers] or nil
+	local effects, joker_count, copy_work
+	if cached then
+		effects, joker_count, copy_work = cached[1], cached[2], cached[3]
+	else
+		effects = {}
+		joker_count, copy_work = 0, 0
+		if jokers ~= nil then
+			for i = 1, #jokers do
+				local j = jokers[i]
+				if type(j) == "table" then
+					-- Abstract Joker counts every Joker, debuffed ones included.
+					joker_count = joker_count + 1
+				end
+				if type(j) == "table" and j.debuff ~= true and j.redacted ~= true then
+					local e = effect_of(j)
+					if e and e[1] == "copy" then
+						-- Reserve optional-search work for copy routing and value resolution.
+						copy_work = copy_work + 12
+						e = copied_effect(jokers, i)
+					end
+					if e ~= nil then
+						effects[#effects + 1] = { e = e, edition = j.edition }
+					else
+						effects[#effects + 1] = { e = false, edition = j.edition }
+					end
 				end
 			end
 		end
+		if jokers ~= nil then JOKER_CACHE[jokers] = { effects, joker_count, copy_work } end
 	end
 	local face_scored, twos = false, 0
 	-- Photograph: x2 whenever the first scoring face card scores (each retrigger).
@@ -911,7 +944,7 @@ local function estimate(played, held, jokers)
 			mult = mult * 1.5
 		end
 	end
-	WORK = WORK + (#played + (held ~= nil and #held or 0)) * (#effects + 2)
+	WORK = WORK + (#played + (held ~= nil and #held or 0)) * (#effects + 2) + copy_work
 	if BALANCED then
 		-- Plasma balances after all scoring effects, flooring each half.
 		local half = math.floor((chips + mult) / 2)
@@ -949,8 +982,8 @@ local function held_after(hand, refs)
 end
 
 -- Draw-aware discard evaluation (analytic "outs", deterministic). Unseen cards
--- follow a standard 52-card prior minus the visible hand (only general
--- knowledge and the visible hand; no deck order, no hidden deck contents).
+-- follow public initial-deck priors minus the visible hand. These are
+-- approximate; no deck order or hidden deck contents are consulted.
 local function choose(n, k)
 	if k < 0 or k > n then
 		return 0
@@ -1116,6 +1149,16 @@ local function synthetic(rank, suit)
 	return { kind = "card", rank = RANK_NAMES[rank], suit = SUIT_NAMES[suit], center = "c_base", id = "draw" }
 end
 
+-- Public initial-deck priors only: never inspect unseen cards or draw order.
+-- Deck changes, depletion and added/removed cards make these approximate.
+local function rank_stock(rv)
+	return DRAW_PROFILE == "abandoned" and rv >= 11 and rv <= 13 and 0 or 4
+end
+local function suit_stock(sk)
+	if DRAW_PROFILE == "checkered" then return (sk == "H" or sk == "S") and 26 or 0 end
+	return (DRAW_PROFILE == "abandoned" and 10 or 13) * (SMEARED and 2 or 1)
+end
+
 -- Expected best play after discarding `discard_refs` and drawing the same
 -- number of cards: the current best of the kept cards, improved by the most
 -- valuable reachable target (flush, better rank group, straight) weighted by
@@ -1149,7 +1192,7 @@ local function discard_ev(obs, discard_refs, jokers, need)
 	local d = #discard_refs
 	-- Structural search cost that estimate does not charge.
 	WORK = WORK + #kept * (110 + 20 * d)
-	local pool = 52 - #hand
+	local pool = (DRAW_PROFILE == "abandoned" and 40 or 52) - #hand
 	local deck = s.deck
 	if type(deck) == "table" and type(deck.total) == "number" and deck.total > 0 and deck.total < pool then
 		pool = deck.total
@@ -1188,7 +1231,7 @@ local function discard_ev(obs, discard_refs, jokers, need)
 	end
 	local neutral = "S"
 	for _, sk in ipairs({ "S", "C", "H", "D" }) do
-		if not bonus[sk] then
+		if suit_stock(sk) > 0 and not bonus[sk] then
 			neutral = sk
 			break
 		end
@@ -1280,13 +1323,13 @@ local function discard_ev(obs, discard_refs, jokers, need)
 			-- better than the flush being priced.
 			local filler = 3
 			for _ = 1, need do
-				while filler <= 14 and (kept_rank[filler] or 0) > 0 do
+				while filler <= 14 and ((kept_rank[filler] or 0) > 0 or rank_stock(filler) == 0) do
 					filler = filler + 1
 				end
 				play[#play + 1] = synthetic(filler <= 14 and filler or 8, sk)
 				filler = filler + 2
 			end
-			consider(p_at_least(need, d, (SMEARED and 26 or 13) - (seen_suit[sk] or 0), pool), play)
+			consider(p_at_least(need, d, suit_stock(sk) - (seen_suit[sk] or 0), pool), play)
 		end
 	end
 	-- Rank groups: one more of a kept rank (pair -> three, three -> four,
@@ -1294,7 +1337,7 @@ local function discard_ev(obs, discard_refs, jokers, need)
 	for rv = 2, 14 do
 		local have = kept_rank[rv] or 0
 		if have >= 1 and d >= 1 then
-			local outs = 4 - (seen_rank[rv] or 0)
+			local outs = rank_stock(rv) - (seen_rank[rv] or 0)
 			if outs > 0 and have <= 3 then
 				local play = kept_where(function(c)
 					return rank_value(c.rank) == rv
@@ -1306,12 +1349,12 @@ local function discard_ev(obs, discard_refs, jokers, need)
 	end
 	-- Drawn straight cards take a suit none of the kept cards share, so a
 	-- straight target is never priced as a straight flush.
-	local fill_suit = "D"
+	local fill_suit = DRAW_PROFILE == "checkered" and "H" or "D"
 	local fill_rank = 0
 	for _, candidate_suit in ipairs({ "D", "C", "H", "S" }) do
 		-- Prefer a suit no kept card shares, then one no suit Joker rewards.
 		local r = ((kept_suit[merge_suit(candidate_suit)] or 0) == 0 and 2 or 0) + (bonus[merge_suit(candidate_suit)] and 0 or 1)
-		if r > fill_rank then
+		if suit_stock(candidate_suit) > 0 and r > fill_rank then
 			fill_suit = candidate_suit
 			fill_rank = r
 		end
@@ -1333,7 +1376,7 @@ local function discard_ev(obs, discard_refs, jokers, need)
 				end
 			end
 			if count == 4 and missing ~= nil then
-				local outs = 4 - (seen_rank[missing] or 0)
+				local outs = rank_stock(missing) - (seen_rank[missing] or 0)
 				if outs > 0 then
 					local play = {}
 					for v = low, low + 4 do
@@ -1365,7 +1408,7 @@ local function discard_ev(obs, discard_refs, jokers, need)
 		end
 		if #pair_ranks >= 2 then
 			local a, b = pair_ranks[1], pair_ranks[2]
-			local outs = (4 - (seen_rank[a] or 0)) + (4 - (seen_rank[b] or 0))
+			local outs = (rank_stock(a) - (seen_rank[a] or 0)) + (rank_stock(b) - (seen_rank[b] or 0))
 			if outs > 0 then
 				local play = kept_where(function(c)
 					local rv = rank_value(c.rank)
@@ -1392,8 +1435,8 @@ local function discard_ev(obs, discard_refs, jokers, need)
 					end
 				end
 				if count == 3 and #missing == 2 then
-					local outs_a = 4 - (seen_rank[missing[1]] or 0)
-					local outs_b = 4 - (seen_rank[missing[2]] or 0)
+					local outs_a = rank_stock(missing[1]) - (seen_rank[missing[1]] or 0)
+					local outs_b = rank_stock(missing[2]) - (seen_rank[missing[2]] or 0)
 					if outs_a > 0 and outs_b > 0 and pool >= d then
 						-- Exact: P(>=1 of each) by inclusion-exclusion.
 						local total = choose(pool, d)
@@ -1579,7 +1622,7 @@ local function analyse_plays(obs, actions, count)
 	-- large hands; otherwise candidates are ranked by the cheap per-card
 	-- heuristic (id breaks ties) and the best ones are evaluated until
 	-- DISCARD_EV_LIMIT candidates or the DISCARD_WORK share of WORK is used.
-	if CONF.discard_ev and can_discard and not info.clears and #s.hand <= 12 then
+	if CONF.discard_ev and DRAW_PROFILE ~= "unknown" and can_discard and not info.clears and #s.hand <= 12 then
 		info.discard_ev = {}
 		info.last_hand = hands == 1 and info.remaining ~= nil
 		local need = nil
@@ -1691,13 +1734,27 @@ local function panel_hands()
 		return { kind = "card", rank = rank, suit = suit, center = "c_base", id = "panel" }
 	end
 	PANEL = {
-		{ w = 4, play = { c("King", "Spades"), c("King", "Hearts") }, held = { c("7", "Clubs"), c("4", "Diamonds"), c("9", "Spades") } },
+		{ w = 4, play = { c("King", "Spades"), c("King", "Hearts") }, held = { c("7", "Clubs"), c("Queen", "Diamonds"), c("9", "Spades") } },
 		{ w = 2, play = { c("Queen", "Spades"), c("Queen", "Diamonds"), c("8", "Clubs"), c("8", "Hearts") }, held = { c("3", "Spades") } },
-		{ w = 1, play = { c("7", "Spades"), c("7", "Hearts"), c("7", "Clubs") }, held = { c("Jack", "Diamonds") } },
+		{ w = 1, play = { c("7", "Spades"), c("7", "Hearts"), c("7", "Clubs") }, held = { c("King", "Diamonds") } },
 		{ w = 1, play = { c("2", "Hearts"), c("5", "Hearts"), c("8", "Hearts"), c("Jack", "Hearts"), c("King", "Hearts") }, held = {} },
 		{ w = 1, play = { c("6", "Clubs"), c("7", "Diamonds"), c("8", "Spades"), c("9", "Hearts"), c("10", "Clubs") }, held = {} },
 		{ w = 1, play = { c("Ace", "Spades") }, held = { c("4", "Hearts"), c("6", "Clubs") } },
 	}
+	if DRAW_PROFILE == "abandoned" or DRAW_PROFILE == "checkered" then
+		for _, hand in ipairs(PANEL) do
+			for _, cards in ipairs({ hand.play, hand.held }) do
+				for _, card in ipairs(cards) do
+					if DRAW_PROFILE == "abandoned" then
+						card.rank = card.rank == "King" and "10" or (card.rank == "Queen" and "9" or (card.rank == "Jack" and "6" or card.rank))
+					else
+						card.suit = card.suit == "Clubs" and "Spades" or (card.suit == "Diamonds" and "Hearts" or card.suit)
+					end
+				end
+			end
+		end
+		if DRAW_PROFILE == "checkered" then PANEL[1].w, PANEL[4].w = 2, 4 end
+	end
 	return PANEL
 end
 
@@ -1737,6 +1794,8 @@ local function joker_gain(obs, center, edition)
 	if type(center) ~= "string" then
 		return 0
 	end
+	local key = center .. ":" .. (edition or "")
+	if GAIN_CACHE[key] ~= nil then return GAIN_CACHE[key] end
 	local s = obs.self
 	local owned = {}
 	if type(s) == "table" and type(s.jokers) == "table" then
@@ -1754,9 +1813,10 @@ local function joker_gain(obs, center, edition)
 	-- at most REORDER_EST_MAX_JOKERS. Otherwise it stays at the end.
 	local e = JOKER_EFFECTS[center]
 	local slot = #owned + 1
-	local movable = e ~= nil and #owned + 1 <= REORDER_EST_MAX_JOKERS and not PINNED[center]
+	local movable = e ~= nil and #owned + 1 <= REORDER_EST_MAX_JOKERS and (not PINNED[center] or e[1] == "copy")
 	for i = 1, #owned do
-		if effect_of(owned[i]) == nil or joker_pinned(owned[i]) then
+		local o = effect_of(owned[i])
+		if o == nil or (joker_pinned(owned[i]) and o[1] ~= "copy") then
 			movable = false
 		end
 	end
@@ -1799,16 +1859,37 @@ local function joker_gain(obs, center, edition)
 		local v = p[1] == "xmult" and 1 + (p[2] - 1) * f or p[2] * f
 		proxy = { p[1], v, p[3] }
 	end
-	table.insert(with, slot, { center = center, edition = edition, offered = offered, proxy = proxy })
+	local purchase = { center = center, edition = edition, offered = offered, proxy = proxy }
+	table.insert(with, slot, purchase)
 	local before = panel_total(owned)
 	local after = panel_total(with)
+	if movable and e[1] == "copy" then
+		-- Same bounded placements the real adapter offers after purchase.
+		for target = 1, #owned do
+			local rest = {}
+			for i = 1, #owned do if i ~= target then rest[#rest + 1] = owned[i] end end
+			if center == "j_brainstorm" then
+				table.insert(rest, 1, owned[target]); rest[#rest + 1] = purchase
+				after = math.max(after, panel_total(rest))
+			else
+				rest[#rest + 1], rest[#rest + 2] = purchase, owned[target]
+				after = math.max(after, panel_total(rest))
+				-- Rows used as cache keys must remain immutable.
+				local front = { purchase, owned[target] }
+				for i = 1, #rest - 2 do front[#front + 1] = rest[i] end
+				after = math.max(after, panel_total(front))
+			end
+		end
+	end
 	if before <= 0 or after <= before then
+		GAIN_CACHE[key] = 0
 		return 0
 	end
 	local gain = (after - before) / before
 	if gain > 3 then
 		gain = 3
 	end
+	GAIN_CACHE[key] = gain
 	return gain
 end
 
@@ -2479,7 +2560,8 @@ local function reorder_score(obs, act)
 		local reordered = {}
 		for i = 1, n do
 			local joker = jokers[i]
-			if effect_of(joker) == nil or pinned[i] then
+			local e = effect_of(joker)
+			if e == nil or (pinned[i] and e[1] ~= "copy") then
 				known = false
 			end
 			reordered[i] = by_ref(jokers, order[i])
@@ -2914,10 +2996,14 @@ return function(obs, actions)
 	EYE_PLAYED = nil
 	MOUTH_ONLY = nil
 	CURRENT_EFF = {}
+	JOKER_CACHE = {}
+	GAIN_CACHE = {}
 	TAROT_BEFORE = nil
 	TAROT_WORK = 0
 	local match = obs.match
 	set_rules(type(obs.self) == "table" and obs.self.jokers or nil)
+	DRAW_PROFILE = type(match) == "table" and match.draw_profile or nil
+	PANEL = nil
 	BALANCED = type(match) == "table" and match.score_balanced == true
 	TIME_PRESSURE = type(match) == "table" and type(match.timer_remaining) == "number" and match.timer_remaining <= 60
 	FLINT = CONF.boss_aware and type(match) == "table" and match.blind_disabled ~= true and match.blind == "bl_flint"
@@ -3107,6 +3193,43 @@ local function squeeze_line(line)
 	return table.concat(out)
 end
 
+-- Shorten private function/constant symbols only in generated text. Keep the
+-- maintained template readable, preserve quoted data and field names, and
+-- retain the existing source cap. Tests compare every executable instruction,
+-- constant and nested prototype with the readable template (debug data aside).
+local function compact_symbols(text)
+	if string.find(text, "_b%d") then return nil end
+	local names, seen = {}, {}
+	local function collect(name)
+		if #name > 6 and not seen[name] and not string.find(text, "[%.:]" .. name .. "%f[%W]") then
+			seen[name] = true; names[#names + 1] = name
+		end
+	end
+	for name in string.gmatch(text, "local function ([%a_][%w_]*)") do collect(name) end
+	for name in string.gmatch(text, "local ([A-Z][A-Z_0-9]*)%s*=") do collect(name) end
+	table.sort(names, byte_less)
+	local mapping = {}
+	for i = 1, #names do mapping[names[i]] = "_b" .. i end
+	local out, quote, i = {}, nil, 1
+	while i <= #text do
+		local c = string.sub(text, i, i)
+		if quote ~= nil then
+			out[#out + 1] = c
+			if c == "\\" then
+				i = i + 1; out[#out + 1] = string.sub(text, i, i)
+			elseif c == quote then quote = nil end
+		elseif c == "\"" or c == "'" then quote = c; out[#out + 1] = c
+		elseif string.find(c, "[%a_]") then
+			local finish = i + 1
+			while finish <= #text and string.find(string.sub(text, finish, finish), "[%w_]") do finish = finish + 1 end
+			local token = string.sub(text, i, finish - 1)
+			out[#out + 1] = mapping[token] or token; i = finish - 1
+		else out[#out + 1] = c end
+		i = i + 1
+	end
+	return table.concat(out)
+end
+
 local function strip_template(text, squeeze)
 	local out = {}
 	for line in string.gmatch(text, "([^\n]*)\n?") do
@@ -3118,7 +3241,8 @@ local function strip_template(text, squeeze)
 			out[#out + 1] = kept
 		end
 	end
-	local joined = table.concat(out, " ")
+	local joined = compact_symbols(table.concat(out, " "))
+	if joined == nil then return nil end
 	return (squeeze and squeeze_line(joined) or joined) .. "\n"
 end
 

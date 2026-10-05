@@ -475,6 +475,7 @@ local function read_match(t)
 		{ "blind", "display", 32 },
 		{ "blind_disabled", "bool" },
 		{ "score_balanced", "bool" },
+		{ "draw_profile", "token", 16 },
 		{ "timer_remaining", "int" },
 		{ "timer", "display", 16 },
 		{ "ante", "int" },
@@ -489,6 +490,10 @@ local function read_match(t)
 	local code, out = read_fields(t, spec)
 	if code ~= nil then
 		return code
+	end
+	if out.draw_profile ~= nil and out.draw_profile ~= "standard" and out.draw_profile ~= "checkered"
+		and out.draw_profile ~= "abandoned" and out.draw_profile ~= "unknown" then
+		return CODE.BAD_FIELD
 	end
 	if out.ruleset == nil then
 		return CODE.BAD_FIELD

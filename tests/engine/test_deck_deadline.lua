@@ -4,6 +4,7 @@ return function(ctx)
 	local function capture(e, pipeline)
 		local step = assert((pipeline or support.pipeline(bundle, e, {})).adapter.step())
 		-- These caller assertions must never override the actual own engine.
+		step.ui_view.match.draw_profile = "unknown"
 		step.ui_view.match.score_balanced = false
 		step.ui_view.match.timer_remaining = 999
 		local handle = assert(bundle.reader.capture(step.runtime, step.ui_view))
@@ -16,6 +17,7 @@ return function(ctx)
 		e.G.GAME.pseudorandom = setmetatable({}, { __index = function() error("future RNG read") end })
 		local obs = capture(e)
 		eq(obs.match.score_balanced, true)
+		eq(obs.match.draw_profile, "standard")
 		eq(obs.match.timer_remaining, 50)
 		eq(obs.self.deck, nil)
 		e.G.GAME.selected_back.name = "Red Deck"
@@ -33,6 +35,19 @@ return function(ctx)
 		e.G.GAME.selected_back.name = "Plasma Deck"
 		local _, third = capture(e, pipeline)
 		ctx.is_true(third ~= second)
+	end)
+	test("deck_priors_use_public_back_without_hidden_card_reads", function()
+		local e = support.engine({})
+		e.G.deck = setmetatable({}, { __index = function() error("hidden deck read") end })
+		local pipeline = support.pipeline(bundle, e, {})
+		local previous = nil
+		for _, entry in ipairs({ {"Checkered Deck","checkered"}, {"Abandoned Deck","abandoned"}, {"Erratic Deck","unknown"} }) do
+			e.G.GAME.selected_back = {name=entry[1]}
+			local obs, epoch = capture(e, pipeline)
+			eq(obs.match.draw_profile, entry[2])
+			if previous then ctx.is_true(epoch ~= previous, "deck profile changes stale old actions") end
+			previous = epoch
+		end
 	end)
 	test("inactive_or_hidden_own_timer_is_omitted", function()
 		for _, opts in ipairs({ {}, { config_timer = true }, { config_timer = true, timer_started = true, config_hud_disabled = true } }) do

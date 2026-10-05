@@ -24,5 +24,20 @@ return function(ctx)
 		ctx.eq(support.run(env, "expert", frame).action.item_ref, "shop:2", "Plasma chip gain")
 		frame.match.score_balanced = false
 		ctx.eq(support.run(env, "expert", frame).action.item_ref, "shop:1", "ordinary mult gain")
+	end)	ctx.test("deck_shop_panel_avoids_nonexistent_faces_and_suits", function()
+		local frame = support.two_joker_frame()
+		frame.self.money, frame.self.jokers = 40, {}
+		frame.shop.items[1].center, frame.shop.items[2].center = "j_smiley", "j_joker"
+		frame.shop.items[1].cost, frame.shop.items[2].cost = 5, 5
+		frame.match.draw_profile = "standard"
+		ctx.eq(support.run(env, "expert", frame).action.item_ref, "shop:1", "ordinary face gain")
+		frame.match.draw_profile = "abandoned"
+		ctx.eq(support.run(env, "expert", frame).action.item_ref, "shop:2", "no initial faces")
+		frame.shop.items[1].center, frame.shop.items[2].center = "j_greedy_joker", "j_wrathful_joker"
+		frame.match.draw_profile = "checkered"
+		ctx.eq(support.run(env, "expert", frame).action.item_ref, "shop:2", "no initial diamonds")
+		frame.match.draw_profile = "standard"
+		ctx.eq(support.run(env, "expert", frame).ok, true, "profile resets")
 	end)
+
 end

@@ -814,6 +814,7 @@ local function build_match(G, MP, view)
 	local back_name = rget(rget(game, "selected_back"), "name")
 	if type(back_name) == "string" then
 		out.score_balanced = back_name == "Plasma Deck"
+		out.draw_profile = back_name == "Checkered Deck" and "checkered" or (back_name == "Abandoned Deck" and "abandoned" or (back_name == "Erratic Deck" and "unknown" or "standard"))
 	end
 	-- Read the AI's own visible active countdown. Deriving it here keeps the
 	-- changing seconds out of the adapter's action epoch: elapsed time changes

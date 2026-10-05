@@ -935,6 +935,7 @@ local function decision_signature(G, MP, phase)
 	local back_name = rpath(game, "selected_back", "name")
 	if type(back_name) == "string" then
 		put_bool("score_balanced", back_name == "Plasma Deck")
+		put_str("draw_profile", back_name == "Checkered Deck" and "checkered" or (back_name == "Abandoned Deck" and "abandoned" or (back_name == "Erratic Deck" and "unknown" or "standard")))
 	end
 	local current_round = rget(game, "current_round")
 	put_int("hands_left", rget(current_round, "hands_left"))
@@ -2146,8 +2147,8 @@ end
 -- Bounded "meaningful" reorders. There is no discrete reorder callback in the
 -- engine (Multiplayer logs drag/drop by diffing CardArea order), so the
 -- executor commits the same area-order permutation the drag would produce. To
--- keep the catalogue small and useful, only the reverse order and each single
--- adjacent swap are offered: every entry is a non-no-op permutation.
+-- keep the catalogue bounded, offer reverse/adjacent orders and public copy
+-- Joker placements. Every entry is a non-no-op permutation.
 local REORDER_SWAP_LIMIT = 16
 
 local function cert_reorders(builder, G, zone, area_key, limit)
@@ -2167,9 +2168,12 @@ local function cert_reorders(builder, G, zone, area_key, limit)
 	local seen = {}
 	local function add_order(ordinals)
 		local refs = {}
+		local changed = false
 		for i = 1, count do
 			refs[i] = ref(zone, ordinals[i])
+			changed = changed or ordinals[i] ~= i
 		end
+		if not changed then return end
 		local key = table.concat(ordinals, ",")
 		if seen[key] then
 			return
@@ -2198,6 +2202,32 @@ local function cert_reorders(builder, G, zone, area_key, limit)
 		base[i], base[i + 1] = base[i + 1], base[i]
 		add_order(base)
 		base[i], base[i + 1] = base[i + 1], base[i]
+	end
+	-- Public centers only; hidden Joker identities cannot shape the catalog.
+	-- Small rows fit the existing reserved action slots and policy work bound.
+	if zone == "joker" and count <= 8 then
+		for i = 1, count do
+			local c = cards[i]
+			local center = is_face_up(c) and rget(c, "debuff") ~= true and center_key(c) or nil
+			if center == "j_blueprint" or center == "j_brainstorm" then
+				for target = 1, count do
+					if target ~= i and is_face_up(cards[target]) then
+						local rest = {}
+						for j = 1, count do
+							if j ~= target and (center ~= "j_blueprint" or j ~= i) then rest[#rest + 1] = j end
+						end
+						if center == "j_brainstorm" then
+							table.insert(rest, 1, target); add_order(rest)
+						else
+							local front = { i, target }
+							for j = 1, #rest do front[#front + 1] = rest[j] end
+							add_order(front)
+							rest[#rest + 1], rest[#rest + 2] = i, target; add_order(rest)
+						end
+					end
+				end
+			end
+		end
 	end
 end
 

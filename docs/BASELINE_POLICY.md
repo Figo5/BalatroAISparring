@@ -181,9 +181,10 @@ certified discard is valued by the expected best follow-up play:
   of draws;
 - targets are completing a flush, one more card of a kept rank, and a straight
   missing exactly one rank;
-- unseen cards follow a standard 52-card prior minus the visible hand, capped by
-  the displayed deck total. Only general knowledge and the visible hand are
-  used: no deck order and no hidden deck contents.
+- unseen cards use public initial-deck priors minus the visible hand: standard
+  52 cards, Checkered 26 Hearts/26 Spades, or Abandoned 40 cards without faces.
+  Erratic skips numerical draw probabilities. No hidden deck contents or order
+  are read; the production adapter exposes no deck count.
 
 The adapter also offers discard-specific candidates. Each keeps a flush draw, all
 made rank groups, or a four-rank straight draw, or drops only the lowest junk;
@@ -204,8 +205,8 @@ budget. Drawn cards are priced so they cannot overstate the target: flush filler
 ranks nobody kept, and a straight's missing card takes a suit none of the kept
 cards share.
 
-**Known limitation.** The draw prior is a standard 52-card deck minus the visible
-hand. The adapter never reads `G.deck` (a documented boundary), so deck
+**Known limitation.** Draw priors describe the selected initial deck minus the
+visible hand. The adapter never reads `G.deck` (a documented boundary), so deck
 depletion within a round and cards added or destroyed are not modelled.
 Exporting the displayed deck count would fix that, but it needs an
 architecture review of that boundary first.
@@ -772,7 +773,8 @@ selected.
   inversions; every unrecognized or position-sensitive joker is a fixed anchor
   that is never moved. This means ordering-dependent value beyond "additive mult
   before multiplicative mult" (for example chain-mult layouts or
-  Blueprint/Copycat positioning) is left on the table. A richer ranking was
+  unknown copying targets) is left on the table. Blueprint/Brainstorm with known
+    compatible effects use numerical ordering and bounded real placements. A richer ranking was
   deliberately not invented: the baseline does not guess a joker tier list or
   rearrange synergies it cannot see.
 - **Selling is intentionally basic.** `SELL_JOKER` is justified only by a SHOP
@@ -908,3 +910,21 @@ The Major League engine, not these tests, adjudicates real play.
 
 Not implemented here and owned elsewhere: real-engine view/certificate producer,
 executor, async orchestration, logging, launcher, staged runtime, UI.
+
+### October 2026 strategy refinement
+
+Known Blueprint and Brainstorm effects resolve against the visible own row,
+with copy cycles, missing/debuffed targets and incompatible rule Jokers neutral.
+Copies retain the copier's edition, and current scaling values are copied
+without growing the original twice. Numerical shop gains compare useful
+bounded copy placements; unknown rows retain conservative anchors. Per-decision
+caches avoid repeating immutable effect and purchase calculations and reset
+every observation. Copy routing reserves additional optional-search work.
+
+The shop panel now respects initial Checkered/Abandoned card constraints and
+includes held King/Queen examples. Depletion, modified decks, unsupported Joker
+interactions and long-run build planning remain approximate. Source compaction
+renames only private lexical symbols, leaving strings and fields unchanged;
+`test_policy_compaction.py` proves executable bytecode equality for all four
+difficulties. Existing source and sandbox guards remain unchanged. See
+`AI_DECISION_REVIEW.md` for native pins, fairness checks and coverage limits.

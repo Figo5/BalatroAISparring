@@ -282,6 +282,27 @@ return function(ctx)
 		end
 	end)
 
+	test("copying_shop_and_play_work_stays_bounded", function()
+		local export = frame(paired(12), 8, false)
+		for i=1,7 do export.self.jokers[i].center = "j_blueprint" end
+		export.self.jokers[8].center = "j_joker"
+		local a = decide("copy_chain_play", "expert", export, 1000000)
+		ctx.vector("copy_chain_play", a.id)
+		local shop=Support.voucher_frame()
+		shop.self.money,shop.match.joker_slots=200,8
+		shop.self.jokers={}
+		for i=1,7 do shop.self.jokers[i]={kind="joker",center=i==7 and "j_joker" or "j_blueprint",face_down=false} end
+		shop.shop.items,shop.shop.boosters,shop.shop.vouchers={},{},{}
+		shop.certificates.items={}
+		for i=1,16 do
+			shop.shop.items[i]={kind="joker",center=i%2==0 and "j_blueprint" or "j_brainstorm",cost=5,sell_cost=2,face_down=false}
+			shop.certificates.items[i]={type="BUY_ITEM",certified=true,item_ref="shop:"..i,capacity_ok=true}
+		end
+		shop.certificates.items[17]={type="LEAVE_SHOP",certified=true}
+		a=decide("copy_chain_shop", "expert", shop, 1000000)
+		ctx.vector("copy_chain_shop", a.id)
+	end)
+
 	test("budget_worst_case_recorded", function()
 		ctx.truthy(worst > 0, "measured")
 		ctx.truthy(worst <= GUARD, "worst:" .. worst)

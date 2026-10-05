@@ -98,6 +98,8 @@ CONTAINS = {
 
 # Reference Joker effects (public card text). kind: (effect, value, condition)
 JOKERS = {
+
+    "j_blueprint": ("copy", 0, None), "j_brainstorm": ("copy", 0, None),
     "j_smeared": ("rule", 0, None),
     "j_four_fingers": ("rule", 0, None), "j_shortcut": ("rule", 0, None),
     "j_splash": ("rule", 0, None), "j_pareidolia": ("rule", 0, None),
@@ -139,7 +141,31 @@ JOKERS = {
     "j_stuntman": ("chips", 250, None),
     "j_photograph": ("photo", 2, None),
 }
-JOKER_KEYS = sorted(key for key in JOKERS if key not in {"j_smeared", "j_four_fingers", "j_shortcut", "j_splash", "j_pareidolia"})
+JOKER_KEYS = sorted(key for key in JOKERS if key not in {"j_smeared", "j_four_fingers", "j_shortcut", "j_splash", "j_pareidolia", "j_blueprint", "j_brainstorm"})
+
+
+def copied_jokers(jokers, scaled=None):
+    """Resolve known compatible scoring targets, preserving row positions."""
+    effects = []
+    for position, original in enumerate(jokers):
+        index = position
+        for _ in range(len(jokers)):
+            if not 0 <= index < len(jokers):
+                effects.append(None)
+                break
+            key = jokers[index]
+            if key == "j_blueprint":
+                index += 1
+            elif key == "j_brainstorm":
+                index = 0
+            else:
+                known = key in (scaled or {}) or key in JOKERS
+                compatible = key in (scaled or {}) or (key in JOKERS and JOKERS[key][0] != "rule")
+                effects.append(key if known and (index == position or compatible) else None)
+                break
+        else:
+            effects.append(None)
+    return effects
 
 
 def card_chips(card):
@@ -240,6 +266,9 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
     hand, scoring = classify(played, smeared, "j_four_fingers" in jokers, "j_shortcut" in jokers)
     if "j_splash" in jokers:
         scoring = list(range(len(played)))
+    pareidolia = "j_pareidolia" in jokers
+    joker_count = len(jokers) if joker_count is None else joker_count
+    jokers = copied_jokers(jokers, scaled)
     chips, mult = HAND_BASE[hand]
     if levels and hand in levels:
         chips, mult = levels[hand]["chips"], levels[hand]["mult"]
@@ -251,8 +280,8 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
         card = played[index]
         if (
             not card.get("debuff")
-            and (card.get("center") != "m_stone" or "j_pareidolia" in jokers)
-            and (card["rank"] in ("Jack", "Queen", "King") or "j_pareidolia" in jokers)
+            and (card.get("center") != "m_stone" or pareidolia)
+            and (card["rank"] in ("Jack", "Queen", "King") or pareidolia)
         ):
             photo_index = index
             break
@@ -262,7 +291,7 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
         if card.get("debuff"):
             continue
         repeats = 2 if card.get("seal") == "Red" else 1
-        face = face or "j_pareidolia" in jokers or (card.get("center") != "m_stone" and card["rank"] in ("Jack", "Queen", "King"))
+        face = face or pareidolia or (card.get("center") != "m_stone" and card["rank"] in ("Jack", "Queen", "King"))
         if card.get("center") != "m_stone":
             twos += repeats if card["rank"] == "2" else 0
         for _ in range(repeats):
@@ -288,11 +317,11 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
             elif edition == "polychrome":
                 mult *= 1.5
             rank = card.get("rank") if center != "m_stone" else None
-            is_face = rank in ("Jack", "Queen", "King") or "j_pareidolia" in jokers
+            is_face = rank in ("Jack", "Queen", "King") or pareidolia
             for key in jokers:
                 if key in scaled:
                     continue
-                effect, value, condition = JOKERS[key]
+                effect, value, condition = JOKERS.get(key, ("rule", 0, None))
                 if effect == "suit_mult" and rank is not None and (card["suit"] == condition or center == "m_wild" or (smeared and (card["suit"] in ("Hearts", "Diamonds")) == (condition in ("Hearts", "Diamonds")))):
                     mult += value
                 elif effect == "face_chips" and is_face:
@@ -323,10 +352,10 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
             if card.get("center") == "m_steel":
                 mult *= 1.5
             if card.get("center") != "m_stone":
-                if card["rank"] == "King" and "j_baron" in jokers:
-                    mult *= 1.5
-                if card["rank"] == "Queen" and "j_shoot_the_moon" in jokers:
-                    mult += 13
+                if card["rank"] == "King":
+                    mult *= 1.5 ** jokers.count("j_baron")
+                if card["rank"] == "Queen":
+                    mult += 13 * jokers.count("j_shoot_the_moon")
     for key in jokers:
         if key in scaled:
             kind, value, step = scaled[key]
@@ -338,7 +367,7 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
             else:
                 mult *= value
             continue
-        effect, value, condition = JOKERS[key]
+        effect, value, condition = JOKERS.get(key, ("rule", 0, None))
         if effect == "mult":
             mult += value
         elif effect == "chips":

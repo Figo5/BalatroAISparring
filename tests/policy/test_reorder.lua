@@ -53,7 +53,7 @@ return function(ctx)
 		end
 	end)
 
-	test("policy_preserves_position_sensitive_jokers", function()
+	test("policy_values_known_copying_joker_placements", function()
 		local frame = Support.joker_order_frame({ "j_blueprint", "j_cavendish", "j_joker" }, {
 			{ 1, 3, 2 },
 			{ 3, 2, 1 },
@@ -61,7 +61,12 @@ return function(ctx)
 		for _, difficulty in ipairs(Support.DIFFICULTIES) do
 			local result = run(difficulty, frame)
 			ctx.is_true(result.ok == true, difficulty .. "_ok")
-			ctx.eq(result.action.type, "LEAVE_SHOP", difficulty .. "_no_reorder")
+			if difficulty == "rookie" then
+				ctx.eq(result.action.type, "LEAVE_SHOP", difficulty .. "_copy_anchor")
+			else
+				ctx.eq(result.action.type, "REORDER_JOKERS", difficulty .. "_copy_gain")
+				ctx.truthy(Support.same_refs(result.action.order, { "joker:1", "joker:3", "joker:2" }), difficulty .. "_copy_target")
+			end
 		end
 	end)
 
