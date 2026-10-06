@@ -35,7 +35,7 @@ The policy does not execute engine calculations or inspect global game state.
 |---|---|
 | Decks and stakes | Actual own hand size, hands/discards, money, displayed levels and legal offers are projected from the selected game. Plasma's distinct scoring is explicit. Initial-deck draw priors and shop panels distinguish standard, Checkered and Abandoned. Erratic avoids assuming a distribution. Depletion and cards added/removed still make these priors approximate. |
 | Hand rules | All twelve native categories and the five hand-changing Jokers are modelled. Adapter candidates remain bounded; a best offered play is not necessarily the best possible subset or order. Straight draw targets still favour ordinary consecutive-rank patterns, so Shortcut draws can be undervalued. |
-| Jokers | Static scoring effects and allowlisted shown scaling values are supported. Other Jokers are neutral in score estimates and receive coarse shopping heuristics. Blueprint/Brainstorm copy compatible known effects and shown scaling values; bounded legal placements and purchases are scored. Joker retriggers and many conditional effects remain gaps. |
+| Jokers | Static scoring effects, allowlisted shown scaling values, both Hanging Chads, Sock and Buskin, Hack and Mime are supported. Blueprint/Brainstorm copy compatible known effects. Other effects retain coarse estimates. Conditional retriggers such as Dusk/Seltzer, Joker retriggers such as the rare reworked Mime, and many conditional effects remain gaps. |
 | Bosses | Psychic, Eye, Mouth, Flint and Arm have explicit policy handling; visible card/Joker debuffs and forced selections are respected. Arm's one-level loss is forecast only for visible native linear hand progressions. Unknown growth and other predictive boss effects remain gaps. Engine legality does not by itself establish a good strategic choice. |
 | Random effects | Lucky and Misprint use expectations, without sampling future RNG. Nonlinear Plasma scoring makes an expected-component estimate approximate. |
 | Economy/build planning | Bounded gains, reserves, interest, voucher/pack values and harmful-consumable refusals. No full-run search, exact future shop prediction, or complete build synergy model. |
@@ -113,3 +113,38 @@ choices on each Lua engine. Independent scores use the native post-boss levels.
 A crafted hand now chooses a 292-point flush instead of a pair whose displayed
 375-point estimate actually becomes 240 points under The Arm. Generated policy
 text stays within the unchanged source guard and decisions retain their budget.
+
+## Card retrigger refinement
+
+The scoring model now adds repetitions from vanilla Hanging Chad (first scoring
+card twice), Ranked's `j_mp_hanging_chad` (first two scoring cards once each),
+Sock and Buskin (faces), Hack (ranked 2–5 cards) and vanilla Mime (held effects).
+Red seals and copied retriggers stack additively. Each repetition runs the
+card's enhancement, edition and supported individual Joker effects in order.
+Mime repeats known Steel, Baron and Shoot the Moon scoring effects, including
+copied effects; neutral held cards consume no extra scoring work. Debuffed
+cards do not score and still occupy Chad's scoring-hand positions. Photograph
+uses the first eligible face card rather than Chad's first-card rule.
+
+The installed Ranked layer replaces vanilla Chad with a separate native
+center. Tests load that actual center and execute native Joker calculations,
+Steamodded repetition collection and card-scoring iteration, and the native
+final scoring-hand assembly that restores played-card order. UI, enhancement
+evaluation and effect application are test doubles, so this is focused rule
+verification rather than a full native replay. Independent Python totals check
+1,248 combinations per engine, including debuffs, Red seals, Stone cards,
+Pareidolia, Glass multipliers and copy chains. Thirty independent shop-gain
+checks and 360 best-offered choices per engine verify that the model reaches
+the restricted policy pipeline. Glass fixtures explicitly project the actual
+multiplier instead of testing the conservative unreadable-card fallback.
+
+Resolved repetition counts are cached within one observation. Work accounting
+includes repeated card evaluations; projected expensive play searches retain
+the existing category fallback. Shops with more than 16 owned Jokers retain
+the flat purchase heuristic, bounding extreme Negative/copy rows. Stress
+checks cover 8/12-card hands, 5/8/16/64-Joker rows and crowded shops. Source
+compaction also shortens private local symbols; executable bytecode equivalence
+and the unchanged 57,344-byte source guard remain required. No new observation
+fields, engine/global access, hidden deck information or future RNG are added.
+Conditional retriggers, playing-card order search and full-run build planning
+still need separate work; a best offered action is bounded by the legal catalog.

@@ -644,6 +644,8 @@ local JOKER_EFFECTS = {
 	j_fibonacci = { "fib_mult", 8 }, j_walkie_talkie = { "walkie" }, j_triboulet = { "kq_xmult", 2 },
 	j_abstract = { "abstract", 3 }, j_baron = { "held_king" }, j_shoot_the_moon = { "held_queen", 13 },
 	j_photograph = { "photo" },
+	j_hanging_chad = { "repeat", 2, "first" }, j_mp_hanging_chad = { "repeat", 1, "first_two" },
+	j_sock_and_buskin = { "repeat", 1, "face" }, j_hack = { "repeat", 1, "low" }, j_mime = { "repeat", 1, "held" },
 }
 
 -- Joker-level effect kinds by order sensitivity (per-card effects apply
@@ -738,29 +740,63 @@ end
 
 
 
--- Expected score of playing `played` while `held` stays in hand. `jokers` is
--- the ordered visible Joker list, or nil to ignore Jokers.
+-- Resolve this observation's visible row once, including additive retriggers.
+local function scoring_effects(jokers)
+	local cached = jokers ~= nil and JOKER_CACHE[jokers] or nil
+	if cached then return cached end
+	local effects, joker_count, copy_work = {}, 0, 0
+	local repetitions = { first = 0, second = 0, face = 0, low = 0, held = 0 }
+	if jokers ~= nil then
+		for i = 1, #jokers do
+			local j = jokers[i]
+			if type(j) == "table" then
+				-- Abstract Joker counts every Joker, debuffed ones included.
+				joker_count = joker_count + 1
+			end
+			if type(j) == "table" and j.debuff ~= true and j.redacted ~= true then
+				local e = effect_of(j)
+				if e and e[1] == "copy" then
+					-- Reserve optional-search work for copy routing and value resolution.
+					copy_work = copy_work + 12
+					e = copied_effect(jokers, i)
+				end
+				if e ~= nil then
+					effects[#effects + 1] = { e = e, edition = j.edition }
+					if e[1] == "repeat" then
+						if e[3] == "first_two" then
+							repetitions.first = repetitions.first + e[2]
+							repetitions.second = repetitions.second + e[2]
+						else repetitions[e[3]] = repetitions[e[3]] + e[2] end
+					elseif e[1] == "held_king" then repetitions.king = true
+					elseif e[1] == "held_queen" then repetitions.queen = true
+					end
+				else
+					effects[#effects + 1] = { e = false, edition = j.edition }
+				end
+			end
+		end
+	end
+	local factor = 1 + repetitions.first + repetitions.face + repetitions.low + repetitions.held
+	cached = { effects, joker_count, copy_work, repetitions, factor }
+	if jokers ~= nil then JOKER_CACHE[jokers] = cached end
+	return cached
+end
+
+-- Expected score of playing `played` while `held` stays in hand.
 local function estimate(played, held, jokers)
 	local name, scoring = classify_scoring(played)
-	if name == nil then
-		return nil
-	end
+	if name == nil then return nil end
 	local base = HAND_BASE[name]
-	local chips = base[1]
-	local mult = base[2]
+	local chips, mult = base[1], base[2]
 	if LEVELS ~= nil then
 		local level = LEVELS[name]
 		if type(level) == "table" and type(level.chips) == "number" and type(level.mult) == "number" then
-			chips = level.chips
-			mult = level.mult
-			-- The Arm lowers this hand before scoring. Only forecast a visible
-			-- native linear level progression; altered/unknown growth stays at
-			-- the displayed estimate, without inventing unseen parameters.
+			chips, mult = level.chips, level.mult
+			-- Forecast only the visible native linear progression under The Arm.
 			if HAND_BLIND == "bl_arm" and type(level.level) == "number" and level.level > 1
 				and chips == base[1] + base[3] * (level.level - 1)
 				and mult == base[2] + base[4] * (level.level - 1) then
-				chips = chips - base[3]
-				mult = mult - base[4]
+				chips, mult = chips - base[3], mult - base[4]
 			end
 		end
 	end
@@ -768,36 +804,14 @@ local function estimate(played, held, jokers)
 		chips = math.max(0, math.floor(chips * 0.5 + 0.5))
 		mult = math.max(1, math.floor(mult * 0.5 + 0.5))
 	end
-	local cached = jokers ~= nil and JOKER_CACHE[jokers] or nil
-	local effects, joker_count, copy_work
-	if cached then
-		effects, joker_count, copy_work = cached[1], cached[2], cached[3]
-	else
-		effects = {}
-		joker_count, copy_work = 0, 0
-		if jokers ~= nil then
-			for i = 1, #jokers do
-				local j = jokers[i]
-				if type(j) == "table" then
-					-- Abstract Joker counts every Joker, debuffed ones included.
-					joker_count = joker_count + 1
-				end
-				if type(j) == "table" and j.debuff ~= true and j.redacted ~= true then
-					local e = effect_of(j)
-					if e and e[1] == "copy" then
-						-- Reserve optional-search work for copy routing and value resolution.
-						copy_work = copy_work + 12
-						e = copied_effect(jokers, i)
-					end
-					if e ~= nil then
-						effects[#effects + 1] = { e = e, edition = j.edition }
-					else
-						effects[#effects + 1] = { e = false, edition = j.edition }
-					end
-				end
-			end
+	local cached = scoring_effects(jokers)
+	local effects, joker_count, copy_work, repetitions = cached[1], cached[2], cached[3], cached[4]
+	local first, second, evaluations = nil, nil, 0
+	for i = 1, #played do
+		-- Debuffed first cards still occupy Chad's scoring-hand positions.
+		if scoring[i] then
+			if first == nil then first = i elseif second == nil then second = i end
 		end
-		if jokers ~= nil then JOKER_CACHE[jokers] = { effects, joker_count, copy_work } end
 	end
 	local face_scored, twos = false, 0
 	-- Photograph: x2 whenever the first scoring face card scores (each retrigger).
@@ -818,6 +832,10 @@ local function estimate(played, held, jokers)
 				rv = rank_value(c.rank)
 			end
 			local sk = suit_key(c.suit)
+			local face = RULES.j_pareidolia or (rv ~= nil and rv >= 11 and rv <= 13)
+			reps = reps + (i == first and repetitions.first or (i == second and repetitions.second or 0))
+				+ (face and repetitions.face or 0) + (rv ~= nil and rv >= 2 and rv <= 5 and repetitions.low or 0)
+			evaluations = evaluations + reps
 			if rv == 2 then twos = twos + reps end
 			if RULES.j_pareidolia or (rv ~= nil and rv >= 11 and rv <= 13) then face_scored = true end
 			for _ = 1, reps do
@@ -852,7 +870,6 @@ local function estimate(played, held, jokers)
 				elseif c.edition == "polychrome" then
 					mult = mult * 1.5
 				end
-				local face = (RULES.j_pareidolia or (rv ~= nil and rv >= 11 and rv <= 13))
 				for k = 1, #effects do
 					local e = effects[k].e
 					if e then
@@ -894,6 +911,11 @@ local function estimate(played, held, jokers)
 				if not is_stone(c) then
 					rv = rank_value(c.rank)
 				end
+				-- Mime repeats held scoring effects, including effects of copied Jokers.
+				if c.center == "m_steel" or (rv == 13 and repetitions.king) or (rv == 12 and repetitions.queen) then
+					reps = reps + repetitions.held
+				end
+				evaluations = evaluations + reps
 				for _ = 1, reps do
 					if c.center == "m_steel" then
 						mult = mult * 1.5
@@ -954,7 +976,7 @@ local function estimate(played, held, jokers)
 			mult = mult * 1.5
 		end
 	end
-	WORK = WORK + (#played + (held ~= nil and #held or 0)) * (#effects + 2) + copy_work
+	WORK = WORK + math.max(evaluations, #played + (held ~= nil and #held or 0)) * (#effects + 2) + copy_work
 	if BALANCED then
 		-- Plasma balances after all scoring effects, flooring each half.
 		local half = math.floor((chips + mult) / 2)
@@ -1585,7 +1607,8 @@ local function analyse_plays(obs, actions, count)
 			plays = plays + 1
 		end
 	end
-	if plays * #s.hand * ((type(jokers) == "table" and #jokers or 0) + 2) > PLAY_WORK then
+	local factor = scoring_effects(jokers)[5]
+	if plays * #s.hand * ((type(jokers) == "table" and #jokers or 0) + 2) * factor > PLAY_WORK then
 		return info
 	end
 	local best = nil
@@ -1816,6 +1839,9 @@ local function joker_gain(obs, center, edition)
 			end
 		end
 	end
+	-- Huge Negative rows retain the flat purchase heuristic; numerical panels
+	-- can multiply both copy routing and card retriggers beyond the budget.
+	if #owned > 16 then GAIN_CACHE[key] = 0; return 0 end
 	-- Place the new Joker where the reorder step would: an additive
 	-- (+mult/+chips) Joker goes before the trailing x-mult / Polychrome
 	-- Jokers. Only when the row after purchase qualifies for the
@@ -3216,7 +3242,7 @@ local function compact_symbols(text)
 		end
 	end
 	for name in string.gmatch(text, "local function ([%a_][%w_]*)") do collect(name) end
-	for name in string.gmatch(text, "local ([A-Z][A-Z_0-9]*)%s*=") do collect(name) end
+	for name in string.gmatch(text, "local ([%a_][%w_]*)%s*[,=]") do collect(name) end
 	table.sort(names, byte_less)
 	local mapping = {}
 	for i = 1, #names do mapping[names[i]] = "_b" .. i end

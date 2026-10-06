@@ -140,8 +140,13 @@ JOKERS = {
     "j_cavendish": ("xmult", 3, None),
     "j_stuntman": ("chips", 250, None),
     "j_photograph": ("photo", 2, None),
+    "j_hanging_chad": ("repeat", 2, "first"),
+    "j_mp_hanging_chad": ("repeat", 1, "first_two"),
+    "j_sock_and_buskin": ("repeat", 1, "face"),
+    "j_hack": ("repeat", 1, "low"),
+    "j_mime": ("repeat", 1, "held"),
 }
-JOKER_KEYS = sorted(key for key in JOKERS if key not in {"j_smeared", "j_four_fingers", "j_shortcut", "j_splash", "j_pareidolia", "j_blueprint", "j_brainstorm"})
+JOKER_KEYS = sorted(key for key in JOKERS if key not in {"j_smeared", "j_four_fingers", "j_shortcut", "j_splash", "j_pareidolia", "j_blueprint", "j_brainstorm", "j_hanging_chad", "j_mp_hanging_chad", "j_sock_and_buskin", "j_hack", "j_mime"})
 
 
 def copied_jokers(jokers, scaled=None):
@@ -297,6 +302,13 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
         if card.get("debuff"):
             continue
         repeats = 2 if card.get("seal") == "Red" else 1
+        rank = card.get("rank") if card.get("center") != "m_stone" else None
+        is_face = rank in ("Jack", "Queen", "King") or pareidolia
+        position = sorted(scoring).index(index)
+        repeats += 2 * jokers.count("j_hanging_chad") * (position == 0)
+        repeats += jokers.count("j_mp_hanging_chad") * (position < 2)
+        repeats += jokers.count("j_sock_and_buskin") * is_face
+        repeats += jokers.count("j_hack") * (rank in ("2", "3", "4", "5"))
         face = face or pareidolia or (card.get("center") != "m_stone" and card["rank"] in ("Jack", "Queen", "King"))
         if card.get("center") != "m_stone":
             twos += repeats if card["rank"] == "2" else 0
@@ -314,7 +326,7 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
             elif center == "m_lucky":
                 mult += 20 * 0.2
             elif center == "m_glass":
-                mult *= 2
+                mult *= card.get("xmult", 200) / 100
             edition = card.get("edition")
             if edition == "foil":
                 chips += 50
@@ -354,6 +366,9 @@ def reference_score(played, held, jokers, levels=None, scaled=None, joker_count=
         if card.get("debuff"):
             continue
         repeats = 2 if card.get("seal") == "Red" else 1
+        rank = card.get("rank") if card.get("center") != "m_stone" else None
+        if card.get("center") == "m_steel" or (rank == "King" and "j_baron" in jokers) or (rank == "Queen" and "j_shoot_the_moon" in jokers):
+            repeats += jokers.count("j_mime")
         for _ in range(repeats):
             if card.get("center") == "m_steel":
                 mult *= 1.5
@@ -542,6 +557,7 @@ return function(repo, scenarios, difficulties)
 				rank = c.rank, suit = c.suit, center = center,
 				center_set = c.center and "Enhanced" or "Default",
 				edition = c.edition, seal = c.seal, debuff = c.debuff,
+				x_mult = c.xmult ~= nil and c.xmult / 100 or nil,
 			})
 			if c.bonus_chips ~= nil then hand[i].ability.bonus = c.bonus_chips end
 		end

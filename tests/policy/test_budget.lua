@@ -307,4 +307,35 @@ return function(ctx)
 		ctx.truthy(worst > 0, "measured")
 		ctx.truthy(worst <= GUARD, "worst:" .. worst)
 	end)
+
+	test("retriggering_copy_rows_keep_play_draw_and_shop_work_bounded", function()
+		local keys = { "j_hanging_chad", "j_mp_hanging_chad", "j_sock_and_buskin", "j_hack", "j_mime" }
+		for _, key in ipairs(keys) do
+			for _, size in ipairs({ 8, 12 }) do
+				for _, owned in ipairs({ 5, 8, 16, 64 }) do
+					local export = frame(paired(size), owned, false)
+					for i=1,owned do export.self.jokers[i].center = i==owned and key or "j_blueprint" end
+					local label = "retrigger_play_"..key.."_"..size.."_"..owned
+					local a = decide(label, "expert", export)
+					ctx.vector(label, a.id)
+				end
+			end
+			for _, owned in ipairs({ 7, 16, 64 }) do
+			local shop=Support.voucher_frame()
+			shop.self.money,shop.match.joker_slots=200,owned+1
+			shop.self.jokers={}
+			for i=1,owned do shop.self.jokers[i]={kind="joker",center=i==owned and key or "j_blueprint",face_down=false} end
+			shop.shop.items,shop.shop.boosters,shop.shop.vouchers={},{},{}
+			shop.certificates.items={}
+			for i=1,16 do
+				shop.shop.items[i]={kind="joker",center=i%2==0 and "j_blueprint" or "j_brainstorm",cost=5,sell_cost=2,face_down=false}
+				shop.certificates.items[i]={type="BUY_ITEM",certified=true,item_ref="shop:"..i,capacity_ok=true}
+			end
+			shop.certificates.items[17]={type="LEAVE_SHOP",certified=true}
+			local label="retrigger_shop_"..key.."_"..owned
+			local a=decide(label, "expert", shop)
+			ctx.vector(label, a.id)
+			end
+		end
+	end)
 end

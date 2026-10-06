@@ -10,15 +10,27 @@ import re
 import benchmark_policy as bp
 
 
+def native_centers(lua, dump):
+    game = (dump / 'game.lua').read_text(encoding='utf-8')
+    centers = {m[1]: lua.eval(m[2].rstrip(',')) for m in
+               re.finditer(r'^\s*(j_\w+)\s*=\s*({.*}),?\s*$', game, re.M)}
+    # Ranked replaces Chad with a distinct, Blueprint-compatible native center.
+    path = bp.REPO / 'work/local-ownership/native-mods-source/Multiplayer/objects/jokers/standard/hanging_chad.lua'
+    lua.execute('SMODS={Joker=function(c) CAPTURED=c; return c end}')
+    lua.execute(path.read_text(encoding='utf-8'))
+    center = lua.globals().CAPTURED
+    center['name'], center['set'] = 'Hanging Chad', 'Joker'
+    centers['j_mp_hanging_chad'] = center
+    return centers
+
+
 def native_copy(lua, required):
     dump = bp.REPO / 'staging/roles/ai/appdata/Roaming/Balatro/Mods/lovely/dump'
     utils = bp.REPO / 'work/local-ownership/native-mods-source/smods/src/utils.lua'
     if not (dump / 'card.lua').exists() or not utils.exists():
         assert not required, 'Native copy fixtures required for release'
         return None
-    game = (dump / 'game.lua').read_text(encoding='utf-8')
-    centers = {m[1]: lua.eval(m[2].rstrip(',')) for m in
-               re.finditer(r'^\s*(j_\w+)\s*=\s*({.*}),?\s*$', game, re.M)}
+    centers = native_centers(lua, dump)
     policy = (bp.REPO / 'AISparring/ai/baseline_policy.lua').read_text()
     section = policy[policy.index('local JOKER_EFFECTS'):policy.index('-- Owned scaling')]
     incompatible = {'j_smeared', 'j_four_fingers', 'j_shortcut', 'j_splash', 'j_pareidolia'}
