@@ -122,7 +122,7 @@ Owners: `tools/staging.py`, `tools/isolation_certificate.py`,
 ## 2. Verified static facts (read-only citations)
 
 - Install `C:\Program Files (x86)\Steam\steamapps\common\Balatro`, Mods
-  `C:\Users\ginom\AppData\Roaming\Balatro\Mods`, versions Steamodded `26.829.0`,
+  `%USERPROFILE%\AppData\Roaming\Balatro\Mods`, versions Steamodded `26.829.0`,
   Lovely `0.10.0`, JokerDisplay `2.0.4`, Handy `2.0.6` (`docs/MILESTONE_0.md:7-12`).
 - LÖVE 11.5 on Windows resolves the save directory via `_wgetenv(L"APPDATA")` in
   `Filesystem.cpp`, so the per-role `APPDATA` redirect is the intended control.

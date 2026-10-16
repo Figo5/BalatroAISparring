@@ -5,7 +5,7 @@ Date: 2026-09-27. Historical research performed by the orchestrator while locati
 ## Verified environment
 
 - Game: `C:\Program Files (x86)\Steam\steamapps\common\Balatro`.
-- Mods: `C:\Users\ginom\AppData\Roaming\Balatro\Mods`.
+- Mods: `%USERPROFILE%\AppData\Roaming\Balatro\Mods`.
 - Balatro was running (PID 7676) during research. No live files were changed and no game interaction was performed.
 - Installed Multiplayer manifest: 0.5.5. Its 449 upstream-tracked files match tag v0.5.5 after CRLF normalization. Binary/content byte identity is a separate verification; initial raw hashes differed because Git checked out Windows line endings.
 - Exact upstream tag commit: `3dff16a99edde91894e0ccf94cc9a9171443070b`.
