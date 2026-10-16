@@ -1,4 +1,4 @@
-# Astra independent verification — Milestone 2
+# review independent verification — Milestone 2
 
 Date: 2026-09-27. Baseline: accepted M1 commit `8bcccabbce0693cf5a0e168babacfa511c2443e0`. This document records independent inspection, execution and the final acceptance disposition below.
 
@@ -10,7 +10,7 @@ I inspected pinned Multiplayer UI and game callback source (kept outside tracked
 
 The UI-view/certificate producer is trusted and unwired. Role and epoch fields are trusted claims, not authenticated process identity. A schema cannot prove the truth of an allowed value supplied by a malicious trusted producer. The future producer, launcher authentication, positional target mapping and authoritative executor require their own review and staged runtime evidence. No prototype gate is claimed passed.
 
-## Findings independently routed to DeepSeek
+## Findings independently routed to development
 
 - A wildcard legality flag could authorize unvalidated targets/items. Required bounded exact per-action certificates, plus independent phase/resource/reference checks.
 - Public mutable schema constants could affect internals. Required private constants and exported copies where relevant.
@@ -25,7 +25,7 @@ The UI-view/certificate producer is trusted and unwired. Role and epoch fields a
 
 ## Executed independent attacks
 
-`tests/astra_attacks.py` is Astra-authored, independent of DeepSeek's test fixtures. Twelve probes run under both Lua 5.1 and LuaJIT:
+`tests/astra_attacks.py` is review-authored, independent of development's test fixtures. Twelve probes run under both Lua 5.1 and LuaJIT:
 
 1. Negative purchase with denied capacity evidence.
 2. Purchase with missing owned-capacity data.
@@ -42,21 +42,21 @@ The UI-view/certificate producer is trusted and unwired. Role and epoch fields a
 
 The initial run reproduced the missing-visibility and negative-epoch defects on both runtimes while fixes were underway. The subsequent independent run passed all 24 executions. The script is retained as regression evidence.
 
-## Historical pre-Claude suite and performance runs
+## Historical pre-source review suite and performance runs
 
-The pure suite passed 93 unique cases / 182 executions, including 89 Lua cases per runtime and 4 static checks. It reported 1,040 property iterations, but Claude subsequently identified 400 ineffective iterations caused by incorrect API arguments. That defect is fixed and the revised evidence below supersedes the original coverage claim. Canonical/hash/action vectors matched across runtimes; Python independently checks FNV and selected canonical vectors. The state-reader suite passed 53 unique cases / 106 executions. The unchanged M1 regression suite passed 66 unique cases / 117 executions.
+The pure suite passed 93 unique cases / 182 executions, including 89 Lua cases per runtime and 4 static checks. It reported 1,040 property iterations, but source review subsequently identified 400 ineffective iterations caused by incorrect API arguments. That defect is fixed and the revised evidence below supersedes the original coverage claim. Canonical/hash/action vectors matched across runtimes; Python independently checks FNV and selected canonical vectors. The state-reader suite passed 53 unique cases / 106 executions. The unchanged M1 regression suite passed 66 unique cases / 117 executions.
 
-The broker/worker suite was independently rerun after the self-review fixes: 94 unique cases / 168 executions passed (17 static, 48 Lua cases per runtime, 29 logical subprocess cases / 55 subprocess executions). The complete M2 pre-Claude total is 252 unique named cases / 480 executions, excluding property iterations from case totals. Including M1 regressions gives 318 unique cases / 597 executions. Final review disposition is recorded in MILESTONE_2.md after review. Subprocess attacks have a 10-second external deadline. Lua instruction hooks do not bound every C-library call, and the private helper alone is not an OS sandbox. Production watchdog and process isolation remain a launcher gate. The helper must never be loaded into the game interpreter.
+The broker/worker suite was independently rerun after the self-review fixes: 94 unique cases / 168 executions passed (17 static, 48 Lua cases per runtime, 29 logical subprocess cases / 55 subprocess executions). The complete M2 pre-source review total is 252 unique named cases / 480 executions, excluding property iterations from case totals. Including M1 regressions gives 318 unique cases / 597 executions. Final review disposition is recorded in MILESTONE_2.md after review. Subprocess attacks have a 10-second external deadline. Lua instruction hooks do not bound every C-library call, and the private helper alone is not an OS sandbox. Production watchdog and process isolation remain a launcher gate. The helper must never be loaded into the game interpreter.
 
 Independent benchmark: seven batches of 150 operations, two synthetic fixtures, retained allocation estimated with 200 handles. Lua 5.1 SHOP/PLAY observation medians: 1.827/1.527 ms; enumeration: 0.107/0.093 ms. LuaJIT: 0.313/0.240 ms and 0.033/0.033 ms. Canonical sizes: 1,253/1,001 bytes. Approximate retained SHOP allocation: 10.02 KiB / 7.47 KiB per observation. These are machine-specific, GC-sensitive fixture measurements, not live performance or search throughput.
 
 ## Independent post-review verification
 
-All eight Medium findings were implemented and independently checked; see CLAUDE_M2_RESOLUTION.md for the complete matrix, including Low/Info dispositions. Additional Astra probes cover hidden-card deck-map inference, contradictory PvP flags, failed-submit ABA, unseen ABA revisions, module-load VM mutation and Lua-truthy PvP flags. The expanded attack script passes 18 probes / 36 executions. The last two exposed real follow-up defects, both fixed by DeepSeek.
+All eight Medium findings were implemented and independently checked; see M2_RESOLUTION.md for the complete matrix, including Low/Info dispositions. Additional review probes cover hidden-card deck-map inference, contradictory PvP flags, failed-submit ABA, unseen ABA revisions, module-load VM mutation and Lua-truthy PvP flags. The expanded attack script passes 18 probes / 36 executions. The last two exposed real follow-up defects, both fixed by development.
 
 `tests/astra_mutation_checks.py` modifies generator source in memory only, deliberately bypassing affordability, Joker capacity and hands-remaining checks. The independent property oracle rejects all three mutants on both runtimes (3 unique checks / 6 executions). No production source file is altered by this harness.
 
-Revised suites pass: pure 96/188 unique/executions, reader 61/122, broker/worker 123/219, Astra attacks 18/36, mutation checks 3/6. M2 totals are 301 unique cases / 571 executions. Including unchanged M1 regressions: 367 unique / 688 executions. All 1,040 property iterations now exercise their intended frames. The worker's finite 16 MiB positive and 128 MiB negative controls substantiate the Lua VM memory cap on both runtimes.
+Revised suites pass: pure 96/188 unique/executions, reader 61/122, broker/worker 123/219, review attacks 18/36, mutation checks 3/6. M2 totals are 301 unique cases / 571 executions. Including unchanged M1 regressions: 367 unique / 688 executions. All 1,040 property iterations now exercise their intended frames. The worker's finite 16 MiB positive and 128 MiB negative controls substantiate the Lua VM memory cap on both runtimes.
 
 Revised benchmark: SHOP/PLAY canonical sizes 1,286/1,001 bytes; Lua 5.1 observe 1.907/1.620 ms, enumerate 0.107/0.120 ms; LuaJIT observe 0.273/0.213 ms, enumerate 0.033/0.033 ms. Approximate retained SHOP allocation: 7.51/5.21 KiB. These supersede earlier fixture timings; the same measurement caveats apply.
 
@@ -64,8 +64,8 @@ Revised benchmark: SHOP/PLAY canonical sizes 1,286/1,001 bytes; Lua 5.1 observe 
 
 All implementation and testing occurred in this isolated repository or workspace scratch directories. The only game-source access was read-only inspection. No live Mods/game/save files were written, no game/server was launched, and Balatro was not stopped. Real-game load, capture, UI certification, action execution, server parity and staged isolation remain pending.
 
-Formatter follow-up: DeepSeek closed the Low LuaJIT format coercion/pointer route; Astra independently reran the boundary suite (123/219) and strengthened tripwire probes (18/36), all passing. A focused Claude confirmation follows the accepted full re-review.
+Formatter follow-up: development closed the Low LuaJIT format coercion/pointer route; review independently reran the boundary suite (123/219) and strengthened tripwire probes (18/36), all passing. A focused source review confirmation follows the accepted full re-review.
 
-## Astra acceptance
+## review acceptance
 
-Accepted for Milestone 2 infrastructure after Claude's full re-review and targeted formatter confirmation both returned ACCEPT. All Medium findings and the remaining Low/Info follow-ups were resolved or explicitly scoped; no Critical/High/fairness-Medium issue remains. Final verified totals: 301 M2 unique cases / 571 executions, 1,040 genuine property iterations; including M1, 367 / 688. No source changes followed the final confirmation. The reviewed state is committed and the final handoff records the commit and clean-tree verification. No Milestone 3 or live integration is authorized by this acceptance.
+Accepted for Milestone 2 infrastructure after source review's full re-review and targeted formatter confirmation both returned ACCEPT. All Medium findings and the remaining Low/Info follow-ups were resolved or explicitly scoped; no Critical/High/fairness-Medium issue remains. Final verified totals: 301 M2 unique cases / 571 executions, 1,040 genuine property iterations; including M1, 367 / 688. No source changes followed the final confirmation. The reviewed state is committed and the final handoff records the commit and clean-tree verification. No Milestone 3 or live integration is authorized by this acceptance.

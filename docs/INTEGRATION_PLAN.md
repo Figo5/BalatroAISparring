@@ -1,8 +1,8 @@
 # Milestone 0 integration decision
 
-Orchestrator: Codex / GPT-6 Astra / Medium. Date: 2026-09-27.
+Orchestrator: development / GPT-6 review / Medium. Date: 2026-09-27.
 
-Status: Milestone 0 research direction accepted by the orchestrator after DeepSeek source inspection, independent checks, Claude review, corrections and Claude re-review. No critical/high documentation finding remains open. This plan supersedes the historical MILESTONE_0 notes. It authorizes no live installation or game launch. It does not claim a working simulator, mod or V1.
+Status: Milestone 0 research direction accepted by the orchestrator after development source inspection, independent checks, source review, corrections and source review re-review. No critical/high documentation finding remains open. This plan supersedes the historical MILESTONE_0 notes. It authorizes no live installation or game launch. It does not claim a working simulator, mod or V1.
 
 ## Selected research direction
 
@@ -62,7 +62,7 @@ The launcher must validate both local endpoint configurations before loading Mul
 4. **Server parity:** build a complete send/handler coverage matrix, pin commit dates and differences, test seed paths, readiness, leader/trailer exhaustion, ties, terminal events, round/timer blockers, and rate limits including two clients on one IP. Deployment parity is unproven until evidence establishes it.
 5. **Observation/action proof:** field-by-field visible/hidden fixtures, no RNG consumption in extraction, restricted policy environment, stale/illegal action rejection, protocol allowlist and complete bot action trace. Preserve human action ownership.
 
-Only research and non-game contract work may proceed while Balatro is running. The remaining build milestones follow these gates and the requested DeepSeek -> Astra verification -> Claude review -> DeepSeek fixes -> Claude re-review cycle. A successful research review does not waive runtime proof or the 30 V1 acceptance criteria.
+Only research and non-game contract work may proceed while Balatro is running. The remaining build milestones follow these gates and the requested development -> review verification -> source review -> development fixes -> source review re-review cycle. A successful research review does not waive runtime proof or the 30 V1 acceptance criteria.
 
 ## Review disposition
 
@@ -73,4 +73,4 @@ Only research and non-game contract work may proceed while Balatro is running. T
 - H5: correct custom-seed condition; retain required fixed-seed reproducibility through trusted pre-match configuration rather than forcing every match random.
 - M1-M6: client-local timers, expanded parity fixtures, version uncertainty, documented bind patch/rate tests, unlock parity, scoped offline claims.
 
-Supporting source analysis: DEEPSEEK_M0_RESEARCH.md. Original reviewer findings: CLAUDE_M0_REVIEW.md. Re-review and scoped acceptance: CLAUDE_M0_REREVIEW.md. Detailed prototype evidence checklist: PROTOTYPE_GATES.md, including the re-review amendments. Every prototype remains unrun.
+Supporting source analysis: the m0 research notes. Original reviewer findings: CLAUDE_M0_REVIEW.md. Re-review and scoped acceptance: the m0 review. Detailed prototype evidence checklist: PROTOTYPE_GATES.md, including the re-review amendments. Every prototype remains unrun.

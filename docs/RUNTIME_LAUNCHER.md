@@ -8,19 +8,19 @@ tests live in `tests/test_isolation_certificate.py` and
 `tests/test_staging.py` and `docs/RUNTIME_ISOLATION.md`.
 
 Nothing here authorises a launch. The default `launch`/`bootstrap --execute`
-paths stay blocked until the review gates pass and Astra runs them; this slice
+paths stay blocked until the review gates pass and review runs them; this slice
 only makes the previously approved gates enforceable.
 
 ## 1. One session grammar, one nonce owner (NM7)
 
 - `isolation_certificate.SESSION_ID_RE = ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` is the
-  only session-id grammar. `launch_practice.SESSION_ID_PATTERN` is that same
-  object, and `write_session` refuses anything else. There is no `:` in the
-  grammar, so `sessions/{id}.json` can never become an NTFS alternate data stream.
+ only session-id grammar. `launch_practice.SESSION_ID_PATTERN` is that same
+ object, and `write_session` refuses anything else. There is no `:` in the
+ grammar, so `sessions/{id}.json` can never become an NTFS alternate data stream.
 - The session **nonce is minted once**, by `isolation_certificate.prepare_session`,
-  and stored in the exclusive open record. `execute_launch`/`execute_bootstrap`
-  require that open record and use its nonce; `_spawn_verified` no longer mints a
-  nonce. A descriptor's `session_id` must equal the prepared session id.
+ and stored in the exclusive open record. `execute_launch`/`execute_bootstrap`
+ require that open record and use its nonce; `_spawn_verified` no longer mints a
+ nonce. A descriptor's `session_id` must equal the prepared session id.
 
 ## 2. Host-only CLI
 
@@ -32,19 +32,19 @@ attestation). The tool-owned measurement path is separate and cannot enable an
 AI/match capability:
 
 - `bootstrap --execute [--timeout]` runs the **P1A phase lifecycle** (prepare →
-  launch → supervise → record the measured receipt). The bounded supervisor
-  timeout is wired through to the run (L9).
+ launch → supervise → record the measured receipt). The bounded supervisor
+ timeout is wired through to the run (L9).
 - `measure --phase P1B|FULL_P1|CRASH|P2_INITIAL|P2_CLOSE|P2_SILENT [--timeout]` runs
-  a role measurement phase, gated on the previous phase receipt (P1A→P1B→FULL_P1,
-  then CRASH and each P2 phase branch from FULL_P1). CRASH sets the env-gated staged
-  crash stimulus and reads the fresh nonce-bound crash probes. `P2_INITIAL` measures
-  the dead match port (both-family listener absence + a real refused loopback
-  connect) before spawning; `P2_CLOSE`/`P2_SILENT` start the tool-owned exclusive
-  `127.0.0.1` one-connection listener. Every run has a hard deadline and is ended by
-  the tool with a distinct recorded end code once the required evidence settles. No
-  `observation` argument exists any more.
+ a role measurement phase, gated on the previous phase receipt (P1A→P1B→FULL_P1,
+ then CRASH and each P2 phase branch from FULL_P1). CRASH sets the env-gated staged
+ crash stimulus and reads the fresh nonce-bound crash probes. `P2_INITIAL` measures
+ the dead match port (both-family listener absence + a real refused loopback
+ connect) before spawning; `P2_CLOSE`/`P2_SILENT` start the tool-owned exclusive
+ `127.0.0.1` one-connection listener. Every run has a hard deadline and is ended by
+ the tool with a distinct recorded end code once the required evidence settles. No
+ `observation` argument exists any more.
 - `acknowledge-lockout --operator --reason` appends the only record that clears
-  the global lockout.
+ the global lockout.
 
 ## 3. Phase receipts and the certificate (NC1)
 
@@ -58,25 +58,25 @@ exited launch session. The recorder:
 
 - loads the exclusive open record and requires the session id/nonce to match;
 - requires a real `live_closed` callback (R2): a missing callable, `False` or an
-  exception fails closed and raises the global lockout;
+ exception fails closed and raises the global lockout;
 - takes its own `after` `snapshot_live`, requires zero live byte diff against the
-  prepared `before` snapshot (per root, recomputed from the file maps) and stores
-  the **raw** before/after file manifests (L7);
+ prepared `before` snapshot (per root, recomputed from the file maps) and stores
+ the **raw** before/after file manifests (L7);
 - re-parses the actual staged probe files through the strong
-  `collect_role_probes` / `check_lovely_evidence` checkers (M2): nonce, patch id,
-  Steam marker + post-block probe, exact save/`Mods`/`lovely_mod_dir`, MP
-  loopback/port, and a **fresh** Lovely log plus the required `main.lua` dump (and,
-  for CLOSE/SILENT, the patched `socket.lua` dump carrying every observer marker)
-  which are copied into the receipt evidence;
+ `collect_role_probes` / `check_lovely_evidence` checkers (M2): nonce, patch id,
+ Steam marker + post-block probe, exact save/`Mods`/`lovely_mod_dir`, MP
+ loopback/port, and a **fresh** Lovely log plus the required `main.lua` dump (and,
+ for CLOSE/SILENT, the patched `socket.lua` dump carrying every observer marker)
+ which are copied into the receipt evidence;
 - derives CRASH and each P2 phase from tool-owned measurements only (H3): CRASH from
-  the fresh nonce-bound crash probes written by the wrapper around the active
-  original error handler plus the tool-owned end code, `P2_INITIAL` from the
-  persisted dead-port setup plus the staged MP artifact, and `P2_CLOSE`/`P2_SILENT`
-  from the observer's per-cycle fields plus the tool-owned listener log;
+ the fresh nonce-bound crash probes written by the wrapper around the active
+ original error handler plus the tool-owned end code, `P2_INITIAL` from the
+ persisted dead-port setup plus the staged MP artifact, and `P2_CLOSE`/`P2_SILENT`
+ from the observer's per-cycle fields plus the tool-owned listener log;
 - copies the probes, the dumps, the listener log and a hashed `measurement.json`
-  immutably under `evidence/receipts/` and writes the receipt content-addressed;
+ immutably under `evidence/receipts/` and writes the receipt content-addressed;
 - asserts P1A binds the bootstrap install digest to **both** role digests, and
-  P1B/FULL_P1 bind the role Mods digests and parity digest.
+ P1B/FULL_P1 bind the role Mods digests and parity digest.
 
 `build_certificate` re-parses every receipt copy, requires **distinct nonces per
 phase**, requires the certificate tool map to equal `bound_tool_specs()` exactly
@@ -101,39 +101,39 @@ layers/tools/receipts/evidence and refuses on any drift.
 ## 4. Per-session lifecycle (NH2)
 
 - `prepare_session` requires a passing `closed_check`, the phase prerequisite
-  receipt, and no other open record. `backup_verify` must return the **real**
-  `check_backup_evidence` verdict (R1): its `manifest_sha256`, content-derived
-  `backup_id`, verified `backup_label` and per-root `files_digest` are bound into
-  the record, and the measured `before` snapshot must match those digests for the
-  identical live-root keys. A caller-supplied `backup_id` must equal the evidence
-  id or its authenticated manifest label. The current host passes the verifier's
-  content id (`check_backup_evidence(...)['backup_id']`), re-runs the verifier
-  freshly via `backup_verify`, and refuses the prepared session if the returned
-  evidence id disagrees, so a caller can never substitute or mismatch real
-  evidence. The nonce is always
-  minted internally (no caller override, L5), and a previously used session id is
-  refused before any write (`session_id_reused`, L6). It rotates stale
-  probes/attestations, takes the `before` full snapshot and writes one exclusive
-  open record holding the single nonce, certificate id, backup evidence and the
-  before file maps.
+ receipt, and no other open record. `backup_verify` must return the **real**
+ `check_backup_evidence` verdict (R1): its `manifest_sha256`, content-derived
+ `backup_id`, verified `backup_label` and per-root `files_digest` are bound into
+ the record, and the measured `before` snapshot must match those digests for the
+ identical live-root keys. A caller-supplied `backup_id` must equal the evidence
+ id or its authenticated manifest label. The current host passes the verifier's
+ content id (`check_backup_evidence(...)['backup_id']`), re-runs the verifier
+ freshly via `backup_verify`, and refuses the prepared session if the returned
+ evidence id disagrees, so a caller can never substitute or mismatch real
+ evidence. The nonce is always
+ minted internally (no caller override, L5), and a previously used session id is
+ refused before any write (`session_id_reused`, L6). It rotates stale
+ probes/attestations, takes the `before` full snapshot and writes one exclusive
+ open record holding the single nonce, certificate id, backup evidence and the
+ before file maps.
 - `execute_launch`/`execute_bootstrap` reload the **persisted** open record and
-  require it to be `open`, match the caller's session id/nonce/phase, carry no
-  bound PIDs, and be phase `MATCH` exactly when a certificate is required (a
-  measurement phase otherwise); the caller's mapping is never trusted (M1).
-  `bind_open_session` records the exact owned PIDs and spawn time and is
-  **mandatory**: a bind failure aborts the spawned session and raises the lockout.
+ require it to be `open`, match the caller's session id/nonce/phase, carry no
+ bound PIDs, and be phase `MATCH` exactly when a certificate is required (a
+ measurement phase otherwise); the caller's mapping is never trusted (M1).
+ `bind_open_session` records the exact owned PIDs and spawn time and is
+ **mandatory**: a bind failure aborts the spawned session and raises the lockout.
 - Any post-spawn exception or `KeyboardInterrupt` (supervisor, receipt step or
-  bind failure) terminates only the owned handles, records
-  `record_session_failure(reason=\"exception:<type>\")` and re-raises, so no record
-  is left open (R3). Supervision also polls an unexpected-Balatro monitor and
-  aborts only the owned staged processes if the user's game (or a foreign copy)
-  appears (R2).
+ bind failure) terminates only the owned handles, records
+ `record_session_failure(reason=\"exception:<type>\")` and re-raises, so no record
+ is left open (R3). Supervision also polls an unexpected-Balatro monitor and
+ aborts only the owned staged processes if the user's game (or a foreign copy)
+ appears (R2).
 - `record_session_verdict` **computes the after snapshot itself** after the owned
-  processes exit, re-derives the before digest from the stored file maps, checks
-  the root set, the timestamp order and the backup id, refuses a reused session
-  id, then closes the record. Any live byte diff writes the global lockout,
-  appends a revocation and records `verdict: revoked` (never a false pass).
-  `record_session_failure` closes with `verdict: failed`.
+ processes exit, re-derives the before digest from the stored file maps, checks
+ the root set, the timestamp order and the backup id, refuses a reused session
+ id, then closes the record. Any live byte diff writes the global lockout,
+ appends a revocation and records `verdict: revoked` (never a false pass).
+ `record_session_failure` closes with `verdict: failed`.
 
 ## 5. Global lockout (NM1)
 
@@ -220,18 +220,18 @@ to every spawn regardless of phase.
 Measured closure is mandatory:
 
 - `record_session_verdict(..., session=<retained LaunchSession>, live_closed=<real check>)`
-  recomputes the after snapshot itself, requires every owned handle stopped and
-  the user's game closed, and refuses with `session_closure_unproven`
-  (`retained_session_required`, `owned_processes_running`, `live_game_running`,
-  `live_closed_check_unavailable`) otherwise. It can never certify a still-running
-  role or a concurrent user Balatro.
+ recomputes the after snapshot itself, requires every owned handle stopped and
+ the user's game closed, and refuses with `session_closure_unproven`
+ (`retained_session_required`, `owned_processes_running`, `live_game_running`,
+ `live_closed_check_unavailable`) otherwise. It can never certify a still-running
+ role or a concurrent user Balatro.
 - `record_session_no_spawn(..., session_id, live)` is the only way to close a
-  prepared-but-never-spawned session: it requires no bound PIDs and measures zero
-  live diff itself (caller booleans do not suffice); a diff revokes and locks out.
+ prepared-but-never-spawned session: it requires no bound PIDs and measures zero
+ live diff itself (caller booleans do not suffice); a diff revokes and locks out.
 - `record_session_failure` and any receipt-recording failure now **raise the
-  persistent global lockout** as well as closing the record, so an unknown/missing
-  post-session diff can never lead to a silent rebaseline; only an explicit
-  `acknowledge_lockout` clears it.
+ persistent global lockout** as well as closing the record, so an unknown/missing
+ post-session diff can never lead to a silent rebaseline; only an explicit
+ `acknowledge_lockout` clears it.
 
 ## 13. Bound policy/runtime code
 
@@ -248,35 +248,35 @@ Normal practice uses the concrete wrappers so the host cannot pass `lambda: True
 or fabricated exits:
 
 - `launch_practice.prepare_match_session(staging_root, session_id=, port=,
-  live_install_root=, live_appdata_root=, steam_root=, backup_root=)` — internally
-  runs the real certificate, live-closed and fresh-backup checks.
+ live_install_root=, live_appdata_root=, steam_root=, backup_root=)` — internally
+ runs the real certificate, live-closed and fresh-backup checks.
 - `launch_practice.finalize_match_session(staging_root, session=,
-  live_install_root=, live_appdata_root=, steam_root=, backup_id=)` — uses the
-  retained `LaunchSession` handles and the real closed-game check.
+ live_install_root=, live_appdata_root=, steam_root=, backup_id=)` — uses the
+ retained `LaunchSession` handles and the real closed-game check.
 - `launch_practice.abandon_prepared_session(staging_root, session_id=, ...)` — the
-  measured no-spawn closure.
+ measured no-spawn closure.
 
 ## 15. API deltas for the host
 
 - `execute_launch(..., open_session=<open record>, require_certificate=True)` and
-  `execute_bootstrap(..., open_session=<open record>)`: no `nonce_factory`,
-  `terminate`, or implicit nonce.
+ `execute_bootstrap(..., open_session=<open record>)`: no `nonce_factory`,
+ `terminate`, or implicit nonce.
 - `_spawn_verified(..., nonce=..., on_terminate=..., resume=..., expected_session_id=...)`.
 - `build_launch_plan(..., require_certificate=True)`: measurement role plans pass
-  `False` to skip the certificate-backed `isolation_proof`/`steam_guard` gates.
+ `False` to skip the certificate-backed `isolation_proof`/`steam_guard` gates.
 - Plan `command` now includes `--mod-dir`.
 - `isolation_certificate.prepare_session(phase=MATCH|P1A|P1B|FULL_P1|CRASH|P2_INITIAL|P2_CLOSE|P2_SILENT,
-  backup_verify=..., measurement_setup=..., backup_id=...)`, `bind_open_session`,
-  `record_phase_receipt`, `record_session_verdict(session=, live_closed=)`,
-  `record_session_no_spawn`, `record_session_failure`,
-  `build_certificate(receipt_ids=...)` (no measured dicts), `acknowledge_lockout`,
-  `MATCH`/`SESSION_PHASES`.
+ backup_verify=..., measurement_setup=..., backup_id=...)`, `bind_open_session`,
+ `record_phase_receipt`, `record_session_verdict(session=, live_closed=)`,
+ `record_session_no_spawn`, `record_session_failure`,
+ `build_certificate(receipt_ids=...)` (no measured dicts), `acknowledge_lockout`,
+ `MATCH`/`SESSION_PHASES`.
 
 ## 16. Running
 
 ```
 python tools/launch_practice.py plan --staging-root staging --backup-root backups \
-  --install "<install>" --appdata "<live AppData>\\Balatro" --steam-root "<Steam>"
+ --install "<install>" --appdata "<live AppData>\\Balatro" --steam-root "<Steam>"
 python tools/launch_practice.py bootstrap --staging-root staging --backup-root backups
 python tools/launch_practice.py measure --phase P1B --staging-root staging --backup-root backups
 python tools/launch_practice.py backup --install "<install>" --steam-root "<Steam>" --execute

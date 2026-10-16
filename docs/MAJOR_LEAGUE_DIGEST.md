@@ -1,4 +1,4 @@
-# Major League configuration digest (Astra)
+# Major League configuration digest (review)
 
 Host derives expected rules from pinned staged Multiplayer rulesets/majorleague.lua. The staged coordinator calls the real registry force_lobby_options and reads actual MP.LOBBY.config. No separate hardcoded rule values.
 

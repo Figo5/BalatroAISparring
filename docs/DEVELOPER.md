@@ -15,21 +15,21 @@ The scaffold is **built to load** as a Steamodded mod; loading in a real game is
 
 ```
 AISparring/
-  AISparring.json     Steamodded JSON manifest (id, prefix, main_file, priority, dependency pin)
-  config.lua          returns { ai_enabled = false }
-  core.lua            entrypoint: module loading, fail-closed bootstrap, status publication
-  src/status.lua      pure status builders (fresh tables; no shared mutable state)
-  src/logger.lua      structured, allowlisted, length-bounded, escaping logger
-  src/dependency.lua  pure dependency verdict + safe version tokens
-  src/host.lua        read-only host adapter (SMODS.Mods / MP snapshots)
-  src/ai_mode.lua     AI flag semantics (default off; requested stays blocked)
+ AISparring.json Steamodded JSON manifest (id, prefix, main_file, priority, dependency pin)
+ config.lua returns { ai_enabled = false }
+ core.lua entrypoint: module loading, fail-closed bootstrap, status publication
+ src/status.lua pure status builders (fresh tables; no shared mutable state)
+ src/logger.lua structured, allowlisted, length-bounded, escaping logger
+ src/dependency.lua pure dependency verdict + safe version tokens
+ src/host.lua read-only host adapter (SMODS.Mods / MP snapshots)
+ src/ai_mode.lua AI flag semantics (default off; requested stays blocked)
 tests/
-  run.py              Python harness (static checks + Lua runtimes)
-  requirements.txt    pinned lupa
-  lua/framework.lua   tiny test framework
-  lua/fixture.lua     synthetic SMODS/MP/G host with guard recorders
-  lua/runner.lua      per-file isolated runner
-  lua/test_*.lua      regression specs
+ run.py Python harness (static checks + Lua runtimes)
+ requirements.txt pinned lupa
+ lua/framework.lua tiny test framework
+ lua/fixture.lua synthetic SMODS/MP/G host with guard recorders
+ lua/runner.lua per-file isolated runner
+ lua/test_*.lua regression specs
 ```
 
 ## Alignment with the authoritative plan
@@ -104,16 +104,16 @@ Representative ready snapshot:
 state = "scaffold_ready"
 code = "ok"
 dependency = { id = "Multiplayer", supported_version = "0.5.5", inspected_version = "0.5.5",
-               compatible = true, identity_verified = true,
-               compatibility = "structural-only", server_parity = "unproven" }
+ compatible = true, identity_verified = true,
+ compatibility = "structural-only", server_parity = "unproven" }
 ai = { requested = false, enabled = false, implemented = false, status = "disabled_default_off" }
 observation_extractor = false
 policy = false
 capabilities = { gameplay_hooks = false, content_registration = false,
-                 network_transport = false, opponent = false, launcher = false }
+ network_transport = false, opponent = false, launcher = false }
 gates = { "P0", "P1", "P2", "P3", "P4", "P5" }
 manifest = { dependency_pin = "Multiplayer (==0.5.5)", priority = 10000001,
-             skips_load_when_dependency_unmet = true }
+ skips_load_when_dependency_unmet = true }
 ```
 
 Closed snapshots use `state = "fail_closed"` with a `code` such as `dependency_missing`, `dependency_disabled`, `dependency_not_loadable`, `dependency_state_unknown`, `dependency_identity_mismatch`, `dependency_version_mismatch`, `dependency_structure_incomplete`, `host_inspection_failed`, `module_load_failed` or `bootstrap_failed`. `identity_verified` is `true` only on success.

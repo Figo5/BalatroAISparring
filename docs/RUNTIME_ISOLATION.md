@@ -19,201 +19,201 @@ Owners: `tools/staging.py`, `tools/isolation_certificate.py`,
 ## 1. What changed in this repair pass
 
 - **Lovely is pinned, not inherited.** `role_environment` builds the child
-  environment from an allowlist (`ALLOWED_ENV_KEYS`) and sets `LOVELY_MOD_DIR`,
-  `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `TEMP`/`TMP` inside the role root. No
-  inherited `Steam*`, `SDL*`, `LOVELY_*` (other than our pin) or `Python*`
-  variable, and no inherited `AISP_PROBE_NONCE`, reaches the child. The launcher
-  sets a fresh nonce immediately before spawn.
+ environment from an allowlist (`ALLOWED_ENV_KEYS`) and sets `LOVELY_MOD_DIR`,
+ `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `TEMP`/`TMP` inside the role root. No
+ inherited `Steam*`, `SDL*`, `LOVELY_*` (other than our pin) or `Python*`
+ variable, and no inherited `AISP_PROBE_NONCE`, reaches the child. The launcher
+ sets a fresh nonce immediately before spawn.
 - **Proofs are measured, not self-attested.** `measure_isolation_state` /
-  `record_isolation_proof` are the only code path that writes
-  `isolation_proof.json`, and caller `extra` is isolated under a `metadata` key so
-  it can never overwrite a measured gate field. A hand-written
-  `isolation_proof.v1` boolean file is rejected by schema and digest checks.
+ `record_isolation_proof` are the only code path that writes
+ `isolation_proof.json`, and caller `extra` is isolated under a `metadata` key so
+ it can never overwrite a measured gate field. A hand-written
+ `isolation_proof.v1` boolean file is rejected by schema and digest checks.
 - **The reusable certificate is two-layer and immutable.** `tools/isolation_certificate.py`
-  binds the native layer N (staged exe/Lovely install, guard patches, absent native
-  Steam DLLs, environment/`AISP_*` names, staging/role/live roots) and the Mods
-  layer M (per-role Mods tree, MP guard, network-suppression hashes, loopback
-  endpoint, pinned server-bind artefact, and a role-parity digest that masks the
-  role-specific guard-patch paths so both staged roles must match each other). It
-  also binds every isolation-critical
-  tool (`staging`, `launch_practice`, `prepare_server`, `practice_service`,
-  `practice_host`, the certificate checker). P1a must bind the bootstrap install
-  digest equal to **both** role digests. Probe files and raw before/after live
-  manifests are copied content-addressed under `staging/evidence/certificate/<id>/`
-  and are never overwritten or rebased; a change to M needs a new P1b/full P1, a
-  change to N needs a new P1a too. Live *contents* are not compared at check time;
-  `check_isolation_proof` only checks the current staged immutable code, tools,
-  endpoint and live-root paths.
+ binds the native layer N (staged exe/Lovely install, guard patches, absent native
+ Steam DLLs, environment/`AISP_*` names, staging/role/live roots) and the Mods
+ layer M (per-role Mods tree, MP guard, network-suppression hashes, loopback
+ endpoint, pinned server-bind artefact, and a role-parity digest that masks the
+ role-specific guard-patch paths so both staged roles must match each other). It
+ also binds every isolation-critical
+ tool (`staging`, `launch_practice`, `prepare_server`, `practice_service`,
+ `practice_host`, the certificate checker). P1a must bind the bootstrap install
+ digest equal to **both** role digests. Probe files and raw before/after live
+ manifests are copied content-addressed under `staging/evidence/certificate/<id>/`
+ and are never overwritten or rebased; a change to M needs a new P1b/full P1, a
+ change to N needs a new P1a too. Live *contents* are not compared at check time;
+ `check_isolation_proof` only checks the current staged immutable code, tools,
+ endpoint and live-root paths.
 - **Per-session live diff is separate and revokes.** `snapshot_live` computes a
-  full byte manifest of the live install, AppData and every Steam `2379780`
-  profile app dir. `record_session_verdict` appends an immutable receipt; any live
-  byte difference writes a persistent lockout, revokes the certificate generation
-  and stores the before/after manifests. It never auto-restores live from backup.
-  `prepare_session` refuses unless the game is verified closed, the certificate is
-  valid and not locked out, then rotates stale nonce probes inside staging only,
-  declares no mutable paths (`config.lua` stays canonical and fully hashed) and
-  mints a fresh nonce.
+ full byte manifest of the live install, AppData and every Steam `2379780`
+ profile app dir. `record_session_verdict` appends an immutable receipt; any live
+ byte difference writes a persistent lockout, revokes the certificate generation
+ and stores the before/after manifests. It never auto-restores live from backup.
+ `prepare_session` refuses unless the game is verified closed, the certificate is
+ valid and not locked out, then rotates stale nonce probes inside staging only,
+ declares no mutable paths (`config.lua` stays canonical and fully hashed) and
+ mints a fresh nonce.
 - **Pre-run and post-run gates are separate.** `check_bootstrap_preflight` is the
-  PRE-run gate (manifest, patch binding, absent stale probes, no native Steam
-  DLLs, correct paths/Mods). `check_bootstrap_evidence(staging_root,
-  expected_nonce, spawn_time)` is the POST-run gate: it parses each probe's
-  `key=value` fields exactly and requires the per-run nonce, the patch id, a
-  probe mtime after the spawn and an exact save directory. Substring checks are
-  gone.
+ PRE-run gate (manifest, patch binding, absent stale probes, no native Steam
+ DLLs, correct paths/Mods). `check_bootstrap_evidence(staging_root,
+ expected_nonce, spawn_time)` is the POST-run gate: it parses each probe's
+ `key=value` fields exactly and requires the per-run nonce, the patch id, a
+ probe mtime after the spawn and an exact save directory. Substring checks are
+ gone.
 - **Steam absence is no longer vacuous (NH1).** The old guard probe ran *before*
-  `G:start_up()`, so `G.STEAM` was always nil there. The Steam-disable regex
-  payload now writes a nonce-bound `steam_patch_applied` marker
-  (`aisparring_probe_steam_marker.txt`) at the patched block, and a second probe
-  placed after the Steam block and before `love.mouse.setVisible(false)`
-  (`aisparring_probe_steam_post.txt`) records the real `G.STEAM` and
-  `package.loaded.luasteam`. `collect_role_probes` requires both to be `nil`
-  *and* the patch marker. The phase owner collects the actual Lovely `main.lua`
-  dump and log from the exact staged `Mods/lovely/{log,dump}` as certificate
-  evidence; `check_lovely_evidence` binds those exact paths and their freshness.
+ `G:start_up()`, so `G.STEAM` was always nil there. The Steam-disable regex
+ payload now writes a nonce-bound `steam_patch_applied` marker
+ (`aisparring_probe_steam_marker.txt`) at the patched block, and a second probe
+ placed after the Steam block and before `love.mouse.setVisible(false)`
+ (`aisparring_probe_steam_post.txt`) records the real `G.STEAM` and
+ `package.loaded.luasteam`. `collect_role_probes` requires both to be `nil`
+ *and* the patch marker. The phase owner collects the actual Lovely `main.lua`
+ dump and log from the exact staged `Mods/lovely/{log,dump}` as certificate
+ evidence; `check_lovely_evidence` binds those exact paths and their freshness.
 - **`check_steam_guard` is static-only (NM5).** It binds the staged patch hash,
-  the marker/probe presence and absent native DLLs, and never reads the mutable
-  `isolation_proof.json`. `check_steam_probes` is the fresh real-probe checker for
-  the appropriate caller; the immutable certificate remains the launch gate.
+ the marker/probe presence and absent native DLLs, and never reads the mutable
+ `isolation_proof.json`. `check_steam_probes` is the fresh real-probe checker for
+ the appropriate caller; the immutable certificate remains the launch gate.
 - **Network guards key on manifest id and content, not folder names (NM4).**
-  `scan_network_suppressions` refuses any staged `.lua` that still contains an
-  un-suppressed `https_updater_thread:start()`,
-  `tcp:connect("localhost", 53153)`, `M.request`/`M.asyncRequest` or the SMODS
-  HTTPS fallback loaders, and requires known network manifest ids (`Handy`,
-  `Steamodded`/`SMODS`) to carry their suppression markers. No mod is blocked
-  merely by its name.
+ `scan_network_suppressions` refuses any staged `.lua` that still contains an
+ un-suppressed `https_updater_thread:start()`,
+ `tcp:connect("localhost", 53153)`, `M.request`/`M.asyncRequest` or the SMODS
+ HTTPS fallback loaders, and requires known network manifest ids (`Handy`,
+ `Steamodded`/`SMODS`) to carry their suppression markers. No mod is blocked
+ merely by its name.
 - **Exact staged paths.** The guard probe's `lovely_mod_dir`/`mods` and the MP
-  probe's `mods` must equal the exact staged `Mods` path, not merely sit under the
-  role root. The compressed saved `config/Multiplayer.jkr` is reported as
-  `opaque` rather than being read as plaintext proof; the pre-thread MP guard on
-  the staged `core.lua` source is the real control.
+ probe's `mods` must equal the exact staged `Mods` path, not merely sit under the
+ role root. The compressed saved `config/Multiplayer.jkr` is reported as
+ `opaque` rather than being read as plaintext proof; the pre-thread MP guard on
+ the staged `core.lua` source is the real control.
 - **`hash_tree` fails closed.** A link/junction anywhere in the walk and any
-  unreadable `stat` now raise (`hash_reparse_refused` / `hash_stat_failed`)
-  instead of being silently skipped. `write_json`, `disable_mod_by_lovelyignore`
-  and the staged/backup writers take a specific root and go through
-  `assert_safe_write`.
+ unreadable `stat` now raise (`hash_reparse_refused` / `hash_stat_failed`)
+ instead of being silently skipped. `write_json`, `disable_mod_by_lovelyignore`
+ and the staged/backup writers take a specific root and go through
+ `assert_safe_write`.
 - **The role tree is fully manifested.** `STAGING_POLICY` now hashes `install`,
-  the whole `Mods` tree and the guard metadata, excluding only the mutable runtime
-  output `Mods/lovely/log` and `Mods/lovely/dump` (and the manifest itself). The
-  old `appdata` exclusion that hid the entire Mods tree is removed.
+ the whole `Mods` tree and the guard metadata, excluding only the mutable runtime
+ output `Mods/lovely/log` and `Mods/lovely/dump` (and the manifest itself). The
+ old `appdata` exclusion that hid the entire Mods tree is removed.
 - **Multiplayer is found by manifest id and guarded before it starts.** The
-  staged `.env` is written into the unique mod whose JSON declares
-  `"id": "Multiplayer"` (never a guessed folder), the staged `config.lua`
-  fallback is rewritten to loopback, the staged saved `config/Multiplayer.jkr` is
-  checked, and an early Lovely patch on `=[SMODS Multiplayer "core.lua"]` errors
-  before `MP.NETWORKING_THREAD:start` unless `MP.ENV` holds `127.0.0.1` and the
-  expected port.
+ staged `.env` is written into the unique mod whose JSON declares
+ `"id": "Multiplayer"` (never a guessed folder), the staged `config.lua`
+ fallback is rewritten to loopback, the staged saved `config/Multiplayer.jkr` is
+ checked, and an early Lovely patch on `=[SMODS Multiplayer "core.lua"]` errors
+ before `MP.NETWORKING_THREAD:start` unless `MP.ENV` holds `127.0.0.1` and the
+ expected port.
 - **Network-capable staged mods are suppressed deterministically.** Handy's
-  updater thread start is replaced with inert stubs (Handy's core UI and
-  collection are preserved), SMODS `M.request`/`M.asyncRequest` fail closed and
-  the SMODS debug-socket connect is disabled in the staged copies only. A
-  `network_guards` check re-detects the markers and binds their hashes.
+ updater thread start is replaced with inert stubs (Handy's core UI and
+ collection are preserved), SMODS `M.request`/`M.asyncRequest` fail closed and
+ the SMODS debug-socket connect is disabled in the staged copies only. A
+ `network_guards` check re-detects the markers and binds their hashes.
 - **Path controls.** Every staged write goes through `assert_within` plus
-  `assert_no_links(staging_root)`, so a pre-existing junction inside `staging/`
-  cannot redirect a write into the live tree.
+ `assert_no_links(staging_root)`, so a pre-existing junction inside `staging/`
+ cannot redirect a write into the live tree.
 - **Overlap uses explicit roots.** `live_roots` accepts the real install, the
-  known-folder AppData (independent of a redirected child `APPDATA`), every Steam
-  userdata profile and custom Steam libraries from `libraryfolders.vdf`.
+ known-folder AppData (independent of a redirected child `APPDATA`), every Steam
+ userdata profile and custom Steam libraries from `libraryfolders.vdf`.
 - **The dead Steam shim module is gone.** There is no standalone `steam_guard.lua`
-  claiming to intercept `require("luasteam")`. Steam is disabled by the real early
-  Lovely patch (`G.STEAM = nil`); `check_steam_guard` binds that patch's hash and
-  marker statically, and `check_steam_probes` proves the post-block
-  `G.STEAM`/`package.loaded.luasteam` absence from fresh probes.
+ claiming to intercept `require("luasteam")`. Steam is disabled by the real early
+ Lovely patch (`G.STEAM = nil`); `check_steam_guard` binds that patch's hash and
+ marker statically, and `check_steam_probes` proves the post-block
+ `G.STEAM`/`package.loaded.luasteam` absence from fresh probes.
 
 ## 2. Verified static facts (read-only citations)
 
 - Install `C:\Program Files (x86)\Steam\steamapps\common\Balatro`, Mods
-  `%USERPROFILE%\AppData\Roaming\Balatro\Mods`, versions Steamodded `26.829.0`,
-  Lovely `0.10.0`, JokerDisplay `2.0.4`, Handy `2.0.6` (`docs/MILESTONE_0.md:7-12`).
+ `%USERPROFILE%\AppData\Roaming\Balatro\Mods`, versions Steamodded `26.829.0`,
+ Lovely `0.10.0`, JokerDisplay `2.0.4`, Handy `2.0.6` (`docs/MILESTONE_0.md:7-12`).
 - LÖVE 11.5 on Windows resolves the save directory via `_wgetenv(L"APPDATA")` in
-  `Filesystem.cpp`, so the per-role `APPDATA` redirect is the intended control.
-  This is **not** SDL's `SDL_GetPrefPath`; SDL behaviour must not be used to infer
-  LÖVE behaviour. The source-based rationale is in
-  `docs/PLAYABLE_SOURCE_NOTES.md:7`; the actual installed-binary
-  `love.filesystem.getSaveDirectory()` proof is still pending.
+ `Filesystem.cpp`, so the per-role `APPDATA` redirect is the intended control.
+ This is **not** SDL's `SDL_GetPrefPath`; SDL behaviour must not be used to infer
+ LÖVE behaviour. The source-based rationale is in
+ `docs/PLAYABLE_SOURCE_NOTES.md:7`; the actual installed-binary
+ `love.filesystem.getSaveDirectory()` proof is still pending.
 - Lovely 0.10.0 selects Mods through `LOVELY_MOD_DIR` or `--mod-dir`, with logs
-  under `lovely/log` in the selected tree. This is now confirmed against the real
-  source checkout at `../../work/lovely-source` (outside the repo):
-  `crates/lovely-core/src/lib.rs:110` reads the `LOVELY_MOD_DIR` env var and
-  `:141` parses the `--mod-dir` argument (`docs/PLAYABLE_SOURCE_NOTES.md:6`). The
-  staged probe therefore requires the exact staged `Mods` path, and the launcher
-  owner additionally passes `--mod-dir <role Mods>`.
+ under `lovely/log` in the selected tree. This is now confirmed against the real
+ source checkout at `../../work/lovely-source` (outside the repo):
+ `crates/lovely-core/src/lib.rs:110` reads the `LOVELY_MOD_DIR` env var and
+ `:141` parses the `--mod-dir` argument (`docs/PLAYABLE_SOURCE_NOTES.md:6`). The
+ staged probe therefore requires the exact staged `Mods` path, and the launcher
+ owner additionally passes `--mod-dir <role Mods>`.
 - `love.load` order: `G:start_up()` (`work/reference/game/main.lua:87`) then the
-  Windows/macOS Steam block (`:88-114`) that requires native `luasteam`.
+ Windows/macOS Steam block (`:88-114`) that requires native `luasteam`.
 - The save thread reads `CHANNEL = love.thread.getChannel("save_request")`
-  (`work/reference/game/engine/save_manager.lua:12`).
+ (`work/reference/game/engine/save_manager.lua:12`).
 - Multiplayer reads `MP.path .. "/.env"` once (`work/reference/mp/core.lua:72-97`)
-  and starts its thread at `MP.NETWORKING_THREAD:start(server_url, server_port)`
-  (`core.lua:349`), falling back to the SMODS config default
-  `balatro.virtualized.dev` (`config.lua:4`).
+ and starts its thread at `MP.NETWORKING_THREAD:start(server_url, server_port)`
+ (`core.lua:349`), falling back to the SMODS config default
+ `balatro.virtualized.dev` (`config.lua:4`).
 - Handy starts its updater thread unconditionally
-  (`work/reference/offline/handy-updater.lua:1-8`) and waits on it at quit
-  (`:363-366`). SMODS logging opens `localhost:53153`
-  (`work/reference/offline/smods-logging.lua:4-15,56`); SMODS HTTPS is
-  `M.request`/`M.asyncRequest` (`work/reference/offline/smods-https.lua`).
+ (`work/reference/offline/handy-updater.lua:1-8`) and waits on it at quit
+ (`:363-366`). SMODS logging opens `localhost:53153`
+ (`work/reference/offline/smods-logging.lua:4-15,56`); SMODS HTTPS is
+ `M.request`/`M.asyncRequest` (`work/reference/offline/smods-https.lua`).
 - Steamodded disables a mod when `<Mods>/<name>/.lovelyignore` exists
-  (`work/reference/smods-loader.lua:337-344,412-419`).
+ (`work/reference/smods-loader.lua:337-344,412-419`).
 - Lovely patch TOML format is confirmed from the shipped Multiplayer patches and
-  SMODS booster patch: `[manifest]` plus `[[patches]]`
-  `[patches.pattern]`/`[patches.regex]` with `target`, `pattern`, `position`,
-  `payload`, optional `match_indent` and `times`; SMODS sources are targeted as
-  `=[SMODS <Mod> "path"]`.
+ SMODS booster patch: `[manifest]` plus `[[patches]]`
+ `[patches.pattern]`/`[patches.regex]` with `target`, `pattern`, `position`,
+ `payload`, optional `match_indent` and `times`; SMODS sources are targeted as
+ `=[SMODS <Mod> "path"]`.
 
 ## 3. Implemented staging surface
 
 `tools/staging.py`:
 
 - two role trees `staging/roles/{human,ai}` and a separate `staging/bootstrap`
-  tree, all with isolated `appdata/{Roaming,Local}`, `userprofile`, `temp`,
-  `logs`, `ipc`;
+ tree, all with isolated `appdata/{Roaming,Local}`, `userprofile`, `temp`,
+ `logs`, `ipc`;
 - install copy omitting `steam_api64.dll`/`luasteam.dll`, excluding `Mods`,
-  `*.jkr`, `*.log`, `.env`;
+ `*.jkr`, `*.log`, `.env`;
 - `role_environment` / `role_environment_overrides`: allowlisted environment with
-  explicit `LOVELY_MOD_DIR` and `APPDATA` inside the role root;
+ explicit `LOVELY_MOD_DIR` and `APPDATA` inside the role root;
 - `hash_tree` / `build_manifest` / `verify_manifest` with prefix-scoped policies:
-  `STAGING_POLICY` (install + Mods + guard metadata, minus `lovely/log`,
-  `lovely/dump`), `BOOTSTRAP_POLICY` (same plus the bootstrap expectations);
+ `STAGING_POLICY` (install + Mods + guard metadata, minus `lovely/log`,
+ `lovely/dump`), `BOOTSTRAP_POLICY` (same plus the bootstrap expectations);
 - `find_links`/`assert_no_links` (symlink + reparse-point refusal),
-  `assert_within`/`_write_text`/`_ensure_dir` before every staged write, and
-  `assert_no_overlap` over explicit `live_roots` (install, known-folder AppData,
-  every Steam userdata profile, custom Steam libraries);
+ `assert_within`/`_write_text`/`_ensure_dir` before every staged write, and
+ `assert_no_overlap` over explicit `live_roots` (install, known-folder AppData,
+ every Steam userdata profile, custom Steam libraries);
 - `find_multiplayer_mod` (by `"id": "Multiplayer"`), `configure_role_endpoint`
-  (writes `.env`, rewrites the staged `config.lua` fallback, checks the saved
-  `config/Multiplayer.jkr`, adds the MP pre-start guard), `read_persisted_endpoint`,
-  `verify_staged_endpoints`;
+ (writes `.env`, rewrites the staged `config.lua` fallback, checks the saved
+ `config/Multiplayer.jkr`, adds the MP pre-start guard), `read_persisted_endpoint`,
+ `verify_staged_endpoints`;
 - `suppress_staged_network_paths` / `scan_network_suppressions` /
-  `check_network_guards`: deterministic staged-only suppression of Handy's updater
-  thread start, SMODS HTTPS and the SMODS debug socket, with re-detection and hash
-  binding;
+ `check_network_guards`: deterministic staged-only suppression of Handy's updater
+ thread start, SMODS HTTPS and the SMODS debug socket, with re-detection and hash
+ binding;
 - real Lovely patch generation (`render_lovely_toml`, `staging_patches`): a Steam
-  block removal regex, a crash-report disable regex, a nonce-bound startup guard
-  inserted before `G:start_up()`, a save-thread probe after the `save_request`
-  channel line, an optional bootstrap self-exit and the Multiplayer pre-start
-  guard;
+ block removal regex, a crash-report disable regex, a nonce-bound startup guard
+ inserted before `G:start_up()`, a save-thread probe after the `save_request`
+ channel line, an optional bootstrap self-exit and the Multiplayer pre-start
+ guard;
 - `write_steam_guard` writes only the real patch plus honest metadata (`shim:
-  false`); there is no dead Lua guard module;
+ false`); there is no dead Lua guard module;
 - `check_steam_guard` is a **static** staged guard over the patch hash, the
-  `steam_patch_applied` marker and both Steam probes, with absent native DLLs; it
-  never reads `isolation_proof.json`. `check_steam_probes` is the fresh real-probe
-  checker (nonce-bound marker plus absent `G.STEAM`/`package.loaded.luasteam`);
+ `steam_patch_applied` marker and both Steam probes, with absent native DLLs; it
+ never reads `isolation_proof.json`. `check_steam_probes` is the fresh real-probe
+ checker (nonce-bound marker plus absent `G.STEAM`/`package.loaded.luasteam`);
 - `steam_disable_payload` / `steam_post_probe_payload` generate the NH1 marker and
-  post-block probes; `lovely_evidence_paths` / `check_lovely_evidence` bind the
-  exact staged `Mods` path and fresh `Mods/lovely/{log,dump}` artefacts;
+ post-block probes; `lovely_evidence_paths` / `check_lovely_evidence` bind the
+ exact staged `Mods` path and fresh `Mods/lovely/{log,dump}` artefacts;
 - `stage_bootstrap`, `check_bootstrap_preflight`, `check_bootstrap_evidence`,
-  `collect_role_probes`, `_read_probe_entry`, `parse_probe`;
+ `collect_role_probes`, `_read_probe_entry`, `parse_probe`;
 - `measure_isolation_state` / `record_isolation_proof` / `check_isolation_proof`:
-  the measured before/after collector, the per-session proof writer, and the
-  host-facing wrapper that delegates to the reusable certificate check;
+ the measured before/after collector, the per-session proof writer, and the
+ host-facing wrapper that delegates to the reusable certificate check;
 - `stage_role` / `finalize_role` / `verify_staged_role`: per-role manifest gate
-  over the immutable install, the complete Mods tree and the guard metadata, with
-  no native Steam DLLs and no links;
+ over the immutable install, the complete Mods tree and the guard metadata, with
+ no native Steam DLLs and no links;
 - `disable_mod_by_lovelyignore`, `find_steam_userdata_apps`,
-  `discover_steam_libraries`, `known_folder_roaming_appdata`, `steamapps_parent`
-  (only infers `install_steamapps` for a real `steamapps/common/<game>` layout),
-  `SESSION_DESCRIPTOR_VARS` (canonical, mirrors `launch_practice.SESSION_ENV_KEYS`),
-  `launcher_attestation_path` and the `write_launcher_attestation` wholesale wrapper;
+ `discover_steam_libraries`, `known_folder_roaming_appdata`, `steamapps_parent`
+ (only infers `install_steamapps` for a real `steamapps/common/<game>` layout),
+ `SESSION_DESCRIPTOR_VARS` (canonical, mirrors `launch_practice.SESSION_ENV_KEYS`),
+ `launcher_attestation_path` and the `write_launcher_attestation` wholesale wrapper;
 - `assert_no_reparse_between` / `assert_safe_write`: lexical containment plus a
-  link/reparse-point check on the **unresolved** path components, run before every
-  staged write/copy so junction evidence is not lost to `.resolve()`.
+ link/reparse-point check on the **unresolved** path components, run before every
+ staged write/copy so junction evidence is not lost to `.resolve()`.
 
 `tools/isolation_certificate.py` (Section 10): `collect_layer_n` /
 `collect_layer_m`, `build_certificate` / `check_certificate` (immutable two-layer
@@ -231,22 +231,22 @@ Steam profiles, and a fresh-nonce spawn. See `docs/RUNTIME_LAUNCHER.md`.
 only, one generated Lovely patch, and no Multiplayer/SMODS/Handy. The run is:
 
 1. **Preflight** (`check_bootstrap_preflight`): bootstrap manifest and patch hash
-   verified, no stale probe files present, no native Steam DLLs, correct
-   save/Mods paths.
+ verified, no stale probe files present, no native Steam DLLs, correct
+ save/Mods paths.
 2. **Run** with a fresh `AISP_PROBE_NONCE` in the allowlisted child environment.
-   The guard verifies `love.filesystem.getSaveDirectory()` and `LOVELY_MOD_DIR`
-   before `G:start_up()`, writes `aisparring_probe_main.txt` and
-   `aisparring_probe_guard.txt` from the main thread and
-   `aisparring_probe_save_thread.txt` from the save thread. The Steam-disable
-   payload then writes the nonce-bound `aisparring_probe_steam_marker.txt`, the
-   post-block probe writes `aisparring_probe_steam_post.txt` with the real
-   `G.STEAM` and `package.loaded.luasteam`, and the run exits on its own.
+ The guard verifies `love.filesystem.getSaveDirectory()` and `LOVELY_MOD_DIR`
+ before `G:start_up()`, writes `aisparring_probe_main.txt` and
+ `aisparring_probe_guard.txt` from the main thread and
+ `aisparring_probe_save_thread.txt` from the save thread. The Steam-disable
+ payload then writes the nonce-bound `aisparring_probe_steam_marker.txt`, the
+ post-block probe writes `aisparring_probe_steam_post.txt` with the real
+ `G.STEAM` and `package.loaded.luasteam`, and the run exits on its own.
 3. **Evidence** (`check_bootstrap_evidence` with the nonce and spawn time): all
-   five probes parse exactly, carry the nonce and patch id, were written after the
-   spawn, name the exact staged save directory, the marker reports
-   `steam_patch_applied=true`, and the post-block probe reports both `steam=nil`
-   and `luasteam=nil`. `check_lovely_evidence` additionally requires a fresh log
-   and `main.lua` dump under the exact staged `Mods/lovely/{log,dump}`.
+ five probes parse exactly, carry the nonce and patch id, were written after the
+ spawn, name the exact staged save directory, the marker reports
+ `steam_patch_applied=true`, and the post-block probe reports both `steam=nil`
+ and `luasteam=nil`. `check_lovely_evidence` additionally requires a fresh log
+ and `main.lua` dump under the exact staged `Mods/lovely/{log,dump}`.
 
 `measure_isolation_state` before/after plus `record_isolation_proof` writes the
 measured per-session `isolation_proof.json`, which requires zero live diff and
@@ -267,39 +267,39 @@ and stays partial until all of it is present.
 ## 6. Unresolved questions (remaining)
 
 1. **Actual bootstrap proof.** Whether the child `APPDATA` redirect yields the
-   expected `getSaveDirectory()` for a fused `Balatro.exe`, and whether Lovely
-   reads the same tree for `LOVELY_MOD_DIR` and `lovely/log`.
+ expected `getSaveDirectory()` for a fused `Balatro.exe`, and whether Lovely
+ reads the same tree for `LOVELY_MOD_DIR` and `lovely/log`.
 2. **Lovely patch application timing.** Whether a `[[patches]]` entry targeting
-   `main.lua` (or `=[SMODS Multiplayer "core.lua"]`) applies before the target
-   executes, and whether a non-matching pattern only warns. The runtime guard
-   fails closed, but runtime application is unproven.
+ `main.lua` (or `=[SMODS Multiplayer "core.lua"]`) applies before the target
+ executes, and whether a non-matching pattern only warns. The runtime guard
+ fails closed, but runtime application is unproven.
 3. **Lovely Mods selection is source-verified; runtime application is not.**
-   `../../work/lovely-source/crates/lovely-core/src/lib.rs:110` reads
-   `LOVELY_MOD_DIR` and `:141` parses `--mod-dir`, so the staged redirect and the
-   launcher's `--mod-dir` argument are grounded in the real source. What remains
-   unproven is the *installed-binary* behaviour: that the fused `Balatro.exe`
-   actually honours both and writes a fresh log/dump under the exact staged
-   `Mods/lovely` tree (collected as P1a evidence by the phase owner).
+ `../../work/lovely-source/crates/lovely-core/src/lib.rs:110` reads
+ `LOVELY_MOD_DIR` and `:141` parses `--mod-dir`, so the staged redirect and the
+ launcher's `--mod-dir` argument are grounded in the real source. What remains
+ unproven is the *installed-binary* behaviour: that the fused `Balatro.exe`
+ actually honours both and writes a fresh log/dump under the exact staged
+ `Mods/lovely` tree (collected as P1a evidence by the phase owner).
 4. **Steam userdata location and safety.** The app directory is machine-specific;
-   the launcher discovers all numeric profiles containing app `2379780`. Whether
-   Steam re-injects/writes for a second staged instance is unproven.
+ the launcher discovers all numeric profiles containing app `2379780`. Whether
+ Steam re-injects/writes for a second staged instance is unproven.
 5. **Suppression fidelity.** The Handy updater stub and the SMODS HTTPS/debug
-   suppressions are validated offline against the reference snapshots; whether
-   the installed mod versions match those snapshots still needs a real staged run
-   (the `network_guards` gate binds the staged hashes).
+ suppressions are validated offline against the reference snapshots; whether
+ the installed mod versions match those snapshots still needs a real staged run
+ (the `network_guards` gate binds the staged hashes).
 6. **Save-thread probe semantics.** Whether the save thread's `love.filesystem`
-   exposes the same save directory and can write the probe before the bootstrap
-   exits.
+ exposes the same save directory and can write the probe before the bootstrap
+ exits.
 
 ## 7. APIs / evidence still needed
 
 - LÖVE: runtime `love.filesystem.getSaveDirectory()` from main and thread.
 - Lovely: patch application ordering and `LOVELY_MOD_DIR` logging behaviour;
-  source checkout (missing here).
+ source checkout (missing here).
 - Steam: `userdata/<id>/2379780/remote` cache state, `loginusers.vdf`,
-  `appmanifest_2379780.acf`; whether native Steam must be running.
+ `appmanifest_2379780.acf`; whether native Steam must be running.
 - SMODS/Handy: confirmation that the installed versions match the suppression
-  targets.
+ targets.
 
 ## 8. Running the tools
 
@@ -385,20 +385,20 @@ alone is never a crash. Each P2 phase is AI-only after `FULL_P1`, uses a distinc
 nonce and must prove exactly one section 4 coverage definition:
 
 * `P2_INITIAL` binds the tool's both-family listener absence + refused connect (the
-  *port* proof only) plus an observed first connect return `~= 1` with zero
-  successful connects and zero cycles (`initial_failure`).
+ *port* proof only) plus an observed first connect return `~= 1` with zero
+ successful connects and zero cycles (`initial_failure`).
 * `P2_CLOSE`/`P2_SILENT` bind the tool-owned exclusive `127.0.0.1` one-connection
-  listener log (accepted peer owned by the AI PID at the exact observed loopback
-  tuple, zero sent bytes, bounded received-byte retention plus the observed JSON
-  `action` names; FIN close for CLOSE, held open for SILENT) and the observer's
-  per-cycle evidence. `closure` is
-  covered only by a recorded peer FIN, a receive error after the close, and one
-  completed bounded exhausted retry cycle (attempts == failures == 3, 2/4/8-second
-  delays); `keepalive` only by the original keepalive path (five pushes ~20s then
-  ~5s, one exhausted cycle with cause `keepalive`) *and* a listener hold that
-  covers the exhausted cycle's completion (`open_until >= cycle end`). An honest
-  premature peer EOF caps `open_until` at the observed EOF and therefore fails the
-  gate; a cycle that recovered or was left unfinished never covers either gate.
+ listener log (accepted peer owned by the AI PID at the exact observed loopback
+ tuple, zero sent bytes, bounded received-byte retention plus the observed JSON
+ `action` names; FIN close for CLOSE, held open for SILENT) and the observer's
+ per-cycle evidence. `closure` is
+ covered only by a recorded peer FIN, a receive error after the close, and one
+ completed bounded exhausted retry cycle (attempts == failures == 3, 2/4/8-second
+ delays); `keepalive` only by the original keepalive path (five pushes ~20s then
+ ~5s, one exhausted cycle with cause `keepalive`) *and* a listener hold that
+ covers the exhausted cycle's completion (`open_until >= cycle end`). An honest
+ premature peer EOF caps `open_until` at the observed EOF and therefore fails the
+ gate; a cycle that recovered or was left unfinished never covers either gate.
 
 The observer runs inside the real staged network thread (`networking/socket.lua`)
 and every anchor is the exact full trimmed pinned line, so it applies under Lovely's
@@ -441,11 +441,11 @@ persisted open record (not a fabricated mapping) to `execute_launch`.
 ## 11. Sources
 
 - `docs/PLAYABLE_SOURCE_NOTES.md` (LÖVE `_wgetenv(APPDATA)`, Lovely
-  `LOVELY_MOD_DIR`/`lovely/log`, `G:start_up` ordering, Handy/SMODS audit).
+ `LOVELY_MOD_DIR`/`lovely/log`, `G:start_up` ordering, Handy/SMODS audit).
 - `docs/INTEGRATION_PLAN.md`, `docs/PROTOTYPE_GATES.md`, `docs/MILESTONE_0.md`.
 - `work/reference/game/{main.lua,conf.lua,engine/save_manager.lua}`.
 - `work/reference/mp/{core.lua,config.lua,lovely/*.toml}`.
 - `work/reference/offline/{handy-updater.lua,handy-updater-thread.lua,smods-https.lua,smods-logging.lua,luajit-curl.lua}`.
 - `work/reference/smods-loader.lua`, `work/reference/smods-booster.toml`.
 - `../../work/lovely-source/crates/lovely-core/src/lib.rs:110,141` (LOVELY_MOD_DIR
-  and `--mod-dir`; outside the repo, read-only).
+ and `--mod-dir`; outside the repo, read-only).

@@ -1,6 +1,6 @@
 # Fairness threat model
 
-Initial M2 design by Astra, before implementation. Read with INTEGRATION_PLAN.md, MILESTONE_2_PLAN.md and the source-evidence map. The goal is to prevent project-owned future policy/search code from observing hidden information or bypassing legal actions. Trusted extraction, schema code, broker, runtime-role assignment and future engine-validator implementations are part of the trusted computing base and require review. A malicious game mod, compromised interpreter, or malicious trusted extractor is outside this in-process boundary's guarantee. No sandbox claim follows from a schema or a Lua metatable alone.
+Initial M2 design by review, before implementation. Read with INTEGRATION_PLAN.md, MILESTONE_2_PLAN.md and the source-evidence map. The goal is to prevent project-owned future policy/search code from observing hidden information or bypassing legal actions. Trusted extraction, schema code, broker, runtime-role assignment and future engine-validator implementations are part of the trusted computing base and require review. A malicious game mod, compromised interpreter, or malicious trusted extractor is outside this in-process boundary's guarantee. No sandbox claim follows from a schema or a Lua metatable alone.
 
 | Threat | Required mitigation and attack evidence |
 |---|---|
@@ -26,4 +26,4 @@ Engine/Multiplayer -> trusted state/UI adapter -> normalized AIObservation -> le
 
 ## Completion conditions
 
-Implementation must document its exact schema, supported/unsupported projections, action catalogue bounds, mock execution status, policy-environment limits and any threat-model changes. DeepSeek self-review, independent Astra attacks and Claude source review are required before acceptance. No real policy, live runtime capture, autonomous action, or staged-isolation success is asserted by this initial document.
+Implementation must document its exact schema, supported/unsupported projections, action catalogue bounds, mock execution status, policy-environment limits and any threat-model changes. Development self-review, independent review attacks and source review source review are required before acceptance. No real policy, live runtime capture, autonomous action, or staged-isolation success is asserted by this initial document.

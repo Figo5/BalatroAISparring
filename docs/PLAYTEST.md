@@ -1,7 +1,7 @@
 # AI Sparring playtest guide
 
 Build target: **0.1.0-dev**. This is currently an implementation draft, not an
-installation or playability claim. Actual engine checks and Claude acceptance
+installation or playability claim. Actual engine checks and source review acceptance
 must pass before the installed build is handed over.
 
 ## Intended launch flow

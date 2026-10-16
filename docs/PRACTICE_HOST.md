@@ -1,6 +1,6 @@
 # External practice host (`tools/practice_host.py`)
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 Status: bounded implementation of the outside-process daemon and closed-game match
 supervisor described in `docs/PLAYABLE_RUNTIME_CONTRACT.md` and
 `docs/RUNTIME_LAUNCHER.md` §4a. Ships with `tests/test_practice_host.py`,
@@ -11,9 +11,9 @@ supervisor described in `docs/PLAYABLE_RUNTIME_CONTRACT.md` and
 runtime proof is current. Its fixture suites (and `tests/test_prepare_server.py`)
 run against synthetic trees and injected fakes only: they are **not** evidence that
 a real server build, real policy runtime, real Windows listener/TCP table or a real
-match works. Only Astra's independent real build and execution may establish that.
+match works. Only review's independent real build and execution may establish that.
 Nothing here launches a game, writes to a live path, copies a live tree or
-terminates a live process; Astra owns every real execution.
+terminates a live process; review owns every real execution.
 
 ## 1. Purpose and placement
 
@@ -23,10 +23,10 @@ separate ordinary local process the user starts before opening normal Balatro.
 The host owns:
 
 1. a **loopback-only authenticated daemon** the live menu adapter can query
-   (`available`) and ask to begin a closed-game transition (`start`/`poll`); and
+ (`available`) and ask to begin a closed-game transition (`start`/`poll`); and
 2. a **match supervisor** that, once the exact original live process has exited
-   naturally, re-runs every fail-closed gate and then owns the adapted pinned
-   local server, the trusted control service and the two staged roles.
+ naturally, re-runs every fail-closed gate and then owns the adapted pinned
+ local server, the trusted control service and the two staged roles.
 
 There is deliberately **no concurrent-live mode**: the host never redirects the
 live Multiplayer transport, never copies while the live game is running and never
@@ -61,7 +61,7 @@ a save directory) with:
 - exact `pid` and native `create_time` of the daemon process;
 - `module_sha256` of this module;
 - loopback `host`/`port`, the random `secret`, `started_unix` and the op/enum
-  catalogue.
+ catalogue.
 
 `discovery_state()` classifies an existing marker as `live` (refused with
 `practice_host_already_running`), `stale` / `stale_pid_reused` (replaced explicitly,
@@ -151,46 +151,46 @@ checker is injectable (`runtime_checker=`) so fixtures never depend on `lupa`.
 `MatchSupervisor.run()` (on a daemon worker thread):
 
 1. **Wait for natural live exit.** `wait_for_live_exit()` polls a query-only native
-   handle. It never calls a termination method. A PID reuse (same pid, different
-   create time) is treated as the original having exited. On timeout it returns
-   `practice_live_exit_timeout` and leaves the live process running. If identity
-   cannot be confirmed it fails closed (`practice_live_exit_unverified`).
+ handle. It never calls a termination method. A PID reuse (same pid, different
+ create time) is treated as the original having exited. On timeout it returns
+ `practice_live_exit_timeout` and leaves the live process running. If identity
+ cannot be confirmed it fails closed (`practice_live_exit_unverified`).
 2. **Re-run every fail-closed gate** (§6). Any failure aborts before a launch.
 3. **Open the persistent unmeasured record.** The host first runs quiescence, a
-   fresh full byte backup, and the real `check_backup_evidence(backup_root, sources)`
-   verifier (`prepare_live_baseline`). The only accepted `backup_id` is that
-   verifier's **content-derived identity** (the manifest sha256 bound over every
-   verified per-root `files_digest`); a runner label, `digest` alias or `id` is
-   display/directory metadata and can never stand in for it, and the complete
-   per-root evidence is preserved. The certificate's `prepare_session(...)` is then
-   called with the real enumerator `closed_check`, that content identity and a
-   `backup_verify` callable that **re-runs the real verifier** (fresh identity plus
-   full `roots` evidence); it mints the single session nonce, binds its own
-   before-snapshot to those root digests, and stores everything in an exclusive
-   open record. The host requires the certificate's *returned* identity to equal
-   the verifier identity and never overwrites it. Immediately after, and before *any* spawn, a
-   persistent `session_unmeasured` host lockout is written. A prior unclosed
-   record refuses the session (`practice_session_open_unmeasured`), and live drift
-   or a missing root map is refused by the real verifier before preparation.
+ fresh full byte backup, and the real `check_backup_evidence(backup_root, sources)`
+ verifier (`prepare_live_baseline`). The only accepted `backup_id` is that
+ verifier's **content-derived identity** (the manifest sha256 bound over every
+ verified per-root `files_digest`); a runner label, `digest` alias or `id` is
+ display/directory metadata and can never stand in for it, and the complete
+ per-root evidence is preserved. The certificate's `prepare_session(...)` is then
+ called with the real enumerator `closed_check`, that content identity and a
+ `backup_verify` callable that **re-runs the real verifier** (fresh identity plus
+ full `roots` evidence); it mints the single session nonce, binds its own
+ before-snapshot to those root digests, and stores everything in an exclusive
+ open record. The host requires the certificate's *returned* identity to equal
+ the verifier identity and never overwrites it. Immediately after, and before *any* spawn, a
+ persistent `session_unmeasured` host lockout is written. A prior unclosed
+ record refuses the session (`practice_session_open_unmeasured`), and live drift
+ or a missing root map is refused by the real verifier before preparation.
 4. **Verified server before roles.** The server adaptation is verified, the server
-   is spawned and its owning-PID loopback listener proven **before** the roles
-   spawn (H3), so the MP client never starts against a missing server.
+ is spawned and its owning-PID loopback listener proven **before** the roles
+ spawn (H3), so the MP client never starts against a missing server.
 5. **Launch the two roles** with the trusted typed descriptors **and the prepared
-   open record**: `execute_launch(..., open_session=<prepared record>,
-   session_descriptors=...)` (the launcher reads the single nonce from the record;
-   there is no `nonce_factory` and no spawn without an open record), bind their
-   exact PIDs on the open record, then require a fresh nonce attestation from
-   **both** roles.
+ open record**: `execute_launch(..., open_session=<prepared record>,
+ session_descriptors=...)` (the launcher reads the single nonce from the record;
+ there is no `nonce_factory` and no spawn without an open record), bind their
+ exact PIDs on the open record, then require a fresh nonce attestation from
+ **both** roles.
 6. **Mark attested, then publish.** Only after both probes pass does the host call
-   the trusted `service.mark_attested(expected_config_digest)` and then the
-   certificate's atomic `write_launcher_attestation` (§6.4), and immediately after
-   the files are published it calls the trusted host-only
-   `service.start_prestart_window()` so the bounded pre-start budget starts when the
-   companions can actually read the attestation (a failure to call it is a no-op that
-   leaves the earlier `mark_attested` clock in force, so the timeout is never
-   bypassed).
+ the trusted `service.mark_attested(expected_config_digest)` and then the
+ certificate's atomic `write_launcher_attestation` (§6.4), and immediately after
+ the files are published it calls the trusted host-only
+ `service.start_prestart_window()` so the bounded pre-start budget starts when the
+ companions can actually read the attestation (a failure to call it is a no-op that
+ leaves the earlier `mark_attested` clock in force, so the timeout is never
+ bypassed).
 7. **Supervise**, retain the human results window until it exits, then retire the
-   server/service and record the measured per-session live diff (§8, §9).
+ server/service and record the measured per-session live diff (§8, §9).
 
 ## 6. Gates (all must pass before launch)
 
@@ -294,73 +294,73 @@ digest, not a locally hashed tree.
 ## 7. Server, service and roles
 
 - **Server adaptation.** `verify_server_adaptation()` binds
-  `AISparring-adaptation.json` to the trusted `SERVER_PIN`, the exact two
-  `changes`, every recorded source/build hash (recomputed), the resolved Node
-  executable path and hash, the package lock, the complete dependency hash manifest
-  (`runtime_files`, including native binaries), each declared runtime dependency
-  (`dependency_hashes`, recomputed from the tree) and the native `*.node` set
-  (`native_files`, which must be a subset of `runtime_files` and match disk), the
-  patched `src/main.ts` (loopback `server.listen(PORT, '127.0.0.1', ...)`, admin
-  listener disabled), and the built `dist/main.js` — which must be present in
-  `built_files` and itself carry the loopback bind and no `adminServer.listen` (M3).
-  The pinned `dist/main.js` is what Node runs. `tools/prepare_server.py` produces
-  exactly this manifest: it copies **tracked source only**, and copies the reviewed
-  (gitignored) dependency install tree wholesale, so the compiler and native
-  binaries survive; it never writes the upstream tree.
+ `AISparring-adaptation.json` to the trusted `SERVER_PIN`, the exact two
+ `changes`, every recorded source/build hash (recomputed), the resolved Node
+ executable path and hash, the package lock, the complete dependency hash manifest
+ (`runtime_files`, including native binaries), each declared runtime dependency
+ (`dependency_hashes`, recomputed from the tree) and the native `*.node` set
+ (`native_files`, which must be a subset of `runtime_files` and match disk), the
+ patched `src/main.ts` (loopback `server.listen(PORT, '127.0.0.1', ...)`, admin
+ listener disabled), and the built `dist/main.js` — which must be present in
+ `built_files` and itself carry the loopback bind and no `adminServer.listen` (M3).
+ The pinned `dist/main.js` is what Node runs. `tools/prepare_server.py` produces
+ exactly this manifest: it copies **tracked source only**, and copies the reviewed
+ (gitignored) dependency install tree wholesale, so the compiler and native
+ binaries survive; it never writes the upstream tree.
 - **Server process.** `default_server_runner()` launches the **verified absolute
-  Node path** that `verify_server_adaptation` hashed (never a bare `node` resolved
-  by PATH; `_verified_node_path` has no `which` fallback and fails closed) with the
-  roles' exact retained-ownership sequence (M-1): on Windows the
-  server is created `CREATE_SUSPENDED`, assigned to a **mandatory** kill-on-close
-  Job Object, resumed, and its create time is read from the retained handle. Its
-  image path is re-read through a separate query handle and must equal the launched
-  executable. A missing job, create time or mismatched image terminates the exact
-  child and fails closed. `cwd` is the private per-session data directory;
-  `LOG_HASH_DB_PATH` is forced to the **per-session** `workspace.server_dir` (M-5)
-  so the persistent SQLite ban/rate store can never ban `127.0.0.1` across
-  sessions. The environment is an allowlist that strips `AISP_*`, `STEAM*`, `SDL*`,
-  `LOVELY*` and `PYTHON*`.
+ Node path** that `verify_server_adaptation` hashed (never a bare `node` resolved
+ by PATH; `_verified_node_path` has no `which` fallback and fails closed) with the
+ roles' exact retained-ownership sequence (M-1): on Windows the
+ server is created `CREATE_SUSPENDED`, assigned to a **mandatory** kill-on-close
+ Job Object, resumed, and its create time is read from the retained handle. Its
+ image path is re-read through a separate query handle and must equal the launched
+ executable. A missing job, create time or mismatched image terminates the exact
+ child and fails closed. `cwd` is the private per-session data directory;
+ `LOG_HASH_DB_PATH` is forced to the **per-session** `workspace.server_dir` (M-5)
+ so the persistent SQLite ban/rate store can never ban `127.0.0.1` across
+ sessions. The environment is an allowlist that strips `AISP_*`, `STEAM*`, `SDL*`,
+ `LOVELY*` and `PYTHON*`.
 - **Listener proof.** `verify_local_listener()` uses the Windows TCP table for
-  **both** IPv4 and IPv6 (`WindowsTcpTableProbe`), else a loopback-connect probe.
-  Every bound address must be an exact loopback address (`127.0.0.0/8` or `::1`);
-  a wildcard/LAN address is refused. When the owned server PID is known the
-  owning-PID set must be **exactly** `{server PID}` across both families (M-2), so
-  a foreign loopback listener squatting beside Node cannot pass. The admin port must
-  be closed on both
-  families. `WindowsTcpTableProbe` reports a per-family inventory status and strict
-  proof **refuses a partial inventory** (`match_listener_inventory_incomplete` /
-  `admin_listener_inventory_incomplete`): if either family's native table query is
-  unavailable, the remaining family's data is not accepted as complete, so a
-  wildcard or other-family listener cannot slip through. `port_is_free`/
-  `pick_free_port` use exclusive Windows sockets and never `SO_REUSEADDR` (M2).
-  The native table rows are read from their raw Win32 field bytes (IPv4 `DWORD`
-  network-order address bytes and the IPv6 16-byte `ucLocalAddr` at its declared
-  offset), never by taking a `byref` of a scalar field.
+ **both** IPv4 and IPv6 (`WindowsTcpTableProbe`), else a loopback-connect probe.
+ Every bound address must be an exact loopback address (`127.0.0.0/8` or `::1`);
+ a wildcard/LAN address is refused. When the owned server PID is known the
+ owning-PID set must be **exactly** `{server PID}` across both families (M-2), so
+ a foreign loopback listener squatting beside Node cannot pass. The admin port must
+ be closed on both
+ families. `WindowsTcpTableProbe` reports a per-family inventory status and strict
+ proof **refuses a partial inventory** (`match_listener_inventory_incomplete` /
+ `admin_listener_inventory_incomplete`): if either family's native table query is
+ unavailable, the remaining family's data is not accepted as complete, so a
+ wildcard or other-family listener cannot slip through. `port_is_free`/
+ `pick_free_port` use exclusive Windows sockets and never `SO_REUSEADDR` (M2).
+ The native table rows are read from their raw Win32 field bytes (IPv4 `DWORD`
+ network-order address bytes and the IPv6 16-byte `ucLocalAddr` at its declared
+ offset), never by taking a `byref` of a scalar field.
 - **Control service.** A `practice_service.PracticeService` is constructed from
-  trusted config + the request enums and started on an ephemeral loopback port.
-  Its lifecycle state is read in-process through the real, locked
-  `started`/`ended`/`aborted`/`terminal_phase`/`terminal_reason` properties, never
-  over the wire and never through a caller-invented attribute: a network heartbeat
-  would have to share a role's strictly-increasing sequence counter with the real
-  role runtime. The supervisor treats a terminal phase as a normal completion
-  **only** when `terminal_reason == "human_end"`; a role loss, pre-start timeout or
-  abort is a failure even though its phase reads `closed` (H-C). The staged human
-  window exiting is likewise a completion **only** when the service's real
-  `terminal_reason` is `human_end`; an unexpected mid-match human exit fails with
-  `practice_human_exited_before_end` and runs the measured failure cleanup (N-1).
-  The host calls the
-  trusted `service.abort(code)` on any failure or void so both roles see
-  `practice_aborted` and can stop through their normal MP flow. The secret
-  gauntlet seed is served by the authenticated `setup` op to the human role only.
+ trusted config + the request enums and started on an ephemeral loopback port.
+ Its lifecycle state is read in-process through the real, locked
+ `started`/`ended`/`aborted`/`terminal_phase`/`terminal_reason` properties, never
+ over the wire and never through a caller-invented attribute: a network heartbeat
+ would have to share a role's strictly-increasing sequence counter with the real
+ role runtime. The supervisor treats a terminal phase as a normal completion
+ **only** when `terminal_reason == "human_end"`; a role loss, pre-start timeout or
+ abort is a failure even though its phase reads `closed` (H-C). The staged human
+ window exiting is likewise a completion **only** when the service's real
+ `terminal_reason` is `human_end`; an unexpected mid-match human exit fails with
+ `practice_human_exited_before_end` and runs the measured failure cleanup (N-1).
+ The host calls the
+ trusted `service.abort(code)` on any failure or void so both roles see
+ `practice_aborted` and can stop through their normal MP flow. The secret
+ gauntlet seed is served by the authenticated `setup` op to the human role only.
 - **Roles.** `_build_descriptors()` builds one typed
-  `launch_practice.SessionDescriptor` per role and passes them, together with the
-  certificate's prepared open record, to
-  `launch_practice.execute_launch(..., open_session=<record>, session_descriptors=...)`,
-  which returns the **retained** `LaunchSession` (exact Popen handles + kill-on-close
-  Jobs). The record's `phase` must be `MATCH`; a missing/closed record makes the
-  launcher refuse (`open_session_required`) instead of spawning. Old
-  launcher-attestation files are rotated before the spawn and fresh ones are
-  written only after both roles attest (§6.4).
+ `launch_practice.SessionDescriptor` per role and passes them, together with the
+ certificate's prepared open record, to
+ `launch_practice.execute_launch(..., open_session=<record>, session_descriptors=...)`,
+ which returns the **retained** `LaunchSession` (exact Popen handles + kill-on-close
+ Jobs). The record's `phase` must be `MATCH`; a missing/closed record makes the
+ launcher refuse (`open_session_required`) instead of spawning. Old
+ launcher-attestation files are rotated before the spawn and fresh ones are
+ written only after both roles attest (§6.4).
 
 ## 8. Teardown, void and lockout
 
@@ -492,8 +492,8 @@ pending closure (H-A-1-R/N-1-R).
 
 ```
 python tools/practice_host.py serve --staging-root staging --backup-root backups \
-  --install "<install>" --appdata "<live AppData>\Balatro" --steam-root "<Steam>" \
-  --server-root work/local-server --match-port 8788
+ --install "<install>" --appdata "<live AppData>\Balatro" --steam-root "<Steam>" \
+ --server-root work/local-server --match-port 8788
 python tools/practice_host.py status
 python tools/practice_host.py dev-launcher
 ```
@@ -543,43 +543,43 @@ manifest binding with an injected git provider and builder (no real git/node/npm
 (M10). Together they assert:
 
 - daemon auth/shape/op rejection, enum and live-PID validation, exact live
-  identity checks, ack-only-when-recorded, duplicate-ticket refusal and the
-  acknowledgement lockout (`acknowledge`); a prior open/unmeasured record refuses
-  both `start` and `acknowledge`, and a retained human window refuses a new ticket
-  and defers the daemon `stop()`;
+ identity checks, ack-only-when-recorded, duplicate-ticket refusal and the
+ acknowledgement lockout (`acknowledge`); a prior open/unmeasured record refuses
+ both `start` and `acknowledge`, and a retained human window refuses a new ticket
+ and defers the daemon `stop()`;
 - discovery duplicate/stale/foreign handling and a real loopback socket round trip;
 - live-exit wait timeout (asserting `terminate` is never called), absence and PID
-  reuse detection, and fail-closed unverified enumeration;
+ reuse detection, and fail-closed unverified enumeration;
 - certificate reuse/lockout/missing-api, the absence of any rebase/record-proof
-  path and any unchecked host attestation writer (the host delegates to the
-  certificate writer with separate `control_port`/`port`), quiescence, the real
-  backup content-identity requirement and two-role nonce attestation;
+ path and any unchecked host attestation writer (the host delegates to the
+ certificate writer with separate `control_port`/`port`), quiescence, the real
+ backup content-identity requirement and two-role nonce attestation;
 - the backup contract through the **real** `check_backup_evidence` on synthetic
-  backup trees (created with the real `create_live_backup`): the baseline id is the
-  verifier content identity (never the runner label), the verified per-root
-  evidence is preserved, live drift and a missing root map are refused before any
-  preparation, and the **real** `prepare_session` binds its open record to that
-  identity and root digests while keeping the label as display metadata only (the
-  supervisor never overwrites the certificate's returned identity);
+ backup trees (created with the real `create_live_backup`): the baseline id is the
+ verifier content identity (never the runner label), the verified per-root
+ evidence is preserved, live drift and a missing root map are refused before any
+ preparation, and the **real** `prepare_session` binds its open record to that
+ identity and root digests while keeping the label as display metadata only (the
+ supervisor never overwrites the certificate's returned identity);
 - the required Major League `config_digest` is fail-closed: a missing/malformed
-  digest refuses before the control service starts or any role spawns, with no
-  content-hash fallback;
+ digest refuses before the control service starts or any role spawns, with no
+ content-hash fallback;
 - server adaptation pin/hash/bind/admin, package-lock and runtime-dependency
-  binding, the full `runtime_files` dependency manifest, `dependency_hashes` and the
-  declared `native_files` set, the built `dist/main.js` patch and `built_files`
-  membership, the resolved Node hash, and manifest/root path confinement;
+ binding, the full `runtime_files` dependency manifest, `dependency_hashes` and the
+ declared `native_files` set, the built `dist/main.js` patch and `built_files`
+ membership, the resolved Node hash, and manifest/root path confinement;
 - prepare_server copies the gitignored dependency install tree (compiler + native
-  binaries) despite not being git-tracked, filters source by git-tracking only, and
-  writes a manifest that the real `verify_server_adaptation` accepts;
+ binaries) despite not being git-tracked, filters source by git-tracking only, and
+ writes a manifest that the real `verify_server_adaptation` accepts;
 - the bounded runtime/policy preflight is injectable and fail-closed, refuses a
-  daemon `start` before acknowledgement when the Lua runtime/policy source is
-  unavailable, and the default launch runner passes the prepared open record (never
-  a `nonce_factory`); the real certificate closure API (`session=`, `live_closed=`)
-  is exercised against a real open record, not just a fake signature;
+ daemon `start` before acknowledgement when the Lua runtime/policy source is
+ unavailable, and the default launch runner passes the prepared open record (never
+ a `nonce_factory`); the real certificate closure API (`session=`, `live_closed=`)
+ is exercised against a real open record, not just a fake signature;
 - listener loopback-only (IPv4 **and** IPv6) / owning-PID / admin-closed
-  enforcement, partial-family inventory refusal (`WindowsTcpTableProbe` per-family
-  status, including an admin family whose query is unavailable), non-strict
-  retention of the historical result, exclusive port probing and fixed-port policy;
+ enforcement, partial-family inventory refusal (`WindowsTcpTableProbe` per-family
+ status, including an admin family whose query is unavailable), non-strict
+ retention of the historical result, exclusive port probing and fixed-port policy;
 
 Separately, `tests/astra_listener_native.py` (owned and run by root, not part of
 this fixture suite) is an independent Windows-only checker that queries the real
@@ -587,35 +587,35 @@ TCP table for this process's own ephemeral `127.0.0.1` and `::1` listeners and
 exact PID, then closes them. It is a native OS-socket proof; it does not start
 Balatro and is not game/review acceptance.
 - typed descriptor construction (all keys + roots + enums), the derived Major
-  League digest passed into `ServiceConfig`, certificate-parity content hashing,
-  `mark_attested` strictly after both probes and before the attestation files,
-  server-before-roles ordering, descriptor-env-gap refusal, fail-closed-before-
-  launch, attestation failure, the human-retention / no-deadline honesty, the
-  unmeasured-failure **failure closure and persistent lockout** that is never
-  silently re-baselined (and is cleared only by an explicit `acknowledge`), a real
-  certificate `session_closure_unproven` followed by a successful `acknowledge`, a
-  pre-launch live reappearance that closes the never-spawned record as failed and
-  then recovers through `acknowledge`, a failed `Job.close` with a still-running
-  owned human (ownership retained, no failure closure, record stays open), a
-  delayed-but-proven owned exit that still completes the failure closure and
-  `acknowledge`, a persistence exception/refusal that leaves `_record_started`
-  set, an unexpected human exit (failure) versus a
-  service-authoritative `human_end` (completion), a real-certificate `human_end` with
-  the human window already exited (record `closed`, no lockouts) and its stuck-AI
-  variant (ownership retained, record stays open, no failure stamp), the public
-  `acknowledge` and `start` ops driving the pending-closure retry after both a stuck
-  owned handle and a one-shot persistence failure (and never retrying a still-running
-  supervisor thread), a non-forced `stop()` refusing with
-  `practice_host_closure_pending`, live-game-appears void + lockout, a
-  real-certificate live byte diff (record `failed` + byte-diff lockout, no pending
-  closure, and a public `stop()` that actually stops), `acknowledge`/`start`
-  refusing with `practice_host_closure_pending` while a retry still cannot close
-  without dropping the kept handles, concurrent pending-closure retries persisting
-  exactly once, listener-failure cleanup (roles never spawned) and
-  launch-failure cleanup, and the reserved-ticket release when the supervisor
-  factory raises;
+ League digest passed into `ServiceConfig`, certificate-parity content hashing,
+ `mark_attested` strictly after both probes and before the attestation files,
+ server-before-roles ordering, descriptor-env-gap refusal, fail-closed-before-
+ launch, attestation failure, the human-retention / no-deadline honesty, the
+ unmeasured-failure **failure closure and persistent lockout** that is never
+ silently re-baselined (and is cleared only by an explicit `acknowledge`), a real
+ certificate `session_closure_unproven` followed by a successful `acknowledge`, a
+ pre-launch live reappearance that closes the never-spawned record as failed and
+ then recovers through `acknowledge`, a failed `Job.close` with a still-running
+ owned human (ownership retained, no failure closure, record stays open), a
+ delayed-but-proven owned exit that still completes the failure closure and
+ `acknowledge`, a persistence exception/refusal that leaves `_record_started`
+ set, an unexpected human exit (failure) versus a
+ service-authoritative `human_end` (completion), a real-certificate `human_end` with
+ the human window already exited (record `closed`, no lockouts) and its stuck-AI
+ variant (ownership retained, record stays open, no failure stamp), the public
+ `acknowledge` and `start` ops driving the pending-closure retry after both a stuck
+ owned handle and a one-shot persistence failure (and never retrying a still-running
+ supervisor thread), a non-forced `stop()` refusing with
+ `practice_host_closure_pending`, live-game-appears void + lockout, a
+ real-certificate live byte diff (record `failed` + byte-diff lockout, no pending
+ closure, and a public `stop()` that actually stops), `acknowledge`/`start`
+ refusing with `practice_host_closure_pending` while a retry still cannot close
+ without dropping the kept handles, concurrent pending-closure retries persisting
+ exactly once, listener-failure cleanup (roles never spawned) and
+ launch-failure cleanup, and the reserved-ticket release when the supervisor
+ factory raises;
 - server environment allowlisting (SQLite path stays in the repo) and developer
-  launcher output confinement.
+ launcher output confinement.
 
 `tests/test_launcher_safety.py` adds the descriptor env allowlist (all keys),
 typed-only requirement, nonce/save-root/Mods-root/enum rejection and per-role
@@ -630,14 +630,14 @@ Balatro, touches a live path or contacts an external network.
 - No policy strategy; the control service and `policy_worker` remain the boundary.
 - No registry/service/task installation; developer scripts only.
 - No certificate rebase, re-record or live-content comparison: the immutable
-  certificate is only re-checked.
+ certificate is only re-checked.
 - No staged-data refresh: the host performs none. Any refresh is the certificate/
-  staging owner's path and is allowed only from the fresh *verified* backup, for
-  allowlisted profile-unlock files, and never from live Mod config/`.env`.
+ staging owner's path and is allowed only from the fresh *verified* backup, for
+ allowlisted profile-unlock files, and never from live Mod config/`.env`.
 - No live auto-restore after a diff: revocation + lockout + saved diff only, with
-  explicit user approval required for any restore.
+ explicit user approval required for any restore.
 - The runtime worker must still gate its own `hello`/`ready`/`start` on the same
-  nonce attestation; the host enforces it before server start/match authority.
+ nonce attestation; the host enforces it before server start/match authority.
 
 ## 14. API deltas and remaining dependencies (for root reconciliation)
 
@@ -647,38 +647,38 @@ This host slice assumes the certificate/launcher worker's
 any method is absent. The exact surface it calls:
 
 - `isolation_certificate.check_certificate(staging_root, live=, port=)` and
-  `lockout(staging_root)` / `acknowledge_lockout(staging_root, operator=, reason=)`;
+ `lockout(staging_root)` / `acknowledge_lockout(staging_root, operator=, reason=)`;
 - `launch_practice.check_backup_evidence(backup_root, sources=)` (owned by the
-  launcher/backup worker): returns `ok`, `backup_id` (content-derived, 64-hex),
-  `backup_label` (display only), `manifest_sha256` and
-  `roots[key] = {source_root, files_digest, entry_manifest_sha256, file_count}`.
-  The host treats `backup_id` as the only backup identity, preserves the full
-  `roots` evidence, and passes both to `prepare_session`; it never substitutes a
-  runner label, `digest` alias or `id`;
+ launcher/backup worker): returns `ok`, `backup_id` (content-derived, 64-hex),
+ `backup_label` (display only), `manifest_sha256` and
+ `roots[key] = {source_root, files_digest, entry_manifest_sha256, file_count}`.
+ The host treats `backup_id` as the only backup identity, preserves the full
+ `roots` evidence, and passes both to `prepare_session`; it never substitutes a
+ runner label, `digest` alias or `id`;
 - `isolation_certificate.prepare_session(staging_root, live=, session_id=, port=,
-  closed_check=, backup_id=, backup_verify=, phase=MATCH)` — returns `nonce`,
-  `certificate_id`, `backup_id` (the evidence id it authenticated), `backup_label`,
-  `open_record` **and the open record mapping** (`record`). The host passes the
-  verifier content id and a `backup_verify` that re-runs the real verifier (fresh
-  identity plus `roots` evidence), requires the returned `backup_id` to equal that
-  verifier identity and never overwrites it. If the worker adds a `backup_root`
-  keyword the host passes `config.backup_root` automatically (signature-detected);
-  `backup_verify` is always passed; and the returned `record` mapping is what the
-  host forwards to `execute_launch(open_session=...)`;
+ closed_check=, backup_id=, backup_verify=, phase=MATCH)` — returns `nonce`,
+ `certificate_id`, `backup_id` (the evidence id it authenticated), `backup_label`,
+ `open_record` **and the open record mapping** (`record`). The host passes the
+ verifier content id and a `backup_verify` that re-runs the real verifier (fresh
+ identity plus `roots` evidence), requires the returned `backup_id` to equal that
+ verifier identity and never overwrites it. If the worker adds a `backup_root`
+ keyword the host passes `config.backup_root` automatically (signature-detected);
+ `backup_verify` is always passed; and the returned `record` mapping is what the
+ host forwards to `execute_launch(open_session=...)`;
 - `isolation_certificate.list_open_records(staging_root)`,
-  `bind_open_session(staging_root, session_id, pids=, spawn_time=)`,
-  `record_session_verdict(staging_root, session_id=, live=, **session=<retained
-  LaunchSession>**, **live_closed=<enumerator check>**, backup_id=,
-  certificate_id=)`, `record_session_failure(staging_root, session_id=, reason=)`,
-  `record_session_no_spawn(staging_root, session_id=, live=, backup_id=)`. All of
-  these (including `record_session_no_spawn`) are required
-  `_MEASUREMENT_API_METHODS` members, so a missing/renamed closure method refuses
-  the session before the open record is written instead of degrading to a wedge;
+ `bind_open_session(staging_root, session_id, pids=, spawn_time=)`,
+ `record_session_verdict(staging_root, session_id=, live=, **session=<retained
+ LaunchSession>**, **live_closed=<enumerator check>**, backup_id=,
+ certificate_id=)`, `record_session_failure(staging_root, session_id=, reason=)`,
+ `record_session_no_spawn(staging_root, session_id=, live=, backup_id=)`. All of
+ these (including `record_session_no_spawn`) are required
+ `_MEASUREMENT_API_METHODS` members, so a missing/renamed closure method refuses
+ the session before the open record is written instead of degrading to a wedge;
 - `isolation_certificate.write_launcher_attestation(staging_root, session_id=,
-  nonce=, control_port=, port=)`;
+ nonce=, control_port=, port=)`;
 - `isolation_certificate.collect_layer_m(staging_root)` (or
-  `certificate_or_empty(...)`) for the role-normalized Mods parity digest used as
-  both descriptors' `content_hash`.
+ `certificate_or_empty(...)`) for the role-normalized Mods parity digest used as
+ both descriptors' `content_hash`.
 
 Launcher deltas the host now follows (see `docs/RUNTIME_LAUNCHER.md` §15):
 `execute_launch(..., open_session=<prepared record>, session_descriptors=...)` with
@@ -695,45 +695,44 @@ provides the bounded AI receipt wait.
 Remaining dependencies / honest gaps:
 
 1. **No certificate exists yet** (no P1a/P1b/full-P1/crash/P2 evidence). With no
-   certificate, `check_certificate` fails and real sessions refuse — correct, not
-   a fallback.
+ certificate, `check_certificate` fails and real sessions refuse — correct, not
+ a fallback.
 2. **The prepared server is owned by root, not this worker.** `verify_server_adaptation`
-   requires the resolved Node executable/hash, the full `runtime_files` dependency
-   hash manifest, `dependency_hashes` for each declared runtime dependency, the
-   `native_files` set and the built `dist/main.js` loopback/admin patch. Root has
-   already run the real isolated build with `tools/prepare_server.py` (tracked
-   source only plus the reviewed gitignored dependency install tree wholesale,
-   including `typescript/bin/tsc` and native binaries), confirmed the resulting
-   manifest passes `verify_server_adaptation`, and moved the verified build to the
-   default `work/local-server` (`work/local-server-before-runtime-manifest` keeps
-   the prior one), so the default `HostConfig` no longer needs a rebuild. This
-   worker still does not run the build; root owns every real build and TCP test.
-   That is a build/verification result and is **not** game, launcher or Claude
-   review acceptance.
+ requires the resolved Node executable/hash, the full `runtime_files` dependency
+ hash manifest, `dependency_hashes` for each declared runtime dependency, the
+ `native_files` set and the built `dist/main.js` loopback/admin patch. Root has
+ already run the real isolated build with `tools/prepare_server.py` (tracked
+ source only plus the reviewed gitignored dependency install tree wholesale,
+ including `typescript/bin/tsc` and native binaries), confirmed the resulting
+ manifest passes `verify_server_adaptation`, and moved the verified build to the
+ default `work/local-server` (`work/local-server-before-runtime-manifest` keeps
+ the prior one), so the default `HostConfig` no longer needs a rebuild. This
+ worker still does not run the build; root owns every real build and TCP test.
+ That is a build/verification result and is **not** game, launcher or source review acceptance.
 3. The real Windows IPv4+IPv6 TCP-table probe has an independent native checker
-   (`tests/astra_listener_native.py`, run by root with the venv) that exercises the
-   OS socket inventory against only its own ephemeral `127.0.0.1`/`::1` sockets and
-   exact PID, then closes them. Passing it is an OS-socket-level result, **not**
-   Balatro engine isolation, and is **not** review acceptance. Root also verified
-   the native PowerShell enumerator against the checking process's own PID,
-   actual executable and creation-time record. The pinned MP client's retry
-   behaviour remains an actual-engine gate.
+ (`tests/astra_listener_native.py`, run by root with the venv) that exercises the
+ OS socket inventory against only its own ephemeral `127.0.0.1`/`::1` sockets and
+ exact PID, then closes them. Passing it is an OS-socket-level result, **not**
+ Balatro engine isolation, and is **not** review acceptance. Root also verified
+ the native PowerShell enumerator against the checking process's own PID,
+ actual executable and creation-time record. The pinned MP client's retry
+ behaviour remains an actual-engine gate.
 4. The companion's own env/attestation-path behaviour (H2) is owned by the
-   companion worker; this host consumes the frozen `expected_role_*` schema and
-   fixed path only.
+ companion worker; this host consumes the frozen `expected_role_*` schema and
+ fixed path only.
 5. Root ran `tests/astra_attestation_contract.py`: the actual certificate writer
-   produces files consumed by the Lua companion reader for both roles and both
-   runtimes. Matching records pass; changed nonces fail (eight checks). These
-   are synthetic certificate fixtures, not native Balatro attestation evidence.
+ produces files consumed by the Lua companion reader for both roles and both
+ runtimes. Matching records pass; changed nonces fail (eight checks). These
+ are synthetic certificate fixtures, not native Balatro attestation evidence.
 6. **The backup/session identity contract is owned by the isolation/launcher
-   worker.** This host consumes `check_backup_evidence` → `backup_id`
-   (content-derived), `backup_label`, `manifest_sha256` and
-   `roots[key] = {source_root, files_digest, entry_manifest_sha256, file_count}`,
-   and relies on `prepare_session` binding its before-snapshot to those root
-   digests and returning the authenticated `backup_id`. At the time of this
-   repair, root's `tests/astra_backup_session_contracts.py` was failing on an
-   in-progress `staging._digest` reference inside that worker; it now passes
-   against the landed API (verified independently by this worker). If those
-   fields are renamed or reshaped, the host fails closed
-   (`practice_requires_fresh_backup_baseline`) rather than substituting a label or
-   `digest` alias; it never edits the isolation-owned files.
+ worker.** This host consumes `check_backup_evidence` → `backup_id`
+ (content-derived), `backup_label`, `manifest_sha256` and
+ `roots[key] = {source_root, files_digest, entry_manifest_sha256, file_count}`,
+ and relies on `prepare_session` binding its before-snapshot to those root
+ digests and returning the authenticated `backup_id`. At the time of this
+ repair, root's `tests/astra_backup_session_contracts.py` was failing on an
+ in-progress `staging._digest` reference inside that worker; it now passes
+ against the landed API (verified independently by this worker). If those
+ fields are renamed or reshaped, the host fails closed
+ (`practice_requires_fresh_backup_baseline`) rather than substituting a label or
+ `digest` alias; it never edits the isolation-owned files.

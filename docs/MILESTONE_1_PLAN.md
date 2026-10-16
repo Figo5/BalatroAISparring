@@ -1,6 +1,6 @@
 # Milestone 1: companion scaffold
 
-Owner: Astra. Architectural authority: INTEGRATION_PLAN.md and PROTOTYPE_GATES.md. Milestone 0 is user-accepted. All development stays in this repository. No live Mods copies, game launches, server launches, or game termination are authorized by this milestone.
+Owner: review. Architectural authority: INTEGRATION_PLAN.md and PROTOTYPE_GATES.md. Milestone 0 is user-accepted. All development stays in this repository. No live Mods copies, game launches, server launches, or game termination are authorized by this milestone.
 
 ## Scope
 
@@ -16,8 +16,8 @@ Build a real Steamodded companion mod, pinned to the reviewed Multiplayer 0.5.5 
 6. Structured, bounded, allowlisted diagnostics; contain logger errors and bootstrap/module failures. Avoid secret, seed, user-path or arbitrary state dumps. Status returned to callers must not expose mutable internal state.
 7. Automated tests exercise actual entrypoint/module code using Lua 5.1 and LuaJIT where available: success, dependency failure matrix, flag behavior, bootstrap failures and forbidden side effects. Fixtures model installed loader/Multiplayer shapes; report fixture limitations honestly.
 8. Developer documentation explains layout, interfaces, test commands, dependency pin, failure states, flag semantics, future gates and no-live-install policy.
-9. Astra independently inspects all implementation files and runs tests. Claude Opus 5.5 High reviews the actual diff and evidence. DeepSeek fixes valid findings, Claude re-reviews significant fixes. No unresolved critical/high finding at repository acceptance.
+9. Review independently inspects all implementation files and runs tests. source reviews the actual diff and evidence. Development fixes valid findings, source review re-reviews significant fixes. No unresolved critical/high finding at repository acceptance.
 
 ## Workflow and evidence
 
-DeepSeek V4.1 Flash High is the primary implementation worker. Astra defines scope, verifies and owns Git history. Claude is the adversarial reviewer. Record exact worker models and reasoning settings, test counts, findings/dispositions, branch and commit. Milestone 2 does not start in this task. In-game loading/isolation are explicitly not proven by a fixture harness.
+Development is the primary implementation worker. Review defines scope, verifies and owns Git history. Source review is the adversarial reviewer. Record exact worker models and reasoning settings, test counts, findings/dispositions, branch and commit. Milestone 2 does not start in this task. In-game loading/isolation are explicitly not proven by a fixture harness.

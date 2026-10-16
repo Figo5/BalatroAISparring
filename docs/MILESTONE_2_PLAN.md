@@ -1,6 +1,6 @@
 # Milestone 2: observation and legal action boundary
 
-Architectural authority remains INTEGRATION_PLAN.md. M1 was accepted at 8bcccab. No game/server launches, live Mods writes, AI strategy/search/evaluation or M3 work. Astra owns acceptance; DeepSeek V4.1 Flash High implements; Claude Opus 5.5 High reviews actual source/diffs.
+Architectural authority remains INTEGRATION_PLAN.md. M1 was accepted at 8bcccab. No game/server launches, live Mods writes, AI strategy/search/evaluation or M3 work. Review owns acceptance; development implements; source reviews actual source/diffs.
 
 ## Interfaces and invariants
 
@@ -29,4 +29,4 @@ Legal fixtures cover all supported phases/action types, credit affordability, ca
 
 Seeded synthetic property tests check schema/identity/legality/bounds/determinism; the fixture PRNG is independent of game RNG and never exposed to policy. Benchmark typical fixtures and report build/enumeration time, canonical byte size and approximate allocation separately from game performance.
 
-DeepSeek performs a separate adversarial self-review before Claude, answering how a future policy could learn hidden information or cause illegal mutation. Astra independently attacks the boundary and runs strict Lua 5.1/LuaJIT suites. Claude examines actual source, tests and evidence; all critical/high and fairness-relevant medium findings must be resolved or strongly justified. Final commit must leave a clean tree. Stop after M2; actual runtime smoke remains pending and no prototype gate is implicitly passed.
+Development performs a separate adversarial self-review before source review, answering how a future policy could learn hidden information or cause illegal mutation. Review independently attacks the boundary and runs strict Lua 5.1/LuaJIT suites. Source review examines actual source, tests and evidence; all critical/high and fairness-relevant medium findings must be resolved or strongly justified. Final commit must leave a clean tree. Stop after M2; actual runtime smoke remains pending and no prototype gate is implicitly passed.

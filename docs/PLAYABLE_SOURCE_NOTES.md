@@ -1,4 +1,4 @@
-# Live-slice source notes (Astra)
+# Live-slice source notes (review)
 
 2026-09-27. Static evidence only; no launch proof yet.
 

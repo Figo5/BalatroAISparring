@@ -1,6 +1,6 @@
 # Prototype gates (actionable)
 
-No prototype is passed. Every launch precondition must hold before each step; a failed precondition aborts the step. This checklist incorporates G1-G6 from CLAUDE_M0_REREVIEW.md.
+No prototype is passed. Every launch precondition must hold before each step; a failed precondition aborts the step. This checklist incorporates G1-G6 from the m0 review.
 
 Crosswalk: integration-plan gate 1 = P1 static investigation; gate 2 = P0 + P1a; gate 3 = P1b + full P1 + P2; gate 4 = P3; gate 5 = P4. P5 adds configuration/license hygiene to all applicable gates. The research report's P1-P4 references use these same IDs.
 

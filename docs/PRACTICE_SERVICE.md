@@ -1,6 +1,6 @@
 # Practice control/policy service (`tools/practice_service.py`)
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 Status: bounded implementation of the launcher-owned loopback control/policy
 service described in `docs/PLAYABLE_RUNTIME_CONTRACT.md`. Ships with
 `tests/test_practice_service.py`. No game, Mods directory, live path, save,
@@ -13,38 +13,38 @@ two staged Balatro runtimes. It does exactly two things over one
 newline-delimited JSON channel bound to `127.0.0.1`:
 
 1. **Match coordination relay** — narrow, fixed-enum messages that carry the
-   session handshake, the human lobby code to the AI, ready confirmations and
-   the one-time start authorization. It never issues Multiplayer transport
-   commands, never connects to a game match server and never adjudicates a
-   match.
+ session handshake, the human lobby code to the AI, ready confirmations and
+ the one-time start authorization. It never issues Multiplayer transport
+ commands, never connects to a game match server and never adjudicates a
+ match.
 2. **Bounded AI decisions** — one outstanding decision per AI session. The AI
-   role submits a canonical exported observation; the service selects the
-   repository-owned baseline policy source for the trusted difficulty, runs the
-   existing `tools/policy_worker.py` in a separate bounded process and returns
-   the worker-validated action.
+ role submits a canonical exported observation; the service selects the
+ repository-owned baseline policy source for the trusted difficulty, runs the
+ existing `tools/policy_worker.py` in a separate bounded process and returns
+ the worker-validated action.
 
 Trust anchors (set at construction, never accepted from or mutable by a
 network client):
 
 - `session_id` — exact-match session identity.
 - two random per-role credentials — `human` and `ai`, distinct, generated with
-  `secrets.token_hex(32)` unless the launcher injects them.
+ `secrets.token_hex(32)` unless the launcher injects them.
 - `difficulty` — `rookie` | `competitive` | `major_league`.
 - `pacing` — `instant` | `normal` (the runtime owns the dispatch schedule; the
-  service never touches a game clock).
+ service never touches a game clock).
 - `mode` — `normal` | `gauntlet`, plus the `gauntlet` label when in gauntlet
-  mode.
+ mode.
 - `match_port` — the launcher-owned Multiplayer port (recorded only; the service
-  never opens it).
+ never opens it).
 - `log_root` — local diagnostics root.
 - `content_hash` — the verified content digest the runtimes must present in
-  `hello`.
+ `hello`.
 - `expected_config_digest` — **required**, the trusted host-derived Major League
-  configuration digest (FNV1a32, eight lowercase hex). It is not the game
-  content hash and there is no content-hash fallback.
+ configuration digest (FNV1a32, eight lowercase hex). It is not the game
+ content hash and there is no content-hash fallback.
 - `ruleset_id`, `gamemode`, `forced_options` — the trusted host-derived Major
-  League registry identity and forced configuration used only to expose the
-  forced **keyset** in `setup` (never the values).
+ League registry identity and forced configuration used only to expose the
+ forced **keyset** in `setup` (never the values).
 
 **Attestation gate (M8).** Every session starts *unattested*. Until the trusted
 Python host calls `mark_attested(expected_config_digest)`, the service refuses
@@ -89,29 +89,29 @@ expected digest) and any post-start config change are rejected.
 from practice_service import PracticeService, ServiceConfig
 
 config = ServiceConfig(
-    session_id="20260927T120000Z",
-    difficulty="competitive",
-    pacing="normal",
-    mode="gauntlet",
-    gauntlet="Test3",
-    match_port=8788,
-    log_root=r"C:\stage\logs\ai",
-    content_hash="<verified digest>",
-    expected_config_digest="<host-derived FNV1a32 hex>",   # required
-    ruleset_id="ruleset_mp_majorleague",
-    gamemode="gamemode_majorleague",
-    forced_options={"attrition": True, "base_time": 180},
+ session_id="20260927T120000Z",
+ difficulty="competitive",
+ pacing="normal",
+ mode="gauntlet",
+ gauntlet="Test3",
+ match_port=8788,
+ log_root=r"C:\stage\logs\ai",
+ content_hash="<verified digest>",
+ expected_config_digest="<host-derived FNV1a32 hex>", # required
+ ruleset_id="ruleset_mp_majorleague",
+ gamemode="gamemode_majorleague",
+ forced_options={"attrition": True, "base_time": 180},
 )
-service = PracticeService(config)          # credentials generated here, unattested
-service.human_credential                    # launcher-only; never logged
+service = PracticeService(config) # credentials generated here, unattested
+service.human_credential # launcher-only; never logged
 service.ai_credential
-service.gauntlet_seed                       # "AISP0003" or None
+service.gauntlet_seed # "AISP0003" or None
 
 # ...both staged role probes verified, open-record checked...
-service.mark_attested(config.expected_config_digest)   # trusted port, opens the gate
-port = service.start()                      # binds 127.0.0.1:0 by default
+service.mark_attested(config.expected_config_digest) # trusted port, opens the gate
+port = service.start() # binds 127.0.0.1:0 by default
 ...
-service.close()                             # stops server and cancels child
+service.close() # stops server and cancels child
 ```
 
 `start()` binds `127.0.0.1` only (any other host is rejected) on the requested
@@ -150,7 +150,7 @@ are selected by the original Multiplayer server, never by this service.
 - Request cap: 2 MiB. Response cap: 64 KiB. Observation cap: 1 MiB and depth 16.
 - JSON must not contain duplicate keys, `NaN` or `Infinity`.
 - Per-connection rate limit (default 120 requests/second) and a bounded
-  concurrent-connection count (default 8). Excess returns a bounded error.
+ concurrent-connection count (default 8). Excess returns a bounded error.
 
 ### 3.1 Request envelope (strict)
 
@@ -170,25 +170,25 @@ survives JSON encoders that drop nils.
 ### 3.2 Authentication and sequencing
 
 - `session` is compared to the trusted `session_id` with a constant-time
-  compare (`hmac.compare_digest`).
+ compare (`hmac.compare_digest`).
 - `role` must be `human` or `ai`; `credential` must constant-time match that
-  role's credential. A valid credential for the other role fails.
+ role's credential. A valid credential for the other role fails.
 - Fixed per-op role rules: `lobby_code` and `start` are human-only; `join_code`,
-  `decide_begin`, `decide_poll`, `decide_cancel` and `decision_result` are
-  AI-only. Wrong role → `practice_bad_role`. The role rule is checked in the same
-  authenticated envelope flow as every other op: a caller must still present the
-  session and the role credential, so the human credential can never issue a
-  cancel.
+ `decide_begin`, `decide_poll`, `decide_cancel` and `decision_result` are
+ AI-only. Wrong role → `practice_bad_role`. The role rule is checked in the same
+ authenticated envelope flow as every other op: a caller must still present the
+ session and the role credential, so the human credential can never issue a
+ cancel.
 - Every non-poll request must use a `sequence` strictly greater than that
-  role's last accepted value. Duplicates and out-of-order requests →
-  `practice_replay` (the value is consumed on the first accepted request).
+ role's last accepted value. Duplicates and out-of-order requests →
+ `practice_replay` (the value is consumed on the first accepted request).
 - `decide_poll` is special: its `sequence` identifies the outstanding job and
-  must equal the pending `decide_begin` sequence; it is not a monotonic counter
-  and polling an unknown/consumed sequence is a bounded error, never a reset.
+ must equal the pending `decide_begin` sequence; it is not a monotonic counter
+ and polling an unknown/consumed sequence is a bounded error, never a reset.
 - **Attestation gate (checked after auth, before the sequence counter is
-  consumed):** while the session is unattested, gated ops return
-  `practice_not_attested` and the role's sequence is *not* advanced, so a retry
-  after `mark_attested` works with the same sequence.
+ consumed):** while the session is unattested, gated ops return
+ `practice_not_attested` and the role's sequence is *not* advanced, so a retry
+ after `mark_attested` works with the same sequence.
 
 ### 3.3 Responses
 
@@ -221,37 +221,37 @@ human terminal `end`, only `status`, `end` and `decision_result` are accepted
 `end` no longer tears the session down from either role:
 
 - **Human coordinator END.** Requires `started` and a valid terminal `result`
-  (`human_win`, `ai_win`, `draw`, `aborted`, `unknown`); an `end` before start →
-  `practice_not_started`, and a human `end` without a result → `practice_bad_payload`.
-  On acceptance it sets the terminal state and cancels any outstanding decision.
-  It is idempotent: a duplicate human `end` returns a
-  stable `practice_ok` with `"duplicate": true` and writes no second summary.
+ (`human_win`, `ai_win`, `draw`, `aborted`, `unknown`); an `end` before start →
+ `practice_not_started`, and a human `end` without a result → `practice_bad_payload`.
+ On acceptance it sets the terminal state and cancels any outstanding decision.
+ It is idempotent: a duplicate human `end` returns a
+ stable `practice_ok` with `"duplicate": true` and writes no second summary.
 - **AI END receipt.** Recorded as `ai_end` and **never authorizes teardown on its
-  own**. It may arrive before or after the human END. Response:
-  `{"ok":true,"code":"practice_ok","role":"ai","recorded":bool,"terminal":bool,
-  "ended":bool,"terminal_phase":"none|awaiting_ai|closed"}`.
+ own**. It may arrive before or after the human END. Response:
+ `{"ok":true,"code":"practice_ok","role":"ai","recorded":bool,"terminal":bool,
+ "ended":bool,"terminal_phase":"none|awaiting_ai|closed"}`.
 - **Bounded AI receipt grace.** After a human END with no AI receipt yet, the
-  terminal phase is `awaiting_ai` with a bounded `ai_receipt_grace` (default 30 s);
-  when it elapses (or the AI receipt arrives) the phase closes. The host keeps the
-  loopback server and service until the human exits — this grace only bounds the
-  receipt wait, and the human's results state is retained, not required to stay
-  pending forever.
+ terminal phase is `awaiting_ai` with a bounded `ai_receipt_grace` (default 30 s);
+ when it elapses (or the AI receipt arrives) the phase closes. The host keeps the
+ loopback server and service until the human exits — this grace only bounds the
+ receipt wait, and the human's results state is retained, not required to stay
+ pending forever.
 - **Exactly one terminal summary, written at closure (M-7).** The single summary is
-  written only once the terminal phase reaches `closed` — the AI receipt, the grace
-  expiry, an abort, or `close()`. It records the service's own counters, seed,
-  difficulty, known lives, duration, result and reason, **plus the AI END's own
-  reported result/lives/counters** (`ai_result`, `ai_human_lives`, `ai_ai_lives`,
-  `ai_ante`, `ai_round`, `ai_duration_seconds`, `ai_decisions`, `ai_rejected`,
-  `ai_errors`) and flags a human/AI winner disagreement as `result_conflict`. Error,
-  `error` op, role-lost watchdog, pre-start timeout, explicit `abort()` and
-  `close()` all funnel through the same idempotent writer, so a session produces at
-  most one terminal summary — never full state. If the human coordinator already
-  reported an authoritative END (and the terminal phase is `awaiting_ai`), a later
-  abort/close preserves that human `result`/`reason` and records the abort code only
-  as `last_error`; the abort never overwrites the human's result.
+ written only once the terminal phase reaches `closed` — the AI receipt, the grace
+ expiry, an abort, or `close()`. It records the service's own counters, seed,
+ difficulty, known lives, duration, result and reason, **plus the AI END's own
+ reported result/lives/counters** (`ai_result`, `ai_human_lives`, `ai_ai_lives`,
+ `ai_ante`, `ai_round`, `ai_duration_seconds`, `ai_decisions`, `ai_rejected`,
+ `ai_errors`) and flags a human/AI winner disagreement as `result_conflict`. Error,
+ `error` op, role-lost watchdog, pre-start timeout, explicit `abort()` and
+ `close()` all funnel through the same idempotent writer, so a session produces at
+ most one terminal summary — never full state. If the human coordinator already
+ reported an authoritative END (and the terminal phase is `awaiting_ai`), a later
+ abort/close preserves that human `result`/`reason` and records the abort code only
+ as `last_error`; the abort never overwrites the human's result.
 - **Post-end decision receipts.** `decision_result` is still accepted after the
-  human END for sequences this service issued (bounded by the recent-commit ring),
-  so the AI's final receipt is recorded rather than lost.
+ human END for sequences this service issued (bounded by the recent-commit ring),
+ so the AI's final receipt is recorded rather than lost.
 
 Host-facing APIs: `service.attested`, `service.aborted`, `service.terminal_phase`,
 `service.terminal_reason` (only `"human_end"` is a normal completion; every other
@@ -292,16 +292,16 @@ factory in a dedicated restricted interpreter that loads only
 `io`/`os`/`debug`/`package`/`require`/`dofile`/`load*`/`collectgarbage` removed):
 
 1. The raw client frame is rebuilt as a genuine Lua table with the worker's own
-   bounded converter (`policy_worker._to_lua` plus a Lua-owned `newtable`
-   factory); a wrapped Python mapping is userdata inside Lua and is never passed
-   into the restricted runtime.
+ bounded converter (`policy_worker._to_lua` plus a Lua-owned `newtable`
+ factory); a wrapped Python mapping is userdata inside Lua and is never passed
+ into the restricted runtime.
 2. `Observation.observe(frame)` re-validates and canonicalizes the frame; unknown
-   and extra fields are dropped by the schema.
+ and extra fields are dropped by the schema.
 3. `Observation.export(handle)` yields the plain sanitized export.
 4. The export is re-observed with the worker's public `opponent.certified`
-   reconstruction and its canonical string must equal the first canonical
-   string. An unequal roundtrip, an unobservable frame or a failed conversion is
-   rejected with `practice_bad_observation` before any subprocess is launched.
+ reconstruction and its canonical string must equal the first canonical
+ string. An unequal roundtrip, an unobservable frame or a failed conversion is
+ rejected with `practice_bad_observation` before any subprocess is launched.
 
 Only the resulting sanitized export is placed in the worker request, so a
 poisoned raw frame (seed, future shop, hidden order, session secret) cannot
@@ -316,21 +316,21 @@ observation:
 - The observation must be a dict, ≤ 1 MiB serialized, depth ≤ 16.
 - The session must be started; otherwise `practice_not_started`.
 - If any decision is already pending (including an unpolled completed result)
-  the request returns `practice_decision_outstanding`. The slot is single-use
-  and is cleared only by `decide_poll`, by a matching wire `decide_cancel`, or by
-  `cancel_decision()`/`close()`. `decide_begin` never silently replaces a pending
-  job.
+ the request returns `practice_decision_outstanding`. The slot is single-use
+ and is cleared only by `decide_poll`, by a matching wire `decide_cancel`, or by
+ `cancel_decision()`/`close()`. `decide_begin` never silently replaces a pending
+ job.
 - On success the service starts the worker asynchronously and returns
-  `{"ok":true,"code":"practice_decision_pending","sequence":N}` immediately, so
-  the game main thread is never blocked.
+ `{"ok":true,"code":"practice_decision_pending","sequence":N}` immediately, so
+ the game main thread is never blocked.
 
 `decide_poll` (AI only) with the same `sequence` and `observation` null/`{}`:
 
 - `practice_decision_pending` — still running.
 - `practice_decision_ready` — `action` is the worker-validated action; the slot
-  is consumed.
+ is consumed.
 - the bounded failure code (for example `practice_decision_timeout`,
-  `policy_bad_source`) — the slot is consumed.
+ `policy_bad_source`) — the slot is consumed.
 - `practice_decision_unknown` — no job matches that sequence; no state change.
 
 ### 5.1.1 Wire cancel (`decide_cancel`)
@@ -339,30 +339,30 @@ observation:
 decision is abandoned and reissued. It is a distinct request, not a poll:
 
 - **Envelope:** the request takes a fresh monotonic wire `sequence`, exactly like
-  every non-poll op. It is a replay-protected counter, not the cancelled job's
-  sequence.
+ every non-poll op. It is a replay-protected counter, not the cancelled job's
+ sequence.
 - **Payload:** exactly `{"decision_sequence": <int>}` — the original wire
-  `decide_begin` sequence the caller owns. Any other key, a missing key, or a
-  non-int value returns `practice_bad_payload`.
+ `decide_begin` sequence the caller owns. Any other key, a missing key, or a
+ non-int value returns `practice_bad_payload`.
 - **Matching:** the service compares `decision_sequence` against the **currently
-  pending** job. Only an exact match cancels. A request that names a different,
-  stale, already-consumed or never-issued sequence returns
-  `practice_decision_unknown` and leaves the outstanding job untouched
-  (`decision_sequence` is echoed back). One job can never cancel another.
+ pending** job. Only an exact match cancels. A request that names a different,
+ stale, already-consumed or never-issued sequence returns
+ `practice_decision_unknown` and leaves the outstanding job untouched
+ (`decision_sequence` is echoed back). One job can never cancel another.
 - **Effect on a match:** the owned flag is set and the slot is cleared under the
-  service lock (so a worker that races completion cannot finish the job after the
-  cancel is accepted), then **only that job's exact child process** is terminated
-  — the stored `Popen` handle, never another process. The response is
-  `{"ok":true,"code":"practice_decision_cancelled","sequence":N}`.
+ service lock (so a worker that races completion cannot finish the job after the
+ cancel is accepted), then **only that job's exact child process** is terminated
+ — the stored `Popen` handle, never another process. The response is
+ `{"ok":true,"code":"practice_decision_cancelled","sequence":N}`.
 - **Duplicate/unknown are bounded and non-fatal:** a second cancel for the same
-  sequence, or a cancel when nothing is pending, returns
-  `practice_decision_unknown` and does not abort the session. The runtime must
-  treat `practice_decision_unknown` (and a duplicate cancel) as a benign no-op,
-  not as a match-ending error; only a malformed protocol (`practice_bad_role`,
-  `practice_bad_shape`, wrong credential/session) is fatal.
+ sequence, or a cancel when nothing is pending, returns
+ `practice_decision_unknown` and does not abort the session. The runtime must
+ treat `practice_decision_unknown` (and a duplicate cancel) as a benign no-op,
+ not as a match-ending error; only a malformed protocol (`practice_bad_role`,
+ `practice_bad_shape`, wrong credential/session) is fatal.
 - **After cancel:** a poll for the cancelled sequence returns
-  `practice_decision_unknown` (the slot is gone), and a fresh `decide_begin` is
-  immediately accepted and can reach `practice_decision_ready`.
+ `practice_decision_unknown` (the slot is gone), and a fresh `decide_begin` is
+ immediately accepted and can reach `practice_decision_ready`.
 
 ### 5.1.2 Cancel-timeout contract for the runtime worker
 
@@ -389,15 +389,15 @@ action is never logged as executed; only a receipt from the runtime is.
 Exactly-once per sequence:
 
 - The first receipt for a sequence is logged; the response carries
-  `"duplicate": false`.
+ `"duplicate": false`.
 - An identical repeat returns `practice_ok` with `"duplicate": true` and writes
-  nothing more.
+ nothing more.
 - A **conflicting** repeat (`accepted`/`code`/`version`/`tick`/`reason` differ)
-  returns `practice_result_conflict` and neither logs nor overwrites the first.
+ returns `practice_result_conflict` and neither logs nor overwrites the first.
 - A rejected first receipt (`accepted: false`) increments the service `rejected`
-  counter, which is merged into the terminal summary.
+ counter, which is merged into the terminal summary.
 - Receipts remain accepted after the human terminal END for recently issued
-  sequences.
+ sequences.
 
 ### 5.3 Role watchdog
 
@@ -420,46 +420,46 @@ The service rebuilds the worker request from scratch:
 ```
 
 - `observation` is the canonical sanitized export from §5.0, never the raw
-  client frame.
+ client frame.
 - `source` is rendered once per difficulty from `AISparring/ai/baseline_policy.lua`
-  in a restricted `lupa` `LuaRuntime` (`register_eval=False`,
-  `register_builtins=False`, host globals removed) that loads nothing else. No
-  client-supplied source is ever used, and the renderer is trusted code (it is
-  not an OS sandbox).
+ in a restricted `lupa` `LuaRuntime` (`register_eval=False`,
+ `register_builtins=False`, host globals removed) that loads nothing else. No
+ client-supplied source is ever used, and the renderer is trusted code (it is
+ not an OS sandbox).
 - `runtime` is always `luajit21`; the worker applies the 64 MiB Lua VM cap.
 - The request contains no session id, credential, seed, private token, config,
-  log path or raw engine state.
+ log path or raw engine state.
 - The worker runs in a separate process with a hard timeout (default 10 s). On
-  timeout the exact child is killed and the decision fails
-  `practice_decision_timeout`. Output is read bounded and must parse as the
-  worker's bounded JSON response.
+ timeout the exact child is killed and the decision fails
+ `practice_decision_timeout`. Output is read bounded and must parse as the
+ worker's bounded JSON response.
 
 ## 6. Logging
 
 `LocalLogger` writes bounded JSONL under `log_root`:
 
 - `decisions.jsonl` — `timestamp, tick, session, ruleset, difficulty, phase,
-  hash, legalcount, action, reason, latency, version, errors, seed`. `action` is
-  a bounded summary (type and ref counts only); the observation and credentials
-  are never logged. `hash` is the canonical observation hash from §5.0.
-  `legalcount` is `null` here because candidate counting is owned by the runtime
-  decision loop, which has its own trusted logger. `seed` is the **trusted**
-  seed only, never a seed taken from a request or observation.
+ hash, legalcount, action, reason, latency, version, errors, seed`. `action` is
+ a bounded summary (type and ref counts only); the observation and credentials
+ are never logged. `hash` is the canonical observation hash from §5.0.
+ `legalcount` is `null` here because candidate counting is owned by the runtime
+ decision loop, which has its own trusted logger. `seed` is the **trusted**
+ seed only, never a seed taken from a request or observation.
 - `summary.jsonl` — exactly one terminal row per session, written by the
-  idempotent terminal writer once the terminal phase closes (human `end` + AI
-  receipt/grace, `error`/abort, role-lost, pre-start timeout or `close()`). Fields:
-  `result, reason, human_lives, ai_lives, ante, round, duration_seconds, decisions,
-  rejected, errors, terminal, terminal_phase, human_end_received, ai_end_received,
-  ai_result, ai_human_lives, ai_ai_lives, ai_ante, ai_round, ai_duration_seconds,
-  ai_decisions, ai_rejected, ai_errors, result_conflict, seed`. The
-  `decisions`/`rejected`/`errors` values **merge** the service's own counters with
-  the bounded client counts using `max(...)` — a client can never overwrite the
-  service counters downward — and only known lives/duration/result/reason are
-  included, never full engine state. The `ai_*` fields record the AI END's own
-  report and `result_conflict` is true when the human and AI winners disagree (M-7).
+ idempotent terminal writer once the terminal phase closes (human `end` + AI
+ receipt/grace, `error`/abort, role-lost, pre-start timeout or `close()`). Fields:
+ `result, reason, human_lives, ai_lives, ante, round, duration_seconds, decisions,
+ rejected, errors, terminal, terminal_phase, human_end_received, ai_end_received,
+ ai_result, ai_human_lives, ai_ai_lives, ai_ante, ai_round, ai_duration_seconds,
+ ai_decisions, ai_rejected, ai_errors, result_conflict, seed`. The
+ `decisions`/`rejected`/`errors` values **merge** the service's own counters with
+ the bounded client counts using `max(...)` — a client can never overwrite the
+ service counters downward — and only known lives/duration/result/reason are
+ included, never full engine state. The `ai_*` fields record the AI END's own
+ report and `result_conflict` is true when the human and AI winners disagree (M-7).
 - `results.jsonl` — the broker/engine receipt rows from §5.2: `timestamp,
-  session, ruleset, difficulty, sequence, accepted, code, version_id, tick,
-  reason, seed, version`. One row per sequence.
+ session, ruleset, difficulty, sequence, accepted, code, version_id, tick,
+ reason, seed, version`. One row per sequence.
 
 The seed is set **only** through the trusted `status` setter (validated
 `[0-9A-Za-z_-]{1,32}`), **only** by the human role (validated before any
@@ -519,39 +519,39 @@ module:
 
 - config/gauntlet validation, random distinct credentials, loopback-only bind;
 - strict envelope shape, session/credential/role auth, per-op role rules,
-  replay and ordering, per-role independence;
+ replay and ordering, per-role independence;
 - rate-limit and connection-slot bounds, request/observation size and depth;
 - begin/poll lifecycle, single outstanding slot, unknown-poll safety,
-  start requirement;
+ start requirement;
 - wire `decide_cancel`: a real owned job is cancelled and only its exact child
-  dies, the slot frees and a new decision reaches `practice_decision_ready`; a
-  wrong `decision_sequence` returns `practice_decision_unknown` and leaves the
-  owned job running to completion; human role rejection, exact-payload
-  validation, envelope replay and duplicate/unknown bounded non-fatal codes;
+ dies, the slot frees and a new decision reaches `practice_decision_ready`; a
+ wrong `decision_sequence` returns `practice_decision_unknown` and leaves the
+ owned job running to completion; human role rejection, exact-payload
+ validation, envelope replay and duplicate/unknown bounded non-fatal codes;
 - canonical observation boundary: a poisoned raw frame (seed, future shop,
-  hidden order, session secret) is re-sanitized so none of those fields reaches
-  the captured worker request, a malformed frame is rejected, and the decision
-  row carries the trusted seed rather than the observation seed;
+ hidden order, session secret) is re-sanitized so none of those fields reaches
+ the captured worker request, a malformed frame is rejected, and the decision
+ row carries the trusted seed rather than the observation seed;
 - hidden-request capture (no credential/session/seed/config in the worker
-  request), real worker timeout with exact-child termination, failure
-  propagation to both roles, cancel/close cleanup;
+ request), real worker timeout with exact-child termination, failure
+ propagation to both roles, cancel/close cleanup;
 - coordination lobby/join/ready/start, config mismatch, freeze, one-time start,
-  trusted `setup` (forced keyset + expected digest), heartbeat/watchdog abort;
+ trusted `setup` (forced keyset + expected digest), heartbeat/watchdog abort;
 - the attestation gate: gated ops refuse with `practice_not_attested` before the
-  trusted `mark_attested`, `status` still works, a mismatched attestation digest
-  is refused, and `mark_attested` is not a wire op;
+ trusted `mark_attested`, `status` still works, a mismatched attestation digest
+ is refused, and `mark_attested` is not a wire op;
 - the digest contract: `fnv1a32_hex` and `major_league_digest` parity against the
-  real Lua `codec.lua`, and `ready` pinned to the host-derived expected digest;
+ real Lua `codec.lua`, and `ready` pinned to the host-derived expected digest;
 - the terminal lifecycle: AI-only END does not terminate, human END requires
-  `start` and a terminal result, one idempotent summary, bounded `awaiting_ai`
-  phase, post-end decision receipts and exactly-once `decision_result` with
-  conflict rejection;
+ `start` and a terminal result, one idempotent summary, bounded `awaiting_ai`
+ phase, post-end decision receipts and exactly-once `decision_result` with
+ conflict rejection;
 - the pre-start deadline aborting an attested-but-unstarted session;
 - decision and summary logging including the trusted seed and the merged
-  terminal counters, and the separate `decision_result` broker-receipt rows
-  matched to issued decisions;
+ terminal counters, and the separate `decision_result` broker-receipt rows
+ matched to issued decisions;
 - real baseline source rendering and a real `tools/policy_worker.py` subprocess
-  returning a legal action under LuaJIT 2.1, plus a poisoned-observation probe;
+ returning a legal action under LuaJIT 2.1, plus a poisoned-observation probe;
 - the Lua `control_protocol.lua` mirror (including the terminal codes/phases);
 - a loopback socket round trip with the per-connection rate limit.
 
@@ -565,7 +565,7 @@ No test starts Balatro, reads live paths or contacts an external network.
 - No connection to a game match server and no adjudication.
 - No environment-variable wiring; the launcher owns credential delivery.
 - The service never reads live saves or live game state; it receives only the
-  allowlisted observation and reports bounded counters.
+ allowlisted observation and reports bounded counters.
 
 ## 11. Host / runtime integration deltas
 
@@ -576,32 +576,32 @@ here so the integration lands in one pass.
 Host (`practice_host.py`):
 
 1. Pass `expected_config_digest` (host-derived from the pinned
-   `rulesets/majorleague.lua`) and, when available, `ruleset_id`, `gamemode` and
-   `forced_options` into `ServiceConfig`. Use `major_league_digest(...)` (or the
-   equivalent host helper) so the expected value matches the FNV1a32 contract.
+ `rulesets/majorleague.lua`) and, when available, `ruleset_id`, `gamemode` and
+ `forced_options` into `ServiceConfig`. Use `major_league_digest(...)` (or the
+ equivalent host helper) so the expected value matches the FNV1a32 contract.
 2. After both role probes and the open-record check pass, and **before** the
-   atomic attestation writer publishes the file, call
-   `service.mark_attested(config.expected_config_digest)`.
+ atomic attestation writer publishes the file, call
+ `service.mark_attested(config.expected_config_digest)`.
 3. On terminal handling, keep the loopback server and service alive until the
-   human exits: read `status`'s `terminal`/`terminal_phase`/
-   `human_end_received`/`ai_end_received` (or `service.terminal_summary()`) and
-   only wait the bounded AI receipt grace; do not tear down on the AI receipt
-   alone, and do not consume the human's results state.
+ human exits: read `status`'s `terminal`/`terminal_phase`/
+ `human_end_received`/`ai_end_received` (or `service.terminal_summary()`) and
+ only wait the bounded AI receipt grace; do not tear down on the AI receipt
+ alone, and do not consume the human's results state.
 4. Surface the terminal result/reason in the menu ticket (status carries them).
 5. The match server may need to listen before the role spawns (H3) — that is a
-   host ordering fix, orthogonal to this service.
+ host ordering fix, orthogonal to this service.
 
 Runtime (`AISparring/integration/*`):
 
 1. Companion/observer must read the frozen `BALATRO_AI_ROLE` /
-   `AISP_EXPECTED_ROLE_*` names (H2) — host/companion scope, unchanged here.
+ `AISP_EXPECTED_ROLE_*` names (H2) — host/companion scope, unchanged here.
 2. The runtime computes the **actual** Major League digest from the live
-   `MP.LOBBY.config` forced values locally and sends it as `ready.config_digest`;
-   it must never echo the `expected_config_digest` returned by `setup`.
+ `MP.LOBBY.config` forced values locally and sends it as `ready.config_digest`;
+ it must never echo the `expected_config_digest` returned by `setup`.
 3. `end` must be sent as the human coordinator only, with a terminal result,
-   after start; the AI role sends its END as a receipt (before or after).
+ after start; the AI role sends its END as a receipt (before or after).
 4. Treat `practice_not_attested`, `practice_config_mismatch`,
-   `practice_result_conflict` and `practice_ended` as bounded, non-crashing
-   codes. The cross-service fixture
-   (`tests/test_runtime_cross_service.py`) must be updated to call
-   `mark_attested` and to pass an `expected_config_digest`.
+ `practice_result_conflict` and `practice_ended` as bounded, non-crashing
+ codes. The cross-service fixture
+ (`tests/test_runtime_cross_service.py`) must be updated to call
+ `mark_attested` and to pass an `expected_config_digest`.

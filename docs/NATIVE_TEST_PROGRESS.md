@@ -18,17 +18,17 @@ After the first real Multiplayer load, Lovely regenerated its separate **unpatch
 
 The failed session has no open ownership records and no remaining Balatro processes. A fresh backup comparison after the refusal passed with no live changes. The lockout remains recorded for explicit acknowledgement after the correction has passed review.
 
-DeepSeek is correcting only the exact generated cache classification. Live snapshots/backups must remain complete, ordinary mod sources must remain immutable, and the separate fresh **patched** dump evidence remains mandatory. Native tests pause for independent checks and Claude review of this fix.
+Development is correcting only the exact generated cache classification. Live snapshots/backups must remain complete, ordinary mod sources must remain immutable, and the separate fresh **patched** dump evidence remains mandatory. Native tests pause for independent checks and source review of this fix.
 
-Astra independently verified the fix with 52/52 staging cases, 52/52 certificate cases, 48/48 installer cases and three backup/session contracts. An additional independent boundary check reproduced the failure before the patch, then passed across Mods, staged-role and bootstrap policies: generated-cache rewrites are ignored only in the exact output location, three source-change cases remain detectable, and complete backups still contain cache files. Tested source and suite hashes remained unchanged through these runs. Claude review remains pending.
+Review independently verified the fix with 52/52 staging cases, 52/52 certificate cases, 48/48 installer cases and three backup/session contracts. An additional independent boundary check reproduced the failure before the patch, then passed across Mods, staged-role and bootstrap policies: generated-cache rewrites are ignored only in the exact output location, three source-change cases remain detectable, and complete backups still contain cache files. Tested source and suite hashes remained unchanged through these runs. Source review remains pending.
 
 ## Build coverage correction
 
-The first staging pass copied the existing installed mods but omitted the new companion package. Astra caught this before any match or installation. The verified `0.1.0-dev` package is now prepared in ignored `work/aisparring-package`; it has not been installed or copied into the staged roles yet. The final staged role trees will include its exact packaged bytes before repeating the phase measurements. Earlier receipts will remain diagnostic history, not proof for changed tools or mod contents.
+The first staging pass copied the existing installed mods but omitted the new companion package. Review caught this before any match or installation. The verified `0.1.0-dev` package is now prepared in ignored `work/aisparring-package`; it has not been installed or copied into the staged roles yet. The final staged role trees will include its exact packaged bytes before repeating the phase measurements. Earlier receipts will remain diagnostic history, not proof for changed tools or mod contents.
 
 ## Fresh companion build pass
 
-Cache correction `cebd74e` passed Claude review (`CLAUDE_NATIVE_GAME_DUMP_REVIEW.md`) and Astra acceptance. The earlier lockout was explicitly acknowledged with its cause, and the full old staging tree and receipts were preserved in ignored `work/native-baseline-staging-20260928`. A fresh backup and new trees at the same staging root were then prepared. Both staged companion copies match package digest `988f3ef7932254e3376938ddd0e3213bd81a3092cb1bbcdb498803e5ece5f67c`.
+Cache correction `cebd74e` passed source review (`CLAUDE_NATIVE_GAME_DUMP_REVIEW.md`) and review acceptance. The earlier lockout was explicitly acknowledged with its cause, and the full old staging tree and receipts were preserved in ignored `work/native-baseline-staging-20260928`. A fresh backup and new trees at the same staging root were then prepared. Both staged companion copies match package digest `988f3ef7932254e3376938ddd0e3213bd81a3092cb1bbcdb498803e5ece5f67c`.
 
 | Fresh phase | Receipt / status |
 |---|---|
@@ -36,20 +36,20 @@ Cache correction `cebd74e` passed Claude review (`CLAUDE_NATIVE_GAME_DUMP_REVIEW
 | P1B | Passed: `f24f04b1ca6bac81367525ab44935cdd6c096d77ed9688affb6789089a5b355c` |
 | FULL_P1 | Passed: `822088ab217ef799bae44676434da4ad51bb3f877f308d16659ea9ec46027155` |
 | CRASH | Passed: `ccdc71e443b0c5ac4bf3228e17c12c4a58e7bbb7b4c998cd26b79380a14641aa` |
-| P2_INITIAL | Tool returned success, but Astra rejected phase compliance: both roles launched instead of AI-only. Receipt `a124ad57d85d6639d00b3c7a28ba5e6949c2625ea6e920c1f4e72f0eafb2d5a7` must not be used for acceptance. |
+| P2_INITIAL | Tool returned success, but review rejected phase compliance: both roles launched instead of AI-only. Receipt `a124ad57d85d6639d00b3c7a28ba5e6949c2625ea6e920c1f4e72f0eafb2d5a7` must not be used for acceptance. |
 | P2_CLOSE / P2_SILENT | Not started; paused for exact phase-role repair. |
 
 All completed runs reported zero changed live roots and all owned processes exited. After P1B both immutable role manifests passed with no additions, changes or missing files, proving the cache correction against real Lovely output. The companion loaded and detected Multiplayer 0.5.5; its match functionality stayed inactive in the absence of match descriptors during measurement, as intended.
 
-The P2 defect is concrete: `execute_launch` reloads the prepared phase but rebuilds a two-role plan without restricting its actual spawn set. The receipt declares `roles=[ai]` yet contains both `human` and `ai` PID keys. This could let the human role take the one-connection listener in subsequent phases. DeepSeek is repairing actual spawn selection and receipt validation to enforce the existing AI-only design. No architecture substitution, listener test, match, live installation or live-file write occurred. Native measurements pause for independent checks and Claude review; changed tool bindings require fresh evidence.
+The P2 defect is concrete: `execute_launch` reloads the prepared phase but rebuilds a two-role plan without restricting its actual spawn set. The receipt declares `roles=[ai]` yet contains both `human` and `ai` PID keys. This could let the human role take the one-connection listener in subsequent phases. Development is repairing actual spawn selection and receipt validation to enforce the existing AI-only design. No architecture substitution, listener test, match, live installation or live-file write occurred. Native measurements pause for independent checks and source review; changed tool bindings require fresh evidence.
 
 ## P2 role repair — accepted September 28 (evening)
 
-Codex reached its usage limit mid-verification; Claude Code (Opus 5.5) resumed orchestration from the uncommitted DeepSeek repair. The repair derives the spawn set only from the reloaded prepared phase (`expected_roles_for_phase`, `_restrict_plan_to_roles`) and binds receipts to exactly one retained process per expected role at record time (`_session_role_bindings`) and at every revalidation (`_receipt_role_problems`).
+Development reached its usage limit mid-verification; source review resumed orchestration from the uncommitted development repair. The repair derives the spawn set only from the reloaded prepared phase (`expected_roles_for_phase`, `_restrict_plan_to_roles`) and binds receipts to exactly one retained process per expected role at record time (`_session_role_bindings`) and at every revalidation (`_receipt_role_problems`).
 
 Independent rerun on the final tree (`work/p2fix-verify-2308.txt`): launcher 64/64, certificate 57/57, measurement lifecycle 11/11, P2 observer 6/6, staging 52/52, installer 48/48, host 87/87, plus `astra_p2_role_receipt_boundary.py`, `astra_p2_retained_identity.py`, `astra_certificate_attacks.py` and `astra_measurement_claims.py` all passing. Re-validating the rejected native receipt `a124ad57…` now returns `P2_INITIAL_receipt_owned_roles_mismatch`; it is kept as diagnostic history and never passed as a receipt ID.
 
-Claude Opus 5.5 High actual-diff review (`CLAUDE_NATIVE_P2_ROLE_REVIEW.md`): **ready for controlled native P2**, no Critical/High/Medium findings. Evidence-reuse decision: receipts do not bind tool hashes (the certificate binds them at issuance), the repair leaves P1A (bootstrap-only) and P1B/FULL_P1/CRASH (human+AI, same order) launch behaviour unchanged, adds only stricter recording/validation, and changes no staging, Lua patch or mod bytes. The fresh receipts P1A `f6360118…`, P1B `f24f04b1…`, FULL_P1 `822088ab…` and CRASH `ccdc71e4…` are therefore retained and re-validated by the current validator at prerequisite and certificate time; only P2_INITIAL, P2_CLOSE and P2_SILENT are regenerated, with no staging-tree or mod changes before those reruns. This narrows the earlier blanket "changed tool bindings require fresh evidence" note for this specific repair only.
+Source review actual-diff review (`CLAUDE_NATIVE_P2_ROLE_REVIEW.md`): **ready for controlled native P2**, no Critical/High/Medium findings. Evidence-reuse decision: receipts do not bind tool hashes (the certificate binds them at issuance), the repair leaves P1A (bootstrap-only) and P1B/FULL_P1/CRASH (human+AI, same order) launch behaviour unchanged, adds only stricter recording/validation, and changes no staging, Lua patch or mod bytes. The fresh receipts P1A `f6360118…`, P1B `f24f04b1…`, FULL_P1 `822088ab…` and CRASH `ccdc71e4…` are therefore retained and re-validated by the current validator at prerequisite and certificate time; only P2_INITIAL, P2_CLOSE and P2_SILENT are regenerated, with no staging-tree or mod changes before those reruns. This narrows the earlier blanket "changed tool bindings require fresh evidence" note for this specific repair only.
 
 ## Native P2 reruns after f643fac
 
@@ -59,7 +59,7 @@ Claude Opus 5.5 High actual-diff review (`CLAUDE_NATIVE_P2_ROLE_REVIEW.md`): **r
 | P2_CLOSE | **Passed.** Receipt `3e782e8792c56e1a202a0bc0f54308971b080128e3180d903efd978f9365187e`. One owned AI (PID 20840) was the accepted listener peer (`peer_is_owned_ai=true`), zero bytes sent, FIN then receive error then one exhausted bounded retry cycle; `closure_path=keepalive_fallback`. Zero live changes. |
 | P2_SILENT (first) | **Refused**, `P2_coverage_incomplete:keepalive`; lockout raised. Isolation held (one owned AI PID 8616, zero live changes). Root cause: the classifier required zero receive errors for the whole run, but the pinned Multiplayer packet coroutine performs one more `receive()` on the failed replacement client a tick after the exhausted keepalive cycle (`Socket is not connected`, +52 ms). Evidence preserved in `work/native-p2-silent-refused/`. |
 
-Correction: SILENT now refuses any receive error at/before the exhausted keepalive cycle's end and ignores only finite, strictly later errors; every other F1–F4 condition is unchanged. DeepSeek implemented; orchestrator hardened non-finite times and added tests; Claude Opus 5.5 High review `CLAUDE_NATIVE_P2_SILENT_REVIEW.md`: ready to rerun, no Critical/High/Medium. Independent live snapshots before and after all three runs: 982 live AppData files (Mods + saves) and 15 install files byte-identical.
+Correction: SILENT now refuses any receive error at/before the exhausted keepalive cycle's end and ignores only finite, strictly later errors; every other F1–F4 condition is unchanged. Development implemented; orchestrator hardened non-finite times and added tests; source review `CLAUDE_NATIVE_P2_SILENT_REVIEW.md`: ready to rerun, no Critical/High/Medium. Independent live snapshots before and after all three runs: 982 live AppData files (Mods + saves) and 15 install files byte-identical.
 
 | Phase | Result |
 |---|---|
@@ -73,7 +73,7 @@ Sampler note: the independent sampler for this rerun recorded no rows because th
 
 Certificate `fcee4a95…` was issued from the seven receipts above. Three real staged MATCH runs then went through the production practice host (`work/dev_match.py`; the only substitution is the live-exit trigger, which uses a PID confirmed absent because the companion is not yet installed live). Each run passed every gate, took a fresh backup, opened the certificate record, started the pinned local server, launched and attested both staged roles, then aborted safely with `practice_prestart_timeout`. Both clients left through ordinary `leaveLobby`, and each session record closed with a measured `passed` verdict (zero changed live roots).
 
-Root cause (service op trace + human Lovely log): the companion send guard treated Multiplayer's initial `MP.LOBBY.is_host = false` as "not host" and blocked the human's own first `createLobby`, so no lobby ever existed. Fixed in `e1e8a16` (Claude review `CLAUDE_MP_DRIVER_HOST_GUARD_REVIEW.md`). Because this changes staged companion bytes, the old staging tree and package were archived (`work/archive-staging-e1e8a16`, `work/archive-package-e1e8a16`), and the full build was repeated fresh: backup, bootstrap, role staging, package, placement, all seven phases with a fresh backup before each.
+Root cause (service op trace + human Lovely log): the companion send guard treated Multiplayer's initial `MP.LOBBY.is_host = false` as "not host" and blocked the human's own first `createLobby`, so no lobby ever existed. Fixed in `e1e8a16` (source review `CLAUDE_MP_DRIVER_HOST_GUARD_REVIEW.md`). Because this changes staged companion bytes, the old staging tree and package were archived (`work/archive-staging-e1e8a16`, `work/archive-package-e1e8a16`), and the full build was repeated fresh: backup, bootstrap, role staging, package, placement, all seven phases with a fresh backup before each.
 
 | Phase (build `e1e8a16`) | Receipt | Processes |
 |---|---|---|
@@ -98,7 +98,7 @@ All receipts recorded with zero changed live roots. The run was interrupted once
 - 20 s of continuous blocking ends in a clean `unlock_overlay_stuck` stop.
 - No coordinator step and no AI decision happen while a popup is up.
 
-The commit includes the reviewed coordinator diagnostics. The Claude Opus 5.5 High review cycle was READY, then BLOCKED on R1/N1 (a post-cap gate without a bound, and chained human graces), then READY for re-certification (`CLAUDE_UNLOCK_OVERLAY_REVIEW*.md`). Independent reruns: run_runtime 108/108 on lua51 and luajit21, and all 12 suites green. `test_practice_service` has an intermittent Windows temp-dir teardown race (WinError 145) that is unrelated to this change.
+The commit includes the reviewed coordinator diagnostics. The source review cycle was READY, then BLOCKED on R1/N1 (a post-cap gate without a bound, and chained human graces), then READY for re-certification (`CLAUDE_UNLOCK_OVERLAY_REVIEW*.md`). Independent reruns: run_runtime 108/108 on lua51 and luajit21, and all 12 suites green. `test_practice_service` has an intermittent Windows temp-dir teardown race (WinError 145) that is unrelated to this change.
 
 **Re-certification (build `c33bab6`).** The full fresh build (`work/recert-c33bab6`) produced receipts P1B `1465adac…`, FULL_P1 `816c1013…`, CRASH `506c4c88…`, P2_INITIAL `66ea87b6…`, P2_CLOSE `4089f8a7…` and P2_SILENT `6ae88c71…`, plus P1A. **Certificate `e9bc994a51a409a56c6e3f033f685c9ca1aaf25607c4ad75fe45b42f3d7d9a0d`: complete; check passes.**
 
@@ -124,16 +124,16 @@ User-approved in chat. Balatro was confirmed closed immediately before each live
 - **Install:** acceptance record `work/install-acceptance.json` binds the package digest and certificate `e9bc994a…`. The dry run returned `install_planned`, and `--execute` returned `installed` with receipt `work/install-receipts/aisparring-install-20260930T001746Z-a3877191.json`.
 - **Target:** `%APPDATA%\Balatro\Mods\AISparring`. An independent diff against the backup showed the only change was that new folder, identical to the package. The install directory was unchanged.
 - **Live smoke:**
-  - The practice host daemon was started (`practice_host.py serve --match-port 8788`, loopback, discovery marker written). Live Balatro was launched once through Steam.
-  - Lovely log `lovely-2026.09.29-20.18.32.log` showed `bootstrap_ready`, Multiplayer 0.5.5 satisfied and `companion_boot ok` (live role: practice menu and controller installed). There were no errors or tracebacks. The main menu screenshot showed Steamodded, Multiplayer 0.5.5 and "Connected to Service".
-  - The `ai_mode_resolved ... ai_gates_not_implemented` line is the legacy M1 resolver logged before the companion boot. It is misleading but harmless (cleanup item).
-  - The game was closed normally (WM_CLOSE on the instance launched for the smoke test).
-  - Afterwards only the game's own `1/profile.jkr` and `settings.jkr`, a new Lovely log and Steam's `remotecache.vdf` differed from the backup. That is normal launch/exit behaviour; the companion contains no save-writing calls.
-  - With the mod installed, the host's pre-acknowledgement start gates (`default_start_gate` with the real certificate API) return `practice_host_ok`.
+ - The practice host daemon was started (`practice_host.py serve --match-port 8788`, loopback, discovery marker written). Live Balatro was launched once through Steam.
+ - Lovely log `lovely-2026.09.29-20.18.32.log` showed `bootstrap_ready`, Multiplayer 0.5.5 satisfied and `companion_boot ok` (live role: practice menu and controller installed). There were no errors or tracebacks. The main menu screenshot showed Steamodded, Multiplayer 0.5.5 and "Connected to Service".
+ - The `ai_mode_resolved ... ai_gates_not_implemented` line is the legacy M1 resolver logged before the companion boot. It is misleading but harmless (cleanup item).
+ - The game was closed normally (WM_CLOSE on the instance launched for the smoke test).
+ - Afterwards only the game's own `1/profile.jkr` and `settings.jkr`, a new Lovely log and Steam's `remotecache.vdf` differed from the backup. That is normal launch/exit behaviour; the companion contains no save-writing calls.
+ - With the mod installed, the host's pre-acknowledgement start gates (`default_start_gate` with the real certificate API) return `practice_host_ok`.
 - **Not verified by the orchestrator:**
-  - Clicking **Play → AI Sparring** in the live UI. A synthetic click could not take foreground focus, and no further desktop input was attempted.
-  - The live-to-staged hand-off, and any human-played match through PvP, lives and results.
-  - These are the user's first playtest.
+ - Clicking **Play → AI Sparring** in the live UI. A synthetic click could not take foreground focus, and no further desktop input was attempted.
+ - The live-to-staged hand-off, and any human-played match through PvP, lives and results.
+ - These are the user's first playtest.
 - **Left running for the user:** practice host daemon (session `host-ffddc17b…`). Restart scripts are `work/aisparring-host/dev/start_practice_host.cmd` and `.ps1`.
 
 ## Live menu crash, fix `9f7a8e1` and reinstall (September 29, ~20:25–21:20 ET)
@@ -143,7 +143,7 @@ User-approved in chat. Balatro was confirmed closed immediately before each live
 - **Why tests missed it:** the fixtures modelled the wrong signature.
 - **Immediate action:** the broken build was moved out of live Mods to `backups/installed-c33bab6-AISparring`, after verified backup `20260930T003436Z`.
 
-**Fix.** Three Claude Opus 5.5 High review rounds (`CLAUDE_LIVE_MENU_CRASH_*.md`) also caught these handoff defects:
+**Fix.** Three source review rounds (`CLAUDE_LIVE_MENU_CRASH_*.md`) also caught these handoff defects:
 - The launcher's start gate takes about 40 s (measured), against a 10 s menu ack timeout, so every live start would have failed.
 - The launcher's 10 s idle close, combined with process-global LÖVE channel names, meant starts hit a dead connection and a rebuilt worker could replay an old start (H1).
 

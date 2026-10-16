@@ -2,7 +2,7 @@
 
 Date: 2026-09-27. Branch: `feature/ai-sparring-v1`. Base: `d09b910`.
 
-**Astra accepts the repository scaffold after Claude's re-review.** Real Steamodded discovery/load and staged-isolation smoke testing remain pending. This acceptance does not claim a working AI opponent, passed prototype gates or in-game compatibility. Milestone 2 has not started.
+**review accepts the repository scaffold after source review's re-review.** Real Steamodded discovery/load and staged-isolation smoke testing remain pending. This acceptance does not claim a working AI opponent, passed prototype gates or in-game compatibility. Milestone 2 has not started.
 
 ## Implemented architecture
 
@@ -31,17 +31,17 @@ Strict command: `python tests/run.py --require-all`, using Python 3.12.14 and lu
 | Unique cases | 66 |
 | Total executions | 117 |
 
-DeepSeek and Astra each ran the final strict suite successfully. Astra inspected the runtime source, fixtures, fix diff and actual installed Steamodded loader/config source. Seven additional independent source-contract/harness checks passed, separately from the counts above. Git whitespace checks passed. Evidence details are in ASTRA_M1_VERIFICATION.md.
+Development and review each ran the final strict suite successfully. Review inspected the runtime source, fixtures, fix diff and actual installed Steamodded loader/config source. Seven additional independent source-contract/harness checks passed, separately from the counts above. Git whitespace checks passed. Evidence details are in the m1 verification notes.
 
 Tests cover dependency failures, known partial startup, strict flag semantics, human-lobby inertness, bootstrap failures, throwing sinks, safe diagnostics, status-copy isolation, repeated loads and registry preservation. Fixtures are not an actual game or a complete sandbox. Registry regression checks are shallow, log-field coverage focuses on the ready path, and static source scanning is heuristic.
 
 ## Agent workflow and review disposition
 
-- **Astra / Medium:** defined M1 scope and acceptance tests, inspected implementation, found and delegated initial correctness fixes, independently verified final code/tests and owns this acceptance/Git history.
-- **OpenCode Go / DeepSeek V4.1 Flash / High:** implemented all scaffold modules, harness, tests and developer documentation, then corrected Astra and Claude findings. Verified provider/model ID: `opencode-go/deepseek-v4.1-flash`, variant `high`. The initial broad task exhausted its reasoning budget; smaller implementation tasks completed successfully without a model substitution.
-- **Claude Code / Opus 5.5 / High:** reviewed the actual diff, architecture, safety, fairness, compatibility and test evidence. Original review found no critical/high issues and three required medium documentation corrections. DeepSeek fixed publication semantics, staging/hash implications and inaccurate load/config/copy claims.
-- DeepSeek also addressed low findings with metadata drift checks, stored-status isolation, registry regression checks, broader static heuristics, log allowlist assertions, `--require-all`, and partial-Multiplayer detection.
-- Claude re-reviewed the significant fixes and **accepted M1 with no critical/high/medium findings remaining**. See CLAUDE_M1_REVIEW.md and CLAUDE_M1_REREVIEW.md. Its missing-acceptance-document note is resolved by this file. One cosmetic low observation remains: the dependency-status `id` constant is not independently drift-checked, although the neighbouring manifest pin/version are checked. It is correct today and not a runtime defect or acceptance blocker.
+- **Architecture & review / Medium:** defined M1 scope and acceptance tests, inspected implementation, found and delegated initial correctness fixes, independently verified final code/tests and owns this acceptance/Git history.
+- **Implementation / High:** implemented all scaffold modules, harness, tests and developer documentation, then corrected review and source review findings. Verified provider/model ID: `development`, variant `high`. The initial broad task exhausted its reasoning budget; smaller implementation tasks completed successfully without a model substitution.
+- **Source review / High:** reviewed the actual diff, architecture, safety, fairness, compatibility and test evidence. Original review found no critical/high issues and three required medium documentation corrections. Development fixed publication semantics, staging/hash implications and inaccurate load/config/copy claims.
+- Development also addressed low findings with metadata drift checks, stored-status isolation, registry regression checks, broader static heuristics, log allowlist assertions, `--require-all`, and partial-Multiplayer detection.
+- Source review re-reviewed the significant fixes and **accepted M1 with no critical/high/medium findings remaining**. See CLAUDE_M1_REVIEW.md and the m1 review. Its missing-acceptance-document note is resolved by this file. One cosmetic low observation remains: the dependency-status `id` constant is not independently drift-checked, although the neighbouring manifest pin/version are checked. It is correct today and not a runtime defect or acceptance blocker.
 
 ## Files created
 
@@ -73,9 +73,9 @@ Documentation/evidence (6):
 
 - `docs/MILESTONE_1_PLAN.md`
 - `docs/DEVELOPER.md`
-- `docs/ASTRA_M1_VERIFICATION.md`
+- `docs/the m1 verification notes`
 - `docs/CLAUDE_M1_REVIEW.md`
-- `docs/CLAUDE_M1_REREVIEW.md`
+- `docs/the m1 review
 - `docs/MILESTONE_1.md`
 
 Updated: `README.md`. Total: 24 created files and 1 updated file. Original integration/prototype plans and AGENTS.md remain unchanged. Reference sources, CLI transcripts and test dependencies stay in ignored/local work directories and are not distributed with the mod.

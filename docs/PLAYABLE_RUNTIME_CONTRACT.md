@@ -1,6 +1,6 @@
 # Runtime integration contract for the playable slice
 
-Status: implementation contract; requires actual-diff Claude review and runtime evidence. This elaborates the accepted topology, not a substitute architecture.
+Status: implementation contract; requires actual-diff source review and runtime evidence. This elaborates the accepted topology, not a substitute architecture.
 
 ## Process ownership
 

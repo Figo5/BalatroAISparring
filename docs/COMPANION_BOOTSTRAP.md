@@ -1,6 +1,6 @@
 # Root companion wiring (`AISparring/core.lua` + `AISparring/integration/companion_host.lua`)
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 Status: implementation of the root companion gate and host adapter for the
 playable slice (`docs/PLAYABLE_RUNTIME_CONTRACT.md`, `docs/PRACTICE_MENU.md`,
 `docs/STAGED_RUNTIME.md`, `docs/PRACTICE_SERVICE.md`). Fixture/static verified
@@ -11,12 +11,12 @@ the companion is armed in a real game.**
 ## 1. What this chunk owns
 
 - `AISparring/core.lua` — the entrypoint gate: keeps the Milestone 1 dependency
-  / state inspection and feature flag, then optionally boots the companion.
+ / state inspection and feature flag, then optionally boots the companion.
 - `AISparring/config.lua` — the install-time descriptor (repository default is
-  inert).
+ inert).
 - `AISparring/AISparring.json` — developer build metadata (`0.1.0-dev`).
 - `AISparring/integration/companion_host.lua` — the live menu host adapter, the
-  staged descriptor reader and the `Game:update` chain wrapper.
+ staged descriptor reader and the `Game:update` chain wrapper.
 - `tests/run_companion.py` + `tests/companion/*` — the fixture/static suite.
 - this document.
 
@@ -30,11 +30,11 @@ launcher. Those are other workers' files and are only consumed.
 With the default install:
 
 1. `core.lua` loads only the five M1 modules (`src/status.lua`,
-   `src/logger.lua`, `src/ai_mode.lua`, `src/dependency.lua`, `src/host.lua`).
+ `src/logger.lua`, `src/ai_mode.lua`, `src/dependency.lua`, `src/host.lua`).
 2. It inspects Multiplayer read-only and publishes the M1 scaffold status on its
-   own mod entry (`SMODS.Mods["AISparring"].aisparring.get_status()`).
+ own mod entry (`SMODS.Mods["AISparring"].aisparring.get_status()`).
 3. No UI module, no transport, no thread, no process and no gameplay hook is
-   touched. `Game.update` is left exactly as it was.
+ touched. `Game.update` is left exactly as it was.
 
 Setting `ai_enabled = true` without an installed `companion` descriptor still
 loads only the five M1 modules and reports
@@ -42,7 +42,7 @@ loads only the five M1 modules and reports
 attempted when **all** of the following hold:
 
 - the Multiplayer dependency is present, enabled, loadable, structurally
-  complete and exactly `0.5.5` (the M1 dependency verdict is `satisfied`);
+ complete and exactly `0.5.5` (the M1 dependency verdict is `satisfied`);
 - `SMODS.Mods["AISparring"].config` has a strictly boolean `ai_enabled = true`;
 - `config.companion.role` is exactly `"live"` or `"staged"`.
 
@@ -58,22 +58,22 @@ default may stay disabled.
 
 ```lua
 return {
-  ai_enabled = false,          -- must be boolean true to arm the companion
-  companion = {
-    role = nil,                -- "live" | "staged"
-    discovery_path = nil,      -- live: absolute path under repo work/
-  },
+ ai_enabled = false, -- must be boolean true to arm the companion
+ companion = {
+ role = nil, -- "live" | "staged"
+ discovery_path = nil, -- live: absolute path under repo work/
+ },
 }
 ```
 
 - `discovery_path` is the fixed practice-host discovery marker
-  (`work/aisparring-host/practice_host.json`). The live host reads it through a
-  trusted read adapter, never from policy and never from the network.
+ (`work/aisparring-host/practice_host.json`). The live host reads it through a
+ trusted read adapter, never from policy and never from the network.
 - There is **no** `attestation_path` override in the repository configuration.
-  The staged attestation file path is derived from the launcher's expected role
-  save root: `<AISP_EXPECTED_ROLE_SAVE_ROOT>/aisparring-launcher-attestation.json`.
+ The staged attestation file path is derived from the launcher's expected role
+ save root: `<AISP_EXPECTED_ROLE_SAVE_ROOT>/aisparring-launcher-attestation.json`.
 - No credential, session, control secret, port or seed is ever placed in this
-  file.
+ file.
 
 ## 4. Live path
 
@@ -242,8 +242,8 @@ identification through the injected `love.window` API:
 
 - **human role:** `love.window.setTitle("Balatro AI Sparring 0.1.0-dev - Player")`;
 - **AI role:** `love.window.setTitle("Balatro AI Sparring 0.1.0-dev - AI runtime")`
-  and then `love.window.minimize()` exactly once, so the bot's hand is not the
-  default foreground view.
+ and then `love.window.minimize()` exactly once, so the bot's hand is not the
+ default foreground view.
 
 The window object is read from the trusted `love` global (or an injected test
 port); it is never stored on a status surface and never reaches policy. Only
@@ -271,9 +271,9 @@ priority):
 
 ```lua
 function Game:update(dt)
-  local r1, r2 = original(self, dt)   -- exactly once, first
-  if active then pcall(step, dt) end  -- bounded companion step
-  return r1, r2
+ local r1, r2 = original(self, dt) -- exactly once, first
+ if active then pcall(step, dt) end -- bounded companion step
+ return r1, r2
 end
 ```
 
@@ -289,9 +289,9 @@ The published status adds a primitive-only `companion` block:
 
 ```
 state = "companion_ready" | "companion_unavailable" | "fail_closed"
-ai    = { requested = true, enabled = false, implemented = true, status = ... }
+ai = { requested = true, enabled = false, implemented = true, status = ... }
 companion = { role, staged_role, booted, pending, code, instance_state,
-              host_available, handling, diagnostic_path, module_error }
+ host_available, handling, diagnostic_path, module_error }
 ```
 
 `companion_ready` means the companion is armed; for the staged path it also
@@ -314,15 +314,15 @@ project owns, so `core.lua` builds a narrow, footprinted-only wire encoder over
 the real module:
 
 - the control-service request is always exactly
-  `{session, credential, role, op, sequence, observation}` and a nil/empty
-  `observation` payload is emitted as `{}` (never `[]`); nested observation
-  arrays keep the base encoder's semantics;
+ `{session, credential, role, op, sequence, observation}` and a nil/empty
+ `observation` payload is emitted as `{}` (never `[]`); nested observation
+ arrays keep the base encoder's semantics;
 - the practice-host request is always exactly
-  `{schema, op, auth, request}` and the `request` object is exactly
-  `{session_id, difficulty, pacing, mode, gauntlet, live_pid, live_create_time}`,
-  with an explicit `gauntlet: null` for normal mode (a label string otherwise);
+ `{schema, op, auth, request}` and the `request` object is exactly
+ `{session_id, difficulty, pacing, mode, gauntlet, live_pid, live_create_time}`,
+ with an explicit `gauntlet: null` for normal mode (a label string otherwise);
 - unknown, missing or wrongly typed keys are rejected with a bounded code;
-  a malformed request is never silently turned into a valid one.
+ a malformed request is never silently turned into a valid one.
 
 When no wire encoder is injected (fixtures), `companion_host.lua` falls back to
 the legacy `encode` + `JSON.null` sentinel ports. Normal mode therefore works in
@@ -368,46 +368,46 @@ process's own pid and creation time only. It is not the actual engine.
 ## 10. Remaining integration mismatches (honest)
 
 1. **Gauntlet seed.** No seed descriptor is read any more (the launcher supplies
-   none). `RuntimeBootstrap` is invoked with `seed = nil`, so normal mode uses the
-   original random seed behaviour. The gauntlet seed must be delivered by the
-   launcher's authenticated service `SETUP` and injected into the runtime's MP
-   `startGame`; that injection point is not wired here and is a real no-op gap for
-   gauntlet mode.
+ none). `RuntimeBootstrap` is invoked with `seed = nil`, so normal mode uses the
+ original random seed behaviour. The gauntlet seed must be delivered by the
+ launcher's authenticated service `SETUP` and injected into the runtime's MP
+ `startGame`; that injection point is not wired here and is a real no-op gap for
+ gauntlet mode.
 2. **Launcher attestation writer.** The companion now derives and validates the
-   exact `aisparring.launcher_attestation.v1` file the certificate tool writes, but
-   the launcher must actually write it (after both roles' fresh probes) before the
-   staged roles boot. Until it is written, staged boot stays bounded-pending and
-   then fails gracefully with `companion_staged_attestation_timeout`.
+ exact `aisparring.launcher_attestation.v1` file the certificate tool writes, but
+ the launcher must actually write it (after both roles' fresh probes) before the
+ staged roles boot. Until it is written, staged boot stays bounded-pending and
+ then fails gracefully with `companion_staged_attestation_timeout`.
 3. **UI elements.** The companion passes no `element_for`; the engine worker's
-   source-backed default inside the executor resolves cash-out, PvP ready, skip
-   blind and booster skip. Lobby-ready still relies on the injected `G.FUNCS`
-   path. Any missing element fails closed in the executor, never fabricated here.
+ source-backed default inside the executor resolves cash-out, PvP ready, skip
+ blind and booster skip. Lobby-ready still relies on the injected `G.FUNCS`
+ path. Any missing element fails closed in the executor, never fabricated here.
 4. **Revision hooks are partial.** The AI staged role gets source-backed
-   `CardArea:emplace/remove_card/add_to_highlighted/remove_from_highlighted/
-   unhighlight_all` and `Card:set_ability/set_debuff/apply_to_run` hooks. Other
-   observation-relevant transitions not in this set are still covered only by the
-   reader's observed-change sync (no unobserved-ABA magic).
+ `CardArea:emplace/remove_card/add_to_highlighted/remove_from_highlighted/
+ unhighlight_all` and `Card:set_ability/set_debuff/apply_to_run` hooks. Other
+ observation-relevant transitions not in this set are still covered only by the
+ reader's observed-change sync (no unobserved-ABA magic).
 5. **Live identity needs the real Windows query.** `core.lua` resolves LuaJIT
-   `ffi` itself (global first, else a protected `require("ffi")`) and the adapter
-   now accepts an actual FFI library/callables, so the live path is not blocked
-   by the library shape. The check still fails closed when the module/symbol or
-   query is unavailable (for example a non-`ffi` or non-Windows runtime); that is
-   the intended behaviour, not a fallback.
+ `ffi` itself (global first, else a protected `require("ffi")`) and the adapter
+ now accepts an actual FFI library/callables, so the live path is not blocked
+ by the library shape. The check still fails closed when the module/symbol or
+ query is unavailable (for example a non-`ffi` or non-Windows runtime); that is
+ the intended behaviour, not a fallback.
 6. **Not a sandbox.** This is in-process provenance, not isolation, and not a
-   defence against arbitrary trusted local code.
+ defence against arbitrary trusted local code.
 7. **No live evidence.** Nothing here launches the game, writes a Mod or file,
-   opens a real socket, starts a real thread or runs the policy subprocess; all
-   evidence is fixture and static only. Real-engine smoke testing is the root's
-   later step.
+ opens a real socket, starts a real thread or runs the policy subprocess; all
+ evidence is fixture and static only. Real-engine smoke testing is the root's
+ later step.
 8. **HUMAN END summary is the runtime worker's file.** The role-aware
-   `report_summary` output used when a HUMAN match terminates belongs to
-   `integration/runtime_bootstrap.lua` (another owner) and is not touched here.
-   This chunk only guarantees the human staged wiring supplies what that path
-   needs: the real `Codec.hash_string` via the common staged codec module, plus
-   the send guard and the real `G`/`MP`, with no AI policy/executor modules
-   loaded.
+ `report_summary` output used when a HUMAN match terminates belongs to
+ `integration/runtime_bootstrap.lua` (another owner) and is not touched here.
+ This chunk only guarantees the human staged wiring supplies what that path
+ needs: the real `Codec.hash_string` via the common staged codec module, plus
+ the send guard and the real `G`/`MP`, with no AI policy/executor modules
+ loaded.
 9. **Minimized-runtime updating is a live gate.** The staged-window
-   identification is proven only by fixtures here. Whether the real game keeps
-   driving `love.update` while its window is minimized is engine behaviour and
-   must be confirmed by the live smoke gate in docs/PLAYTEST.md; this document
-   does not claim it.
+ identification is proven only by fixtures here. Whether the real game keeps
+ driving `love.update` while its window is minimized is engine behaviour and
+ must be confirmed by the live smoke gate in docs/PLAYTEST.md; this document
+ does not claim it.

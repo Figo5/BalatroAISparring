@@ -4,9 +4,9 @@ User authorization: 2026-09-27, following accepted M2 commit a991a9325462b766c3e
 
 ## Architecture and work ownership
 
-The accepted INTEGRATION_PLAN remains authoritative: two staged real game runtimes, pinned loopback legacy Multiplayer server, separate restricted policy worker. The installed companion menu is an explicit launcher entry point; it must not redirect normal Multiplayer or share the user's live run. No alternate scorer or global-state swapping. Any necessary architectural change requires evidence and Claude review before implementation.
+The accepted INTEGRATION_PLAN remains authoritative: two staged real game runtimes, pinned loopback legacy Multiplayer server, separate restricted policy worker. The installed companion menu is an explicit launcher entry point; it must not redirect normal Multiplayer or share the user's live run. No alternate scorer or global-state swapping. Any necessary architectural change requires evidence and source review before implementation.
 
-Astra defines contracts, inspects integration, verifies independently and accepts. DeepSeek V4.1 Flash High performs primary implementation and fixes. Claude Opus 5.5 High reviews actual diffs and evidence, with re-review of significant fixes. Work continues through internal checkpoints toward the playable objective.
+Review defines contracts, inspects integration, verifies independently and accepts. Development performs primary implementation and fixes. source reviews actual diffs and evidence, with re-review of significant fixes. Work continues through internal checkpoints toward the playable objective.
 
 ## Implementation chunks
 
@@ -14,7 +14,7 @@ Astra defines contracts, inspects integration, verifies independently and accept
 2. Trusted real-engine visible-view/certificate producer, monotonic state revision, broker-authorized production executor, asynchronous policy orchestration, local decision/match logging and safe error recovery. UI contains no gameplay decisions.
 3. Staged launcher/runtime bootstrap, separate save/Mods/log paths, disabled Steam integration and external transport, authenticated bounded local IPC, subprocess watchdog, pinned local-server adaptation and protocol/parity tests.
 4. Functional AI Sparring entry/settings UI, Major League resolved from actual Multiplayer configuration, normal/gauntlet and Instant/Normal pacing, staged human ownership and original opponent HUD.
-5. Independent regression/progression/failure tests; Claude review/fixes/re-review; safe staged runtime proofs and live installation/smoke test when the user's game is closed.
+5. Independent regression/progression/failure tests; source review/fixes/re-review; safe staged runtime proofs and live installation/smoke test when the user's game is closed.
 
 ## Acceptance
 

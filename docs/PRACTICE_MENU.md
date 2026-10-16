@@ -68,28 +68,28 @@ local PracticeMenu = SMODS.load_file("ui/practice_menu.lua", "AISparring")()
 local MenuController = SMODS.load_file("integration/menu_controller.lua", "AISparring")()
 
 local ui = {
-  G = G,                       -- G.UIT / G.C constants and G.UIDEF
-  funcs = G.FUNCS,             -- callback table the controller registers into
-  UIBox_button = UIBox_button,
-  create_UIBox_generic_options = create_UIBox_generic_options,
-  overlay_menu = G.FUNCS.overlay_menu,
-  exit_overlay_menu = G.FUNCS.exit_overlay_menu,
-  notify = sendWarnMessage,    -- optional
+ G = G, -- G.UIT / G.C constants and G.UIDEF
+ funcs = G.FUNCS, -- callback table the controller registers into
+ UIBox_button = UIBox_button,
+ create_UIBox_generic_options = create_UIBox_generic_options,
+ overlay_menu = G.FUNCS.overlay_menu,
+ exit_overlay_menu = G.FUNCS.exit_overlay_menu,
+ notify = sendWarnMessage, -- optional
 }
 
 local menu = PracticeMenu.factory(ui)local controller = MenuController.factory({
-  ui = ui,
-  menu = menu,
-  host = trusted_launcher_host,  -- available/request_start/poll_start/quit/diagnostics_path
-  status = trusted_status_probe, -- probe() -> { main_menu, active_run, mp_connected, mp_compatible }
-  clock = { now = function() return love.timer.getTime() end },
+ ui = ui,
+ menu = menu,
+ host = trusted_launcher_host, -- available/request_start/poll_start/quit/diagnostics_path
+ status = trusted_status_probe, -- probe() -> { main_menu, active_run, mp_connected, mp_compatible }
+ clock = { now = function() return love.timer.getTime() end },
 })
 
-controller.install()               -- wraps G.UIDEF.override_main_menu_play_button once
+controller.install() -- wraps G.UIDEF.override_main_menu_play_button once
 -- call every frame:
-controller.update()                 -- bounded, nonblocking ack poll
+controller.update() -- bounded, nonblocking ack poll
 -- on shutdown / role teardown:
-controller.uninstall()              -- idempotent; abandons any pending ack without quitting
+controller.uninstall() -- idempotent; abandons any pending ack without quitting
 ```
 
 The host adapter owns provenance: it must be constructed only by the trusted bootstrap and must bind the session credential before exposing `request_start`/`quit`. `host.quit` is the only path to the game's normal quit, invoked exactly once after a confirmed ack.

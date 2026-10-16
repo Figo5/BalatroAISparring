@@ -684,7 +684,7 @@ return function(ctx)
 	test("bootstrap_default_get_channel_supports_love_channel_userdata", function()
 		-- Real `love.thread.getChannel` returns userdata whose push/pop live on
 		-- the metatable. No explicit `channels` is injected here, so the default
-		-- `get_channel` route must accept the userdata objects (Astra root:
+		-- `get_channel` route must accept the userdata objects (review:
 		-- control_channels_accept_userdata_methods).
 		local sent = {}
 		local function love_channel(methods)

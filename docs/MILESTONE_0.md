@@ -1,6 +1,6 @@
 # Initial architecture investigation — historical notes
 
-Date: 2026-09-27. Historical research performed by the orchestrator while locating the required implementation worker. These notes are superseded by INTEGRATION_PLAN.md, the subsequent DeepSeek source review and Claude findings. Do not implement the preliminary transport direction below without the revised plan and prototype gates. No feature code was written at this stage.
+Date: 2026-09-27. Historical research performed by the orchestrator while locating the required implementation worker. These notes are superseded by INTEGRATION_PLAN.md, the subsequent development source review and source review findings. Do not implement the preliminary transport direction below without the revised plan and prototype gates. No feature code was written at this stage.
 
 ## Verified environment
 
@@ -83,7 +83,7 @@ Difficulty changes computation and optional decision noise only. Pacing changes 
 - Ordinary single-player and human multiplayer must take original code paths with AI disabled; preserve Handy/JokerDisplay hooks.
 - Existing Multiplayer terminal handlers record normal match history and emit log checksums. AI mode must isolate persistence and prevent network/stat submissions before reusing these handlers.
 - The inspected Multiplayer, MultiplayerAPI and TCP server repositories contain GPL v3 license text. Preserve licenses and notices for any adaptation; review the full obligations before copying implementation. No implementation source has been copied into this project; do not distribute proprietary Balatro sources/assets.
-- Required before implementation acceptance: DeepSeek's real code inspection, complete server parity assessment, child-runtime isolation proof, transport/offline strategy, and Claude's adversarial review with high/critical findings resolved.
+- Required before implementation acceptance: development's real code inspection, complete server parity assessment, child-runtime isolation proof, transport/offline strategy, and source review's adversarial review with high/critical findings resolved.
 
 ## Sources
 

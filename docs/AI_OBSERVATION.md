@@ -1,6 +1,6 @@
 # AIObservation schema (implemented, M2 part 1, corrected)
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 Status: implementation documentation for `AISparring/ai/codec.lua` and
 `AISparring/ai/observation.lua`. No extractor, reader, legal-action generator,
 broker, policy or runtime capture exists yet. This document describes only the
@@ -13,26 +13,26 @@ globals, no engine access, explicit dependency injection.
 ## 0. Corrections applied in this revision
 
 1. **Blanket affordance classes removed.** `sell.offered`, `play.offered`,
-   `use.offered`, etc. would have been wildcard authority and could not certify a
-   specific Joker (eternal/persistent), a specific forced card subset, or a
-   specific consumable target. They are replaced by a bounded, exact
-   action-certificate catalog: every candidate names its own refs/order and must
-   be individually `certified = true`. No class-level authorization remains.
+ `use.offered`, etc. would have been wildcard authority and could not certify a
+ specific Joker (eternal/persistent), a specific forced card subset, or a
+ specific consumable target. They are replaced by a bounded, exact
+ action-certificate catalog: every candidate names its own refs/order and must
+ be individually `certified = true`. No class-level authorization remains.
 2. **Fixed interaction context** added (`blocked`, `timer_expired`,
-   `max_play`, `max_discard`, `min_targets`, `max_targets`,
-   `target_selection`). Uncertain booleans deny by default.
+ `max_play`, `max_discard`, `min_targets`, `max_targets`,
+ `target_selection`). Uncertain booleans deny by default.
 3. **Money is signed.** `money` is a signed bounded integer; the ambiguous
-   `credit_available` is replaced by `credit_limit` (non-negative allowance equal
-   to `-bankrupt_at`); spendable is `money + credit_limit`, matching
-   `dollars - bankrupt_at`.
+ `credit_available` is replaced by `credit_limit` (non-negative allowance equal
+ to `-bankrupt_at`); spendable is `money + credit_limit`, matching
+ `dollars - bankrupt_at`.
 4. **Visibility must be positive.** Identity is copied only when
-   `face_down = false` is explicit; otherwise the entity is `redacted`. Own hand
-   is copied only in the permitted phases **and** with explicit
-   `hand_visible = true`.
+ `face_down = false` is explicit; otherwise the entity is `redacted`. Own hand
+ is copied only in the permitted phases **and** with explicit
+ `hand_visible = true`.
 5. **Codec hardening.** The key scan is bounded before full traversal; the sort
-   comparator is explicit byte-wise; array scans are bounded early.
+ comparator is explicit byte-wise; array scans are bounded early.
 6. **Constants are copied outward**, so callers mutating exported `PHASES`/`CODE`
-   cannot change validation internals.
+ cannot change validation internals.
 
 Face-down redaction remains mandatory and unchanged; the corrected source map
 established that the earlier research assumption permitting identity inference
@@ -41,11 +41,11 @@ was false.
 ## 1. Modules and trust boundary
 
 - `ai/codec.lua` returns a stateless `Codec` table. It encodes plain Lua values
-  into a canonical, locale-independent string and derives a deterministic
-  diagnostic checksum. It has no dependency on the game or on observation.
+ into a canonical, locale-independent string and derives a deterministic
+ diagnostic checksum. It has no dependency on the game or on observation.
 - `ai/observation.lua` returns `Observation`. `Observation.factory(codec)` builds
-  an instance closed over its own private handle registry. The injected `codec`
-  must expose `encode` and `hash_string` functions.
+ an instance closed over its own private handle registry. The injected `codec`
+ must expose `encode` and `hash_string` functions.
 
 The **trusted visible-frame producer** is part of the trusted computing base
 (TCB): it must emit only fields the human UI shows under the effective
@@ -63,29 +63,29 @@ policy data and are never a permission to expose forbidden information.
 ```
 local Observation = dofile("AISparring/ai/observation.lua")
 local Codec = dofile("AISparring/ai/codec.lua")
-local obs = Observation.factory(Codec)         -- nil, "observation_bad_codec" on bad codec
+local obs = Observation.factory(Codec) -- nil, "observation_bad_codec" on bad codec
 
-local handle, code = obs.observe(frame)        -- handle is opaque; code is static on failure
-local plain, code = obs.export(handle)         -- independent deep copy (primitive tables only)
-local canonical, code = obs.canonical(handle)  -- stored canonical string
-local hash, code = obs.hash(handle)            -- stored diagnostic checksum
-local same = obs.equal(h1, h2)                 -- canonical string equality
+local handle, code = obs.observe(frame) -- handle is opaque; code is static on failure
+local plain, code = obs.export(handle) -- independent deep copy (primitive tables only)
+local canonical, code = obs.canonical(handle) -- stored canonical string
+local hash, code = obs.hash(handle) -- stored diagnostic checksum
+local same = obs.equal(h1, h2) -- canonical string equality
 local is_handle = obs.is_handle(value)
-local schema = obs.describe()                  -- copy of phases/fields/cert types/limits/codes
+local schema = obs.describe() -- copy of phases/fields/cert types/limits/codes
 ```
 
 - The handle is a sealed table (`__metatable` fixed) used only as a key in a
-  module-private weak-keyed registry. The registry lookup — not any property of
-  the handle table — is authoritative, so adding fields (including via `rawset`)
-  cannot forge a handle or attach data.
+ module-private weak-keyed registry. The registry lookup — not any property of
+ the handle table — is authoritative, so adding fields (including via `rawset`)
+ cannot forge a handle or attach data.
 - `export` returns newly built tables; mutating it cannot affect the stored
-  canonical content, canonical string or hash, all produced once at construction.
-  `canonical`/`hash` never read caller-provided tables again.
+ canonical content, canonical string or hash, all produced once at construction.
+ `canonical`/`hash` never read caller-provided tables again.
 - Exported `PHASES`, `CODE`, `describe()` and per-instance constants are deep
-  copies; the validation-internal tables are private locals.
+ copies; the validation-internal tables are private locals.
 - Checksums are a **diagnostic equality aid only**: not cryptographic, never an
-  authorization, authentication or freshness proof. Canonical-string equality is
-  the exact-equality mechanism.
+ authorization, authentication or freshness proof. Canonical-string equality is
+ the exact-equality mechanism.
 
 ## 3. Canonical encoding (`Codec`)
 
@@ -101,24 +101,24 @@ floating format, no NaN/infinity, no memory addresses.
 | map of k entries | `o` + k + `:` + entries sorted by encoded key |
 
 - Keys may only be strings or int32 integers (else `codec_bad_key`); encoded keys
-  carry a type tag, so `1` and `"1"` cannot collide.
+ carry a type tag, so `1` and `"1"` cannot collide.
 - A table is an array only when every key is a positive integer and the keys are
-  exactly `1..n`; otherwise it is a map. Map entries are sorted by an **explicit
-  byte-wise comparator** (`byte_less` over `string.byte`), not Lua's
-  locale-sensitive `<`.
+ exactly `1..n`; otherwise it is a map. Map entries are sorted by an **explicit
+ byte-wise comparator** (`byte_less` over `string.byte`), not Lua's
+ locale-sensitive `<`.
 - Integers are limited to `-2147483648 .. 2147483647`; fractional, NaN, infinite
-  and out-of-range numbers fail (`codec_bad_number`). Decimal conversion is a
-  manual divmod-10 loop.
+ and out-of-range numbers fail (`codec_bad_number`). Decimal conversion is a
+ manual divmod-10 loop.
 - The initial key scan is **bounded early**: once more than `MAX_MAP` keys are
-  seen the encode fails `codec_too_large` without reading their values. Array
-  iteration is bounded by `MAX_ARRAY` before elements are encoded.
+ seen the encode fails `codec_too_large` without reading their values. Array
+ iteration is bounded by `MAX_ARRAY` before elements are encoded.
 - Tables with metatables are rejected (`codec_bad_type`) without invoking any
-  metamethod; cycles are rejected (`codec_cycle`).
+ metamethod; cycles are rejected (`codec_cycle`).
 - Bounds: depth 16, array 256, map 256, string 4096, nodes 8192, canonical string
-  262144.
+ 262144.
 - `Codec.hash_string` is FNV-1a 32-bit using only exactly-representable double
-  arithmetic (`mulmod32` splits operands), giving 8 lowercase hex digits and
-  identical output on Lua 5.1 and LuaJIT.
+ arithmetic (`mulmod32` splits operands), giving 8 lowercase hex digits and
+ identical output on Lua 5.1 and LuaJIT.
 
 ## 4. Frame shape
 
@@ -126,16 +126,16 @@ floating format, no NaN/infinity, no memory addresses.
 
 ```
 frame = {
-  schema_version = 1,
-  phase = "<PHASE>",
-  match = { ... },            -- required every phase
-  self = { ... },             -- required except MATCH_COMPLETE
-  opponent = { ... },         -- optional, only if certified
-  shop = { ... },             -- SHOP only
-  booster = { ... },          -- BOOSTER_SELECTION only
-  consumable_target = { ... },-- CONSUMABLE_SELECTION only
-  context = { ... },          -- interaction context (deny-by-default)
-  certificates = { ... },     -- exact action certificates
+ schema_version = 1,
+ phase = "<PHASE>",
+ match = { ... }, -- required every phase
+ self = { ... }, -- required except MATCH_COMPLETE
+ opponent = { ... }, -- optional, only if certified
+ shop = { ... }, -- SHOP only
+ booster = { ... }, -- BOOSTER_SELECTION only
+ consumable_target = { ... },-- CONSUMABLE_SELECTION only
+ context = { ... }, -- interaction context (deny-by-default)
+ certificates = { ... }, -- exact action certificates
 }
 ```
 
@@ -256,19 +256,19 @@ engine id or `sort_ID` is ever read; unknown keys are ignored without traversal.
 | `tag` | `tag` | `center` |
 
 - `kind`, `rank`, `suit`, `center`, `edition`, `seal` are bounded public token
-  strings; `cost`/`sell_cost` are ints `>= 0`; `debuff`/`face_down` are bools.
-  `visible_text` is bounded plain UI text (printable ASCII, <= 128 bytes), never
-  an ability/config table.
+ strings; `cost`/`sell_cost` are ints `>= 0`; `debuff`/`face_down` are bools.
+ `visible_text` is bounded plain UI text (printable ASCII, <= 128 bytes), never
+ an ability/config table.
 - No `ability`, arbitrary config, counter, callback or nested engine table is
-  representable.
+ representable.
 - **Face-down / visibility:** identity fields are copied only when
-  `face_down = false` is explicitly present. If `face_down` is `true`, absent, or
-  non-boolean-typed (the latter rejected), the entity is emitted as
-  `{ id, redacted = true }` with no identity fields, regardless of any poisoned
-  properties supplied alongside. Missing visibility evidence never implies
-  identity is visible.
+ `face_down = false` is explicitly present. If `face_down` is `true`, absent, or
+ non-boolean-typed (the latter rejected), the entity is emitted as
+ `{ id, redacted = true }` with no identity fields, regardless of any poisoned
+ properties supplied alongside. Missing visibility evidence never implies
+ identity is visible.
 - Duplicate observation-local ids are rejected. Since ids are ordinal-derived,
-  duplicates indicate internal inconsistency/injection.
+ duplicates indicate internal inconsistency/injection.
 
 ### 4.9 `context` (fixed interaction context)
 
@@ -296,27 +296,27 @@ defaults above are materialized.
 
 ```
 certificates = {
-  version = 1,
-  items = { { type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2" } }, ... },
+ version = 1,
+ items = { { type = "PLAY_CARDS", certified = true, card_refs = { "hand:1", "hand:2" } }, ... },
 }
 ```
 
 - `items` is bounded to **128** entries. An unknown action `type` or a
-  non-boolean `certified` is rejected (`observation_invalid_certificate`). Unknown
-  certificate fields are **ignored without traversal** (the safer choice) and a
-  `certified = false` entry is simply withheld (no action), never stored.
+ non-boolean `certified` is rejected (`observation_invalid_certificate`). Unknown
+ certificate fields are **ignored without traversal** (the safer choice) and a
+ `certified = false` entry is simply withheld (no action), never stored.
 - Every certificate carries an exact `type` and, as appropriate, source/ref/card
-  refs/target refs/order, plus optional `capacity_ok` for item-specific slot
-  exceptions. **No certificate authorizes a class of actions**; there is no
-  `offered` wildcard, no callbacks and no engine predicate.
+ refs/target refs/order, plus optional `capacity_ok` for item-specific slot
+ exceptions. **No certificate authorizes a class of actions**; there is no
+ `offered` wildcard, no callbacks and no engine predicate.
 - **Missing exact certification means no generated action.** The catalog may be
-  incomplete by design: it is a safe subset of certified candidates, not an
-  assertion of exhaustiveness. The future generator independently revalidates
-  phase, resources, slots and limits, then enumerates/filters these exact
-  certificates; it never invents authority from a class flag.
+ incomplete by design: it is a safe subset of certified candidates, not an
+ assertion of exhaustiveness. The future generator independently revalidates
+ phase, resources, slots and limits, then enumerates/filters these exact
+ certificates; it never invents authority from a class flag.
 - All refs must exist in `state.refs` (entities present in this observation) and
-  carry the eligible zone prefix. Refs are never exposed as hidden identifiers:
-  they are the observation-local `zone:ordinal` strings defined in §4.8.
+ carry the eligible zone prefix. Refs are never exposed as hidden identifiers:
+ they are the observation-local `zone:ordinal` strings defined in §4.8.
 
 | Type | Required refs / arrays | Optional |
 |---|---|---|
@@ -338,26 +338,26 @@ certificates = {
 | `REORDER_HAND` | `order` (hand, non-empty) | – |
 
 - `card_refs`/`target_refs`/`order` are bounded arrays (<= 64) with **no
-  duplicate refs within one selection** (`observation_duplicate_ref`). A
-  ref of the wrong zone or not present fails `observation_invalid_target_ref`.
+ duplicate refs within one selection** (`observation_duplicate_ref`). A
+ ref of the wrong zone or not present fails `observation_invalid_target_ref`.
 - Whether an `order` is complete/valid or an item is affordable is a
-  generator/broker concern; the schema only carries the exact certified
-  candidate. `BUY_ITEM` accepts only `card`/`joker`/`consumable` kinds;
-  `OPEN_BOOSTER` is the only path to a pack and reads `shop.boosters`.
+ generator/broker concern; the schema only carries the exact certified
+ candidate. `BUY_ITEM` accepts only `card`/`joker`/`consumable` kinds;
+ `OPEN_BOOSTER` is the only path to a pack and reads `shop.boosters`.
 
 ## 5. Validation rules and failure codes
 
 - Input tables must be plain (`getmetatable(value) == nil`); metatable-bearing
-  tables are rejected at the accessed boundary and metamethods are never
-  invoked. `getmetatable` itself invokes nothing.
+ tables are rejected at the accessed boundary and metamethods are never
+ invoked. `getmetatable` itself invokes nothing.
 - All reads use `rawget`/`next` on already-plain tables; unknown fields are never
-  read.
+ read.
 - Integers must be integral and in int32 bounds (signed for `money`, otherwise
-  non-negative); displayed scores/timers are strings; no seeds, no RNG, no hidden
-  ids.
+ non-negative); displayed scores/timers are strings; no seeds, no RNG, no hidden
+ ids.
 - Bounds: hand/jokers/consumables 64, vouchers/tags/shop/shop_booster/booster/
-  targets 16, certificate items 128, ref arrays 64, absolute array scan 256,
-  token 64, display 32, visible text 128, ref 64.
+ targets 16, certificate items 128, ref arrays 64, absolute array scan 256,
+ token 64, display 32, visible text 128, ref 64.
 
 Static codes: `ok`, `observation_bad_codec`, `observation_bad_frame`,
 `observation_unknown_phase`, `observation_bad_version`,
@@ -372,18 +372,18 @@ as codes; no raw exception is raised.
 ## 6. Deliberate exclusions
 
 - All seeds/seed identifiers; engine ids, `sort_ID`, memory addresses, and any
-  producer-supplied `id`.
+ producer-supplied `id`.
 - Face-down identity on any non-explicitly-visible card, regardless of poisoned
-  fields.
+ fields.
 - Ordered deck contents and `by_suit`/`by_rank` deck aggregates (unsupported
-  until a UI-preview-equivalent spec with an `unknown` bucket exists), future
-  shop/booster/pack contents, and stale hand data outside the permitted phases.
+ until a UI-preview-equivalent spec with an `unknown` bucket exists), future
+ shop/booster/pack contents, and stale hand data outside the permitted phases.
 - Booster packs inside `shop.items` (they belong in the separate `shop.boosters`
-  zone).
+ zone).
 - Raw opponent fields (`real_score`, `last_timer`, inactive `pvpTimerOrder`,
-  hidden location, wire/deck/Joker dumps).
+ hidden location, wire/deck/Joker dumps).
 - Functions, userdata, metatables, aliases, cycles, arbitrary ability/config
-  tables, floating/NaN/infinite numbers.
+ tables, floating/NaN/infinite numbers.
 - End-game private dumps in `MATCH_COMPLETE`.
 
 ## 7. Not implemented here

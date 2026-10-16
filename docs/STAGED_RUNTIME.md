@@ -1,6 +1,6 @@
 # Staged runtime integration (`AISparring/integration/runtime_bootstrap.lua`)
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 Status: bounded implementation of the staged human-host + AI-guest runtime wiring
 (`docs/PLAYABLE_RUNTIME_CONTRACT.md`, `docs/INTEGRATION_PLAN.md`). Fixture/static
 verified only. No game launch, no Mods write, no live install, no network, no
@@ -32,9 +32,9 @@ never redirected, and no private state travels over it.
 
 ```
 launcher ──spawn──► staged human runtime ─┐
-        └─spawn──► staged AI runtime ────┤  dedicated loopback control channel
-                                          │  (nonce/role-named LÖVE channels)
-                                practice service (worker-owned)
+ └─spawn──► staged AI runtime ────┤ dedicated loopback control channel
+ │ (nonce/role-named LÖVE channels)
+ practice service (worker-owned)
 ```
 
 ## 2. Trusted boot sequence (`runtime_bootstrap.factory`)
@@ -44,28 +44,28 @@ bootstrap refuses to install unless **all** of these hold:
 
 1. `role` is exactly `human` or `ai`.
 2. `expected.save_dir`, `expected.mods_root` and `expected.mod_root` (populated by
-   the launcher) equal the runtime's own reported paths after normalization
-   (case-insensitive, `/`-normalized). `mod_root` must sit under `mods_root` and
-   end in `AISparring`.
+ the launcher) equal the runtime's own reported paths after normalization
+ (case-insensitive, `/`-normalized). `mod_root` must sit under `mods_root` and
+ end in `AISparring`.
 3. `launcher.verify()` (the independently verified Python launcher) returns a
-   fresh verdict agreeing on `nonce`, `session`, `role`, `content_hash` and
-   `control_port`.
+ fresh verdict agreeing on `nonce`, `session`, `role`, `content_hash` and
+ `control_port`.
 4. The authenticated `hello` (carrying `content_digest = content_hash`) has been
-   answered with success by the service.
+ answered with success by the service.
 
 Only after (4) does `activate()` run, and only for `role == "ai"`. The human role
 never constructs the adapter, executor, broker capability or decision loop, and
 never automates a hand.
 
 ```
-validate()                    -- (1)(2)(3); returns nil + boot_* code on failure
-install()                     -- channels + worker + transport + hello
-update(dt)                    -- bounded polling; arms on the hello ack
-  hello is retried while the attestation gate returns practice_not_attested
-  advance_coordinator()       -- typed SETUP -> connect -> lobby -> ready -> start
-  activate()  (ai only)       -- adapter -> reader -> executor -> capability -> broker -> loop
-  decision loop runs only once the real MP match-start is observed
-shutdown(reason) / teardown   -- revoke, cancel, leave local session, restore hooks
+validate() -- (1)(2)(3); returns nil + boot_* code on failure
+install() -- channels + worker + transport + hello
+update(dt) -- bounded polling; arms on the hello ack
+ hello is retried while the attestation gate returns practice_not_attested
+ advance_coordinator() -- typed SETUP -> connect -> lobby -> ready -> start
+ activate() (ai only) -- adapter -> reader -> executor -> capability -> broker -> loop
+ decision loop runs only once the real MP match-start is observed
+shutdown(reason) / teardown -- revoke, cancel, leave local session, restore hooks
 ```
 
 ### 2.1 Bounded start coordinator
@@ -76,24 +76,24 @@ FIFO of its own sends — including heartbeat/end — in the single ordered cont
 connection). The coordinator then runs a bounded, exactly-once state machine:
 
 1. `setup`: send once after the hello ack; parse the typed SETUP payload and
-   verify `role`, `difficulty`, `mode`, `pacing` against the trusted launcher
-   ports. The trusted gauntlet seed is read from `gauntlet_seed` and is
-   **human-only**; the guest never receives, stores or reports a seed.
+ verify `role`, `difficulty`, `mode`, `pacing` against the trusted launcher
+ ports. The trusted gauntlet seed is read from `gauntlet_seed` and is
+ **human-only**; the guest never receives, stores or reports a seed.
 2. `connect`: no create/join until `MP.LOBBY.connected` is true (the server starts
-   only after the launcher probes/attestation). A missing connection is a
-   bounded wait, never a frame error.
+ only after the launcher probes/attestation). A missing connection is a
+ bounded wait, never a frame error.
 3. `lobby`: the host creates the real Major League lobby and reports the exact
-   code; the guest polls the AI-only `join_code` op with a bounded backoff until
-   the host has reported it (`practice_no_lobby` is a benign wait) and then joins
-   the exact code.
+ code; the guest polls the AI-only `join_code` op with a bounded backoff until
+ the host has reported it (`practice_no_lobby` is a benign wait) and then joins
+ the exact code.
 4. `ready`: each role computes its **own** Major League digest from the live
-   `MP.LOBBY.config` over the SETUP forced keyset and sends it in `ready`; the
-   `config_digest` port/content-hash fallback is removed. The host additionally
-   verifies its locally recorded keyset matches the service keyset exactly.
+ `MP.LOBBY.config` over the SETUP forced keyset and sends it in `ready`; the
+ `config_digest` port/content-hash fallback is removed. The host additionally
+ verifies its locally recorded keyset matches the service keyset exactly.
 5. `start`: the host waits for the guest's real ready flag and the `ready` ack,
-   sends `start`, waits for the `start` ack, and only then calls the real
-   `lobby_start_game`. Each real callback commits once; a late UI element or a
-   not-yet-ready flag is retried without double-toggling.
+ sends `start`, waits for the `start` ack, and only then calls the real
+ `lobby_start_game`. Each real callback commits once; a late UI element or a
+ not-yet-ready flag is retried without double-toggling.
 
 The whole pre-start window is bounded by `prestart_timeout` (120 s: the
 service's own 90 s pre-start window plus margin). A service reply of
@@ -158,138 +158,138 @@ Instance API: `validate()`, `install()`, `update(dt) -> status, code`, `status()
 ## 4. Control transport (`control_transport.lua`)
 
 - Exactly one six-key request envelope per request (`control_protocol.lua`). A
-  nil payload is encoded as an empty object `{}` so the `observation` key always
-  survives JSON encoders that drop nil fields; the service accepts `{}` for
-  these ops (`test_practice_service.py::test_lua_control_protocol_constants`).
+ nil payload is encoded as an empty object `{}` so the `observation` key always
+ survives JSON encoders that drop nil fields; the service accepts `{}` for
+ these ops (`test_practice_service.py::test_lua_control_protocol_constants`).
 - **One globally monotonic wire sequence.** The real practice service keeps a
-  single strictly increasing per-role `last_sequence` for every non-poll
-  request, so coordination ops and `decide_begin` all allocate the next wire
-  sequence. The decision loop's own sequence (`decision_base`, default
-  `1000000`) is private: it travels inside the payload and the transport maps
-  the returned wire sequence back to it, so a decision never invalidates the
-  next heartbeat/status/end/start.
+ single strictly increasing per-role `last_sequence` for every non-poll
+ request, so coordination ops and `decide_begin` all allocate the next wire
+ sequence. The decision loop's own sequence (`decision_base`, default
+ `1000000`) is private: it travels inside the payload and the transport maps
+ the returned wire sequence back to it, so a decision never invalidates the
+ next heartbeat/status/end/start.
 - `decide_poll` reuses the outstanding decision's wire sequence (the service
-  exempts polls from the monotonic check) and `decision_result` carries the
-  original decision wire sequence in its payload while allocating a fresh wire
-  sequence for the request itself.
+ exempts polls from the monotonic check) and `decision_result` carries the
+ original decision wire sequence in its payload while allocating a fresh wire
+ sequence for the request itself.
 - `decide_cancel` closes the loop-visible "cancel and reissue" recovery.
-  `transport.cancel(request_id)` sends a **wire** `decide_cancel` for exactly the
-  owned outstanding decision — a fresh global sequence carrying
-  `{ decision_sequence = <the owned decide_begin wire sequence> }` — *before* it
-  clears the local slot, so the service can never still own the job after this
-  side forgets it. An unknown/stale request id sends nothing. The local→wire
-  mapping survives the cancel so a receipt can still name the cancelled
-  decision, and the cancel ack (which echoes the decision sequence) is consumed
-  rather than delivered or counted as out-of-order. When the cancel frame cannot
-  be pushed the local slot is **kept** (both `cancel()` and the transport
-  timeout path), so an owned cancel is never lost before it is pushed/acked or
-  the connection closes.
+ `transport.cancel(request_id)` sends a **wire** `decide_cancel` for exactly the
+ owned outstanding decision — a fresh global sequence carrying
+ `{ decision_sequence = <the owned decide_begin wire sequence> }` — *before* it
+ clears the local slot, so the service can never still own the job after this
+ side forgets it. An unknown/stale request id sends nothing. The local→wire
+ mapping survives the cancel so a receipt can still name the cancelled
+ decision, and the cancel ack (which echoes the decision sequence) is consumed
+ rather than delivered or counted as out-of-order. When the cancel frame cannot
+ be pushed the local slot is **kept** (both `cancel()` and the transport
+ timeout path), so an owned cancel is never lost before it is pushed/acked or
+ the connection closes.
 - The loop timeout is `decision_timeout + one poll interval` (`15.25 s`); the
-  service worker timeout stays 10 s, so the service reports a slow worker first
-  and the loop's own timeout triggers the `decide_cancel` + reissue. The
-  transport request timeout is a strictly higher backstop (`+15 s`) and also
-  cancels its own owned decision on the wire before clearing.
+ service worker timeout stays 10 s, so the service reports a slow worker first
+ and the loop's own timeout triggers the `decide_cancel` + reissue. The
+ transport request timeout is a strictly higher backstop (`+15 s`) and also
+ cancels its own owned decision on the wire before clearing.
 - `poll_decision()` is nonblocking: it never sleeps, emits at most one
-  `decide_poll` per `poll_interval`, and returns a terminal response (`ready`, or
-  a bounded failure) only. A service `practice_decision_pending` keeps the slot
-  outstanding.
+ `decide_poll` per `poll_interval`, and returns a terminal response (`ready`, or
+ a bounded failure) only. A service `practice_decision_pending` keeps the slot
+ outstanding.
 - **Ordered outstanding-frame matching.** The service answers strictly in order
-  on the single connection, one reply per request, so the transport keeps a
-  bounded ordered list of **every** frame it pushes (coordination, `decide_begin`,
-  `decide_poll`, `decide_cancel`, `decision_result`) and matches each non-event
-  reply to the head of that list. A `decide_begin` rejection that omits
-  `sequence` (not attested/replay/bad observation/outstanding/ended/aborted)
-  still reaches the decision that caused it; a `decision_result`/cancel/
-  heartbeat reply can never shift a later coordination reply (or a false END
-  ack), and every coordination reply is tagged with the op that produced it so
-  the runtime routes it without a second, drift-prone correlation list.
+ on the single connection, one reply per request, so the transport keeps a
+ bounded ordered list of **every** frame it pushes (coordination, `decide_begin`,
+ `decide_poll`, `decide_cancel`, `decision_result`) and matches each non-event
+ reply to the head of that list. A `decide_begin` rejection that omits
+ `sequence` (not attested/replay/bad observation/outstanding/ended/aborted)
+ still reaches the decision that caused it; a `decision_result`/cancel/
+ heartbeat reply can never shift a later coordination reply (or a false END
+ ack), and every coordination reply is tagged with the op that produced it so
+ the runtime routes it without a second, drift-prone correlation list.
 - Bounds: 2 MiB outbound, 64 KiB inbound; per-request timeout; bounded
-  coordination queue and bounded inflight list. Credentials/session never appear in `describe()`.
+ coordination queue and bounded inflight list. Credentials/session never appear in `describe()`.
 - Channel ports are resolved with protected normal indexing, so a real LÖVE
-  `love.thread.getChannel` **userdata** (whose `push`/`pop` live on the
-  metatable) is accepted exactly like the in-memory table fixture; `rawget`-only
-  table assumptions previously rejected every real channel with
-  `transport_bad_channels`, so a table-only lookup is never used for a native
-  channel. `build_channels` applies the same rule to an injected
-  `{ to_worker, from_worker }` pair and to the default `get_channel` route, and
-  still rejects a value that is not a table/userdata or lacks the method (Astra
-  root `control_channels_accept_userdata_methods`, plus the bootstrap
-  default-`get_channel` userdata fixture).
+ `love.thread.getChannel` **userdata** (whose `push`/`pop` live on the
+ metatable) is accepted exactly like the in-memory table fixture; `rawget`-only
+ table assumptions previously rejected every real channel with
+ `transport_bad_channels`, so a table-only lookup is never used for a native
+ channel. `build_channels` applies the same rule to an injected
+ `{ to_worker, from_worker }` pair and to the default `get_channel` route, and
+ still rejects a value that is not a table/userdata or lacks the method (review
+ root `control_channels_accept_userdata_methods`, plus the bootstrap
+ default-`get_channel` userdata fixture).
 - The worker thread (`control_thread.lua`) owns the actual `socket`, connects to
-  `127.0.0.1:<port>` only, uses the game-bundled `json`+`socket`, and mirrors the
-  Multiplayer thread style while using **dedicated** channels, never
-  `uiToNetwork`/`networkToUi`. If either dependency is absent the worker emits a
-  bounded hard-coded `{"t":"error","code":"control_thread_dependency"}` frame
-  that never touches `json.encode` (the normal path is unaffected: Lovely 0.10
-  preloads `json` in every state).
+ `127.0.0.1:<port>` only, uses the game-bundled `json`+`socket`, and mirrors the
+ Multiplayer thread style while using **dedicated** channels, never
+ `uiToNetwork`/`networkToUi`. If either dependency is absent the worker emits a
+ bounded hard-coded `{"t":"error","code":"control_thread_dependency"}` frame
+ that never touches `json.encode` (the normal path is unaffected: Lovely 0.10
+ preloads `json` in every state).
 
 ## 5. Multiplayer driver (`mp_driver.lua`)
 
 - `host_start(seed)`: sets `MP.LOBBY.config.ruleset = "ruleset_mp_majorleague"`
-  and the ruleset's own `forced_gamemode`, then calls the **original**
-  `G.FUNCS.start_lobby`. Because `start_lobby` resets the config and then calls
-  `MP.current_ruleset():force_lobby_options()`, the trusted gauntlet seed is
-  installed by a scoped wrapper that runs *after* the reset and *before* the
-  original `force_lobby_options`. The wrapper reads the field with protected
-  normal indexing (`resolved.force_lobby_options`), because the real
-  `MP.current_ruleset()` is an empty metatable proxy; a rawget would skip the
-  real function. The wrapper is always restored; the original
-  timer/location/option values are never re-implemented. Once the real
-  `start_lobby` has been invoked, a failure to record the forced keys is fatal
-  (`driver_force_failed`) and is **never** a re-armed second `createLobby`
-  (pre-call refusals such as `driver_no_ruleset` stay retryable).
+ and the ruleset's own `forced_gamemode`, then calls the **original**
+ `G.FUNCS.start_lobby`. Because `start_lobby` resets the config and then calls
+ `MP.current_ruleset():force_lobby_options()`, the trusted gauntlet seed is
+ installed by a scoped wrapper that runs *after* the reset and *before* the
+ original `force_lobby_options`. The wrapper reads the field with protected
+ normal indexing (`resolved.force_lobby_options`), because the real
+ `MP.current_ruleset()` is an empty metatable proxy; a rawget would skip the
+ real function. The wrapper is always restored; the original
+ timer/location/option values are never re-implemented. Once the real
+ `start_lobby` has been invoked, a failure to record the forced keys is fatal
+ (`driver_force_failed`) and is **never** a re-armed second `createLobby`
+ (pre-call refusals such as `driver_no_ruleset` stay retryable).
 - `ai_join(code)`: sets `MP.LOBBY.username = "BALATRO AI"` and calls the ordinary
-  `MP.ACTIONS.join_lobby(code)` with the exact service-provided code.
+ `MP.ACTIONS.join_lobby(code)` with the exact service-provided code.
 - `ai_ready()`: resolves the **real** element
-  `G.MAIN_MENU_UI:get_UIE_by_ID("lobby_menu_start")` (normal metatable indexing,
-  never rawget, never a fabricated skeleton; an injected `element_for` override
-  must return the same real shape) and calls the original
-  `G.FUNCS.lobby_ready_up(e)`. Success is reported only when the observable
-  `MP.LOBBY.ready_to_start` actually turned true, so a version-mismatch modal or
-  a still-animating button is a bounded `driver_not_ready` retry. An
-  already-ready lobby is an idempotent success that never double-toggles.
+ `G.MAIN_MENU_UI:get_UIE_by_ID("lobby_menu_start")` (normal metatable indexing,
+ never rawget, never a fabricated skeleton; an injected `element_for` override
+ must return the same real shape) and calls the original
+ `G.FUNCS.lobby_ready_up(e)`. Success is reported only when the observable
+ `MP.LOBBY.ready_to_start` actually turned true, so a version-mismatch modal or
+ a still-animating button is a bounded `driver_not_ready` retry. An
+ already-ready lobby is an idempotent success that never double-toggles.
 - `host_start_game()`: requires the guest-confirmed ready state and the live
-  forced ruleset, then calls the original `G.FUNCS.lobby_start_game`.
+ forced ruleset, then calls the original `G.FUNCS.lobby_start_game`.
 - `connected()` / `ruleset_ready()` / `is_started()` / `main_menu_ready()`: real
-  MP observables used by the coordinator (socket connected, registry+forced
-  ruleset agree, match started, menu ready). `is_started()` is the *match* flag,
-  never "we called ready": it latches once the lobby is joined and the engine has
-  reached the ordinary `G.STAGES.RUN` stage (the only way a staged lobby gets
-  there is the real Multiplayer start). It never consults a
-  `MP.is_started`/`MP.LOBBY.started` flag, neither of which exists in the pinned
-  source. `main_menu_ready()` requires the real `G.STAGE == G.STAGES.MAIN_MENU`
-  **and** `G.STATE == G.STATES.MENU` **and** `G.MAIN_MENU_UI ~= nil`, so the
-  splash screen (which reuses the MAIN_MENU stage with the SPLASH state) never
-  creates a lobby.
+ MP observables used by the coordinator (socket connected, registry+forced
+ ruleset agree, match started, menu ready). `is_started()` is the *match* flag,
+ never "we called ready": it latches once the lobby is joined and the engine has
+ reached the ordinary `G.STAGES.RUN` stage (the only way a staged lobby gets
+ there is the real Multiplayer start). It never consults a
+ `MP.is_started`/`MP.LOBBY.started` flag, neither of which exists in the pinned
+ source. `main_menu_ready()` requires the real `G.STAGE == G.STAGES.MAIN_MENU`
+ **and** `G.STATE == G.STATES.MENU` **and** `G.MAIN_MENU_UI ~= nil`, so the
+ splash screen (which reuses the MAIN_MENU stage with the SPLASH state) never
+ creates a lobby.
 - `config_digest(ruleset_id, gamemode, keys)`: source-derived Major League digest
-  (`ruleset_id | gamemode | key=value…`, keys bytewise ascending) over the live
-  `MP.LOBBY.config`, hashed with `Codec.hash_string` (FNV1a32, eight lowercase
-  hex). The forced key set is recorded from the real registry
-  `force_lobby_options` call (the driver proxies `MP.LOBBY.config` for exactly
-  that call — no hardcoded key names); the guest uses the service SETUP keyset.
-  The runtime computes actual values locally and never echoes the expected
-  digest.
+ (`ruleset_id | gamemode | key=value…`, keys bytewise ascending) over the live
+ `MP.LOBBY.config`, hashed with `Codec.hash_string` (FNV1a32, eight lowercase
+ hex). The forced key set is recorded from the real registry
+ `force_lobby_options` call (the driver proxies `MP.LOBBY.config` for exactly
+ that call — no hardcoded key names); the guest uses the service SETUP keyset.
+ The runtime computes actual values locally and never echoes the expected
+ digest.
 - `install_send_guard()`: default-deny allowlist over `Client.send`, built from
-  the **actual wire action names** in the pinned Multiplayer source. The
-  required life/timer penalties (`failTimer`, `failPvPTimer`, `startAnteTimer`,
-  `pauseAnteTimer`) and ordinary gameplay are preserved; the ranked/server
-  (`submitLogHashes`, `streamLogLines`, `endGameStatsRequested`, `sendGameStats`)
-  and end-game/private opponent paths (`getEndGameJokers`, `getNemesisDeck`,
-  `nemesisEndGameStats`, `receiveEndGameJokers`, `receiveNemesisDeck`,
-  `moddedAction`, …) can never be sent. Role/phase gates sit on top: the guest
-  can never create a lobby or push `lobbyOptions`; only the trusted human host
-  may push `lobbyOptions`, and only before start (configuration is frozen once
-  the match starts). The pinned, harmless `connect` action (`MP.ACTIONS.connect`,
-  the reconnect button carries no private/ranked data) is allowed; the blocked
-  set still contains every ranked/server/end-game/private path. Uninstall
-  restores the exact original.
+ the **actual wire action names** in the pinned Multiplayer source. The
+ required life/timer penalties (`failTimer`, `failPvPTimer`, `startAnteTimer`,
+ `pauseAnteTimer`) and ordinary gameplay are preserved; the ranked/server
+ (`submitLogHashes`, `streamLogLines`, `endGameStatsRequested`, `sendGameStats`)
+ and end-game/private opponent paths (`getEndGameJokers`, `getNemesisDeck`,
+ `nemesisEndGameStats`, `receiveEndGameJokers`, `receiveNemesisDeck`,
+ `moddedAction`, …) can never be sent. Role/phase gates sit on top: the guest
+ can never create a lobby or push `lobbyOptions`; only the trusted human host
+ may push `lobbyOptions`, and only before start (configuration is frozen once
+ the match starts). The pinned, harmless `connect` action (`MP.ACTIONS.connect`,
+ the reconnect button carries no private/ranked data) is allowed; the blocked
+ set still contains every ranked/server/end-game/private path. Uninstall
+ restores the exact original.
 - The guard is **required for both staged roles** before any create/join: it is
-  installed for the human host as well as the AI guest and a boot that cannot
-  install it aborts with `boot_guard_failed` before any lobby create/join. Only
-  this staged bootstrap installs it — never the normal/live path. The root must
-  inject the real `Client` port; a missing client is not silently tolerated.
-  Ordinary MP messages (coordination, gameplay, required timer/life penalties)
-  are preserved by the allowlist.
+ installed for the human host as well as the AI guest and a boot that cannot
+ install it aborts with `boot_guard_failed` before any lobby create/join. Only
+ this staged bootstrap installs it — never the normal/live path. The root must
+ inject the real `Client` port; a missing client is not silently tolerated.
+ Ordinary MP messages (coordination, gameplay, required timer/life penalties)
+ are preserved by the allowlist.
 - `leave_local()` / `stop_local()`: leave/stop only through ordinary MP actions.
 
 ## 6. Update, terminal and errors
@@ -383,22 +383,22 @@ no `PYTHONPATH` needed).
 `python tests/test_runtime_cross_service.py --require-all` has three contracts:
 
 - the *actual* JSON envelopes emitted by the real Lua transport are fed into the
-  *actual* `tools/practice_service.py` `handle_request` wire entrypoint with a
-  real canonical observation, exercising two decisions interleaved with
-  heartbeats/status/results and the terminal `end`, and asserting the single
-  per-role wire sequence never triggers `practice_replay`;
+ *actual* `tools/practice_service.py` `handle_request` wire entrypoint with a
+ real canonical observation, exercising two decisions interleaved with
+ heartbeats/status/results and the terminal `end`, and asserting the single
+ per-role wire sequence never triggers `practice_replay`;
 - **two real bootstrap coordinators** (human + guest, in two Lua runtimes) are
-  driven against one attested real service with source-shaped MP stubs and
-  late connect/UI, asserting they both reach the real start gates, the host
-  reports the trusted seed exactly once, the guest joins the host's exact code,
-  and each role sends exactly one `hello` (no invented op or code);
+ driven against one attested real service with source-shaped MP stubs and
+ late connect/UI, asserting they both reach the real start gates, the host
+ reports the trusted seed exactly once, the guest joins the host's exact code,
+ and each role sends exactly one `hello` (no invented op or code);
 - the empty-object JSON mismatch root is asserted directly: the pinned
-  rxi/SMODS json (the game's `require("json")`) encodes `{}` as `[]`, while the
-  companion `integration/wire_json.lua` composes the six-key envelope with
-  `"observation":{}`. When `wire_json.lua` is present the cross-service critical
-  frames are encoded through the real SMODS json + wire wrapper, never the test
-  json. If the wrapper is absent the report case fails loudly rather than
-  hiding the mismatch.
+ rxi/SMODS json (the game's `require("json")`) encodes `{}` as `[]`, while the
+ companion `integration/wire_json.lua` composes the six-key envelope with
+ `"observation":{}`. When `wire_json.lua` is present the cross-service critical
+ frames are encoded through the real SMODS json + wire wrapper, never the test
+ json. If the wrapper is absent the report case fails loudly rather than
+ hiding the mismatch.
 
 `python tests/astra_runtime_contracts.py` (6 cases / 12 executions, lua51 +
 luajit21) independently checks the real **userdata** control channel methods
@@ -413,66 +413,66 @@ external network.
 ## 9. Unresolved integrations and honest non-claims
 
 - **Root wiring not done.** `AISparring/core.lua` (root-owned) must inject the
-  ports, install `update`, and provide `G`, `env`, `launcher`, the game
-  `encode`/`decode` (through the companion `wire_json` wrapper), `love_thread`/
-  `get_channel` **and the real `Client` handle for BOTH roles** (the send guard
-  is required for host and guest and a stage aborts `boot_guard_failed` without
-  it). `get_channel` is `love.thread.getChannel`; the returned Channel
-  **userdata** is now accepted directly (protected method lookup), as is an
-  injected `{ to_worker, from_worker }` pair. It must also supply `modules.codec`
-  for the human role: `ensure_driver` needs `Codec.hash_string` on both roles for
-  the source-derived digest, and the digest is never weakened with a
-  content-hash fallback. That human-codec supply is assigned to the **companion
-  owner** (finding 9); this chunk does not edit `core.lua` or
-  `companion_host.lua`, and `companion_host.lua` must still forward the `Client`
-  port.
+ ports, install `update`, and provide `G`, `env`, `launcher`, the game
+ `encode`/`decode` (through the companion `wire_json` wrapper), `love_thread`/
+ `get_channel` **and the real `Client` handle for BOTH roles** (the send guard
+ is required for host and guest and a stage aborts `boot_guard_failed` without
+ it). `get_channel` is `love.thread.getChannel`; the returned Channel
+ **userdata** is now accepted directly (protected method lookup), as is an
+ injected `{ to_worker, from_worker }` pair. It must also supply `modules.codec`
+ for the human role: `ensure_driver` needs `Codec.hash_string` on both roles for
+ the source-derived digest, and the digest is never weakened with a
+ content-hash fallback. That human-codec supply is assigned to the **companion
+ owner** (finding 9); this chunk does not edit `core.lua` or
+ `companion_host.lua`, and `companion_host.lua` must still forward the `Client`
+ port.
 - **Practice service coupling.** The exact `hello`/`setup`/`status`/`end`
-  response shapes are owned by the service worker; this chunk reads only the
-  documented op-specific fields (`role`, `ruleset_id`, `gamemode`,
-  `forced_options`, `difficulty`, `mode`, `pacing`, `gauntlet_seed`) and bounded
-  `ok`/`code`. A response that is missing a required field or disagrees with the
-  trusted ports fails the boot (`boot_setup_failed`/`boot_config_mismatch`)
-  rather than being worked around. The service attests the session only through
-  its trusted Python `mark_attested` port; the runtime treats
-  `practice_not_attested` as a bounded retry.
+ response shapes are owned by the service worker; this chunk reads only the
+ documented op-specific fields (`role`, `ruleset_id`, `gamemode`,
+ `forced_options`, `difficulty`, `mode`, `pacing`, `gauntlet_seed`) and bounded
+ `ok`/`code`. A response that is missing a required field or disagrees with the
+ trusted ports fails the boot (`boot_setup_failed`/`boot_config_mismatch`)
+ rather than being worked around. The service attests the session only through
+ its trusted Python `mark_attested` port; the runtime treats
+ `practice_not_attested` as a bounded retry.
 - **Empty-object / null wire shapes.** The game's `require("json")` (rxi)
-  encodes an empty table as `[]` and has no null sentinel. The companion
-  `integration/wire_json.lua` (owner: root/companion) is the wire composer that
-  forces `{}` for the six-key envelope's `observation`; it now exists and the
-  cross-service critical frames are encoded through the real pinned SMODS json +
-  this wrapper, with the mismatch root asserted directly. Core must still pass
-  `wire.encode_service` as the runtime `encode` port in the live path. This chunk
-  does not edit the companion module.
+ encodes an empty table as `[]` and has no null sentinel. The companion
+ `integration/wire_json.lua` (owner: root/companion) is the wire composer that
+ forces `{}` for the six-key envelope's `observation`; it now exists and the
+ cross-service critical frames are encoded through the real pinned SMODS json +
+ this wrapper, with the mismatch root asserted directly. Core must still pass
+ `wire.encode_service` as the runtime `encode` port in the live path. This chunk
+ does not edit the companion module.
 - **Major League digest.** The host-side expected digest is derived by the
-  launcher/service owner from the pinned `rulesets/majorleague.lua`; this runtime
-  computes the actual digest locally from the live `MP.LOBBY.config` over the
-  service-provided keyset and never echoes the expected value. Equal digests plus
-  `practice_config_mismatch` on drift are the check; the digest is trusted
-  configuration equality, not authentication.
+ launcher/service owner from the pinned `rulesets/majorleague.lua`; this runtime
+ computes the actual digest locally from the live `MP.LOBBY.config` over the
+ service-provided keyset and never echoes the expected value. Equal digests plus
+ `practice_config_mismatch` on drift are the check; the digest is trusted
+ configuration equality, not authentication.
 - **Real start observation.** The guest's match-start relay is the ordinary
-  server start; fixtures relay it explicitly (the two runtimes do not share
-  engine memory). A live run must observe the real lobby join plus the ordinary
-  `G.STAGES.RUN` transition (there is no `MP.is_started`/`LOBBY.started` in the
-  pinned source).
+ server start; fixtures relay it explicitly (the two runtimes do not share
+ engine memory). A live run must observe the real lobby join plus the ordinary
+ `G.STAGES.RUN` transition (there is no `MP.is_started`/`LOBBY.started` in the
+ pinned source).
 - **Pending-action latch.** The executor's pending/cancel/timeout API
-  (`pending_status`, `cancel`, `revoke`) is consumed through the broker ports; a
-  worker-owned latch change is integrated via those ports, not by editing worker
-  files.
+ (`pending_status`, `cancel`, `revoke`) is consumed through the broker ports; a
+ worker-owned latch change is integrated via those ports, not by editing worker
+ files.
 - **Real UI elements.** The lobby-ready lookup resolves the real inherited
-  `G.MAIN_MENU_UI:get_UIE_by_ID("lobby_menu_start")` (verified against the pinned
-  engine Object/UIBox definitions). The remaining cash-out/PvP/skip elements are
-  the engine worker's; fixtures only prove the driver refuses a missing element
-  and never fabricates a button.
+ `G.MAIN_MENU_UI:get_UIE_by_ID("lobby_menu_start")` (verified against the pinned
+ engine Object/UIBox definitions). The remaining cash-out/PvP/skip elements are
+ the engine worker's; fixtures only prove the driver refuses a missing element
+ and never fabricates a button.
 - **Executor terminal faults.** The broker now passes `exec_stall_timeout`/
-  `exec_revoked` through; the decision loop must stop immediately on them
-  (loop-worker scope).
+ `exec_revoked` through; the decision loop must stop immediately on them
+ (loop-worker scope).
 - **Terminal ownership.** The service trusts the human END; the AI END is a
-  receipt. The runtime keeps the service open (the launcher closes it) and never
-  generates decisions after the terminal state.
+ receipt. The runtime keeps the service open (the launcher closes it) and never
+ generates decisions after the terminal state.
 - **Timer projection and observation coverage** remain as documented in
-  `ENGINE_ADAPTER.md` §9 and `DECISION_LOOP.md` §4.
+ `ENGINE_ADAPTER.md` §9 and `DECISION_LOOP.md` §4.
 - **Not a sandbox.** The capability is in-process provenance, not isolation, and
-  not a defence against arbitrary trusted local code.
+ not a defence against arbitrary trusted local code.
 - **No live evidence.** Nothing here launches the game, writes a Mod or file,
-  sends network traffic or runs the policy subprocess; all evidence is fixture
-  and static only. Real-engine smoke testing is the root's later step.
+ sends network traffic or runs the policy subprocess; all evidence is fixture
+ and static only. Real-engine smoke testing is the root's later step.

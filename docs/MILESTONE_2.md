@@ -2,7 +2,7 @@
 
 Date: 2026-09-27. Branch: `feature/ai-sparring-v1`. Baseline: accepted M1 `8bcccabbce0693cf5a0e168babacfa511c2443e0`.
 
-**Status: Milestone 2 accepted by Astra after Claude Opus 5.5 High source review, fixes, re-review and targeted final confirmation.** No Milestone 3 work has begun. The exact resulting commit and clean-tree check are recorded in the final handoff; this report is included in that commit.
+**Status: Milestone 2 accepted by review after source review source review, fixes, re-review and targeted final confirmation.** No Milestone 3 work has begun. The exact resulting commit and clean-tree check are recorded in the final handoff; this report is included in that commit.
 
 ## Implementation
 
@@ -64,13 +64,13 @@ Independently reproduced results after review fixes:
 | Pure observation/codec/actions | 96 | 188 | 92 Lua cases each runtime + 4 static; pass |
 | State reader | 61 | 122 | 61 each runtime; pass |
 | Broker/worker | 123 | 219 | 59 Lua cases each runtime + 23 static + 78 subprocess executions; pass |
-| Astra independent attacks | 18 | 36 | 18 each runtime; pass |
-| Astra oracle mutation checks | 3 | 6 | 3 each runtime; pass |
+| review independent attacks | 18 | 36 | 18 each runtime; pass |
+| review oracle mutation checks | 3 | 6 | 3 each runtime; pass |
 | **M2 total** | **301** | **571** | **Pass** |
 | Existing M1 regression | 66 | 117 | 51 each runtime + 15 static; pass |
 | **Combined** | **367** | **688** | **Pass** |
 
-The worker has 41 logical subprocess cases, 37 executed once per runtime and four runtime-independent cases. The initial suite had 400 ineffective property iterations caused by incorrect call arguments; these are corrected. The final oracle checks exact candidate-set equality using separate legality predicates. Astra proved it detects in-memory mutants bypassing affordability, capacity and hands-remaining checks. Property loops add 520 deterministic seeded synthetic frames per runtime (1,040 total); iterations are not inflated into named-case counts. Checks include legal resources/references/phase, bounds, no duplicates, deterministic actions, hidden-field invariance and mutation isolation. Python independently verifies selected codec/FNV vectors. Fixtures exercise actual repository modules, not copied implementations. Claude inspects source and evidence; it does not independently execute tests through its read-only tool allowance.
+The worker has 41 logical subprocess cases, 37 executed once per runtime and four runtime-independent cases. The initial suite had 400 ineffective property iterations caused by incorrect call arguments; these are corrected. The final oracle checks exact candidate-set equality using separate legality predicates. Review proved it detects in-memory mutants bypassing affordability, capacity and hands-remaining checks. Property loops add 520 deterministic seeded synthetic frames per runtime (1,040 total); iterations are not inflated into named-case counts. Checks include legal resources/references/phase, bounds, no duplicates, deterministic actions, hidden-field invariance and mutation isolation. Python independently verifies selected codec/FNV vectors. Fixtures exercise actual repository modules, not copied implementations. Source review inspects source and evidence; it does not independently execute tests through its read-only tool allowance.
 
 | Fixture benchmark | Lua 5.1 | LuaJIT |
 |---|---:|---:|
@@ -84,13 +84,13 @@ Canonical fixture sizes are 1,286 bytes SHOP and 1,001 bytes PLAY. These are med
 
 ## Adversarial workflow
 
-DeepSeek V4.1 Flash High implemented the modules, documentation and main tests. Astra defined interfaces/threats, inspected source, ran independent suites, authored 18 boundary attack probes and 3 oracle mutation checks and routed defects back. [ASTRA_M2_VERIFICATION.md](ASTRA_M2_VERIFICATION.md) records the full evidence.
+Development implemented the modules, documentation and main tests. Review defined interfaces/threats, inspected source, ran independent suites, authored 18 boundary attack probes and 3 oracle mutation checks and routed defects back. [M2_VERIFICATION.md](M2_VERIFICATION.md) records the full evidence.
 
-DeepSeek's required [self-review](DEEPSEEK_M2_ADVERSARIAL.md) answers both hidden-information and illegal-mutation questions. It identified the indirect string-library route, empty JSON array ambiguity and exception-unsafe broker guard; all were fixed and regression-tested before Claude. C-call availability, trusted producer/validator correctness, fresh-broker-per-session semantics and future target mapping are explicitly scoped residual obligations.
+Development's required self-review answers both hidden-information and illegal-mutation questions. It identified the indirect string-library route, empty JSON array ambiguity and exception-unsafe broker guard; all were fixed and regression-tested before source review. C-call availability, trusted producer/validator correctness, fresh-broker-per-session semantics and future target mapping are explicitly scoped residual obligations.
 
-Astra's fixes included exact rather than wildcard certificates, explicit capacity checks, consumable source binding, face visibility/Stone masks, nonnegative epochs, fresh post-validator capture, replay/reentrancy protections, worker input re-sanitization, mandatory VM memory caps and bounded file reads. Initial missing-visibility/negative-epoch attack failures now pass. DeepSeek also caught and fixed a Lua boolean-default bug that denied every action and a worker table-constructor bug that prevented all worker requests.
+Review's fixes included exact rather than wildcard certificates, explicit capacity checks, consumable source binding, face visibility/Stone masks, nonnegative epochs, fresh post-validator capture, replay/reentrancy protections, worker input re-sanitization, mandatory VM memory caps and bounded file reads. Initial missing-visibility/negative-epoch attack failures now pass. Development also caught and fixed a Lua boolean-default bug that denied every action and a worker table-constructor bug that prevented all worker requests.
 
-Claude requested changes with no Critical/High findings and eight Medium findings. DeepSeek implemented all Medium and Low fixes; Astra independently verified them and added follow-up tripwire and Lua-truthiness probes. See [CLAUDE_M2_REVIEW.md](CLAUDE_M2_REVIEW.md) and [CLAUDE_M2_RESOLUTION.md](CLAUDE_M2_RESOLUTION.md) for every finding, fix and residual Info disposition. Claude accepted the re-review with all Medium findings closed. Its remaining Low formatter-address route and optional probe assertion were hardened and independently retested. Claude's focused final confirmation closed both and reaffirmed ACCEPT; see [CLAUDE_M2_REREVIEW.md](CLAUDE_M2_REREVIEW.md). No Critical, High or fairness-relevant Medium finding remains open.
+Source review requested changes with no Critical/High findings and eight Medium findings. Development implemented all Medium and Low fixes; review independently verified them and added follow-up tripwire and Lua-truthiness probes. See CLAUDE_M2_REVIEW.md and [M2_RESOLUTION.md](M2_RESOLUTION.md) for every finding, fix and residual Info disposition. Source review accepted the re-review with all Medium findings closed. Its remaining Low formatter-address route and optional probe assertion were hardened and independently retested. Source review's focused final confirmation closed both and reaffirmed ACCEPT; see the M2 review. No Critical, High or fairness-relevant Medium finding remains open.
 
 ## Remaining integration work
 
@@ -115,8 +115,8 @@ AISparring/ai/observation.lua
 AISparring/integration/action_broker.lua
 AISparring/integration/state_reader.lua
 docs/AI_OBSERVATION.md
-docs/ASTRA_M2_VERIFICATION.md
-docs/DEEPSEEK_M2_ADVERSARIAL.md
+docs/M2_VERIFICATION.md
+docs/the m2 adversarial notes
 docs/FAIRNESS.md
 docs/LEGAL_ACTIONS.md
 docs/M2_EXECUTION_BOUNDARY.md
@@ -167,10 +167,10 @@ Additional files created during review and completion:
 ```text
 docs/MILESTONE_2.md
 docs/CLAUDE_M2_REVIEW.md
-docs/CLAUDE_M2_RESOLUTION.md
-docs/CLAUDE_M2_REREVIEW.md
+docs/M2_RESOLUTION.md
+docs/the M2 review
 tests/astra_mutation_checks.py
 tests/boundary/test_load_tripwire.lua
 ```
 
-The saved re-review and its targeted follow-up are in `docs/CLAUDE_M2_REREVIEW.md`.
+The saved re-review and its targeted follow-up are in `docs/the M2 review.

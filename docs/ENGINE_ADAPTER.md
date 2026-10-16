@@ -1,6 +1,6 @@
 # Engine adapter and production executor (`AISparring/integration`)
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 Status: bounded implementation of `PLAYABLE_PLAN.md` chunk 2, **fixture-verified only**.
 No live game capture, no game launch, no Mods write, no Git operation, no policy.
 This is not a playability claim; the remaining wiring is listed in §9.
@@ -26,32 +26,32 @@ It does **not** modify the accepted M2 modules (`ai/*`, `state_reader.lua`,
 ## 1. Contract and data flow
 
 ```
-engine (G/MP)                     ┌─ state_revision (monotonic epoch)
-   │  rawget-only, fixed paths    │
-   ▼                              ▼
+engine (G/MP) ┌─ state_revision (monotonic epoch)
+ │ rawget-only, fixed paths │
+ ▼ ▼
 engine_adapter.step() ── runtime + ui_view ──► state_reader.capture() ──► AIObservation handle
-   │                                                                          │
-   └─ control (cash_out)                                                      ▼
-                                                               ai/actions.generate() candidates
-                                                                              │
+ │ │
+ └─ control (cash_out) ▼
+ ai/actions.generate() candidates
+ │
 action_broker.issue()/submit() ── ports.{capture,validate,dispatch} ──► production_executor
-                                                                              │
-                                                       real G.FUNCS callbacks (committed commit)
+ │
+ real G.FUNCS callbacks (committed commit)
 ```
 
 - The **adapter** is a pure producer: it never calls an engine/UI callback, never
-  mutates, and reads only a fixed `rawget` allowlist plus the two *pure, read-only*
-  card predicates `Card:can_sell_card` and `Card:can_use_consumeable` (which read
-  the live engine but never repaint UI or show alerts). Its correctness claim is
-  "the values it attests are the ones the HUD would show in this phase".
+ mutates, and reads only a fixed `rawget` allowlist plus the two *pure, read-only*
+ card predicates `Card:can_sell_card` and `Card:can_use_consumeable` (which read
+ the live engine but never repaint UI or show alerts). Its correctness claim is
+ "the values it attests are the ones the HUD would show in this phase".
 - The **executor** is the only module that commits. It re-derives everything from
-  the live engine, re-checks the revision immediately before the callback, and
-  calls the *normal* Balatro/MP callback.
+ the live engine, re-checks the revision immediately before the callback, and
+ calls the *normal* Balatro/MP callback.
 - The **revision** is a per-session, strictly increasing int32. `sync(fingerprint)`
-  advances only on an observed decision-state change; `bump(reason)` is the forced
-  trusted-hook path. Unobserved A→B→A remains a TCB limitation (documented in
-  `STATE_READER.md` §3.1 and `M2_EXECUTION_BOUNDARY.md` §1.4), not something this
-  module claims to detect.
+ advances only on an observed decision-state change; `bump(reason)` is the forced
+ trusted-hook path. Unobserved A→B→A remains a TCB limitation (documented in
+ `STATE_READER.md` §3.1 and `M2_EXECUTION_BOUNDARY.md` §1.4), not something this
+ module claims to detect.
 
 All three modules are globals-free: no `require`/`dofile`, no `io`/`os`/`debug`,
 no RNG, no `SMODS`/`Client`/`love`/`NFS`. The engine is reached only through the
@@ -98,15 +98,15 @@ later invokes `G.FUNCS.select_blind(MP.GAME.next_blind_context)`
 (`ui/game/functions.lua`, `networking/action_handlers.lua`).
 
 - While `MP.GAME.ready_blind == true` (already ready, waiting for the human/server)
-  the adapter emits **no** blind action at all (H4a) and the executor refuses a
-  `SELECT_BLIND` (`exec_illegal`); the empty catalogue makes the decision loop back
-  off and wait instead of selecting an action that would be refused three times.
+ the adapter emits **no** blind action at all (H4a) and the executor refuses a
+ `SELECT_BLIND` (`exec_illegal`); the empty catalogue makes the decision loop back
+ off and wait instead of selecting an action that would be refused three times.
 - `SKIP_BLIND` is only emitted for the Small/Big blinds (H4b). Vanilla mounts a
-  skip button — and a `tag_container` — only there; the boss blind's state is also
-  `Select`, but `G.FUNCS.skip_blind` guards on `_tag` (`button_callbacks.lua:2754`)
-  and a boss skip has no effect (the MP wrapper would still count it,
-  `mp/ui/game/functions.lua:82-107`). The executor likewise only validates a
-  Small/Big skip, and requires the `skip_blind` element to resolve.
+ skip button — and a `tag_container` — only there; the boss blind's state is also
+ `Select`, but `G.FUNCS.skip_blind` guards on `_tag` (`button_callbacks.lua:2754`)
+ and a boss skip has no effect (the MP wrapper would still count it,
+ `mp/ui/game/functions.lua:82-107`). The executor likewise only validates a
+ Small/Big skip, and requires the `skip_blind` element to resolve.
 
 ## 3. Exact zone mappings
 
@@ -249,16 +249,16 @@ production companion currently passes a default nil-returning function, so it fa
 back to deriving the exact element from the injected `G` itself:
 
 - `cash_out` → `G.round_eval:get_UIE_by_ID('cash_out_button')`
-  (`common_events.lua:1071`). The real button must exist: `G.FUNCS.cash_out` reads
-  the round tally (`G.GAME.current_round.dollars`,
-  `button_callbacks.lua:2938`) as well as clearing `e.config.button`, so the
-  executor never fabricates a minimal element — cash-out waits for the tally UI
-  (absent ⇒ `exec_element_missing`);
+ (`common_events.lua:1071`). The real button must exist: `G.FUNCS.cash_out` reads
+ the round tally (`G.GAME.current_round.dollars`,
+ `button_callbacks.lua:2938`) as well as clearing `e.config.button`, so the
+ executor never fabricates a minimal element — cash-out waits for the tally UI
+ (absent ⇒ `exec_element_missing`);
 - `skip_blind` → `{ UIBox = G.blind_select_opts[string.lower(blind_on_deck)] }`
-  (the blind-choice UIBox that mounts `tag_container`, `button_callbacks.lua:2754`);
+ (the blind-choice UIBox that mounts `tag_container`, `button_callbacks.lua:2754`);
 - `pvp_ready` → `G.blind_select_opts[string.lower(blind_on_deck)]:get_UIE_by_ID
-  ("select_blind_button")` (whose `config.ref_table` is the blind config,
-  `mp/ui/game/blind_choice.lua:210-228`).
+ ("select_blind_button")` (whose `config.ref_table` is the blind config,
+ `mp/ui/game/blind_choice.lua:210-228`).
 
 Nothing beyond what the callback actually reads is fabricated.
 
@@ -297,42 +297,42 @@ returns `exec_pending` and no second commit can occur, so the same queued purcha
 cannot be committed twice.
 
 - Completion is **action-specific and anchored to the exact dispatched target**
-  (engine table identity + expected area + phase), captured before the callback.
-  A generic canonical/epoch change is **not** a release signal: an unrelated
-  opponent lives/score update, own money income, or a `revision.bump` from another
-  hook all change the fingerprint but do not complete the action.
-  - purchases/sales/`USE_CONSUMABLE`: the anchored card must leave its expected
-    area (`shop_jokers`/`jokers`/`consumeables`/`shop_vouchers`/`shop_booster`/
-    `pack_cards`), or the phase must move on. Because a use-card removal is
-    synchronous, such a latch completes on the very next gate;
-  - `PLAY_CARDS`/`DISCARD_CARDS`: the selected hand cards must leave `G.hand`, or
-    the phase must move on;
-  - `SELECT_BLIND`: `MP.GAME.ready_blind == true` (PvP) or a phase change;
-  - `SKIP_BLIND`: phase change or `blind_on_deck` change;
-  - `SKIP_BOOSTER`/`LEAVE_SHOP`/`CASH_OUT`: a real phase transition;
-  - `REROLL`: an actual shop-content generation change (shop card identities) or
-    the anchored `reroll_cost` change — money alone is never enough.
-  Money/canonical alone never completes an action.
+ (engine table identity + expected area + phase), captured before the callback.
+ A generic canonical/epoch change is **not** a release signal: an unrelated
+ opponent lives/score update, own money income, or a `revision.bump` from another
+ hook all change the fingerprint but do not complete the action.
+ - purchases/sales/`USE_CONSUMABLE`: the anchored card must leave its expected
+ area (`shop_jokers`/`jokers`/`consumeables`/`shop_vouchers`/`shop_booster`/
+ `pack_cards`), or the phase must move on. Because a use-card removal is
+ synchronous, such a latch completes on the very next gate;
+ - `PLAY_CARDS`/`DISCARD_CARDS`: the selected hand cards must leave `G.hand`, or
+ the phase must move on;
+ - `SELECT_BLIND`: `MP.GAME.ready_blind == true` (PvP) or a phase change;
+ - `SKIP_BLIND`: phase change or `blind_on_deck` change;
+ - `SKIP_BOOSTER`/`LEAVE_SHOP`/`CASH_OUT`: a real phase transition;
+ - `REROLL`: an actual shop-content generation change (shop card identities) or
+ the anchored `reroll_cost` change — money alone is never enough.
+ Money/canonical alone never completes an action.
 - The window is bounded by an **injected monotonic clock** (`clock` port: a
-  `{ now() }` table or a bare function) and `stall_timeout` (default 10.0s — a
-  defensible ceiling long enough not to reject a legitimate consumable/card
-  animation but short enough to bound a stuck commit). On
-  expiry the latch does **not** release back to a usable executor (that would let
-  the stale queued action be retried and duplicated): it latches a terminal fault
-  (`exec_stall_timeout`). Every later `capture`/`validate`/`dispatch` keeps
-  returning the fault until the trusted bootstrap calls `cancel()` (session reset)
-  or `revoke()`. Without an injected clock there is no timeout and only a proven
-  completion releases. The executor never sleeps and never touches the engine's
-  MP timers.
+ `{ now() }` table or a bare function) and `stall_timeout` (default 10.0s — a
+ defensible ceiling long enough not to reject a legitimate consumable/card
+ animation but short enough to bound a stuck commit). On
+ expiry the latch does **not** release back to a usable executor (that would let
+ the stale queued action be retried and duplicated): it latches a terminal fault
+ (`exec_stall_timeout`). Every later `capture`/`validate`/`dispatch` keeps
+ returning the fault until the trusted bootstrap calls `cancel()` (session reset)
+ or `revoke()`. Without an injected clock there is no timeout and only a proven
+ completion releases. The executor never sleeps and never touches the engine's
+ MP timers.
 - Same-state pure actions are exempt: `SELECT_TARGETS` (highlight only) and
-  `REORDER_*` (synchronous permutation) never latch, so a legitimate reorder is not
-  blocked indefinitely.
+ `REORDER_*` (synchronous permutation) never latch, so a legitimate reorder is not
+ blocked indefinitely.
 - **NEW-2:** `advance_ui()` clears the latched control when the adapter reports no
-  pending control. If the engine leaves `ROUND_EVAL` without the AI pressing
-  cash-out, the stale `cash_out` control can no longer keep `capture` from
-  resuming; the next `capture` proceeds normally.
+ pending control. If the engine leaves `ROUND_EVAL` without the AI pressing
+ cash-out, the stale `cash_out` control can no longer keep `capture` from
+ resuming; the next `capture` proceeds normally.
 - A callback that returns `false` (or throws, or leaves a use-card source in
-  place) sets no latch — a rejected/no-op commit leaves the executor free.
+ place) sets no latch — a rejected/no-op commit leaves the executor free.
 
 **API consumed by the runtime coordinator** (same shape as the broker lifecycle):
 `instance.pending_status()` (also `broker_ports().pending`) returns `nil` when
@@ -374,9 +374,9 @@ submitted as a fake success and the decision loop's bounded error limit stops it
 1. an action with the same `id` was freshly `validate`d by this executor;
 2. no pending latch is held (`exec_pending` / `exec_stall_timeout` / `exec_revoked`);
 3. a re-capture of the trusted revision immediately before the callback equals the
-   validated revision (else `exec_stale_revision`);
+ validated revision (else `exec_stale_revision`);
 4. the critical gates still hold at that instant (phase, resources, affordability,
-   slot room, ref resolution, forced-selection inclusion).
+ slot room, ref resolution, forced-selection inclusion).
 
 Validation and dispatch run under `pcall`; no callback error, engine object or
 path escapes — only bounded codes (`exec_*`).
@@ -426,30 +426,30 @@ The accepted `action_broker.lua` is unchanged. Its current behaviour for this
 module is:
 
 - `factory(observation, actions, ports)` needs `ports.capture -> handle, epoch`
-  and `ports.validate(normalized, handle) -> true`. `ProductionExecutor.broker_ports()`
-  supplies both, plus `capture`/`validate`/`dispatch` closures.
+ and `ports.validate(normalized, handle) -> true`. `ProductionExecutor.broker_ports()`
+ supplies both, plus `capture`/`validate`/`dispatch` closures.
 - In any non-fixture mode the broker returns `broker_executor_disabled` **without
-  calling `ports.dispatch`** (M2 guarantee). Our ports declare
-  `mode = "M3_PRODUCTION"`, `production = true`, and the broker therefore never
-  dispatches — verified by `tests/engine/test_broker_gap.lua`.
+ calling `ports.dispatch`** (M2 guarantee). Our ports declare
+ `mode = "M3_PRODUCTION"`, `production = true`, and the broker therefore never
+ dispatches — verified by `tests/engine/test_broker_gap.lua`.
 
 To enable production dispatch, a future reviewed broker change must provide:
 
 1. **A distinct production sentinel.** Accept `ports.mode == "M3_PRODUCTION"`
-   (or an equivalent explicit production flag) as the *only* production opt-in.
-   The M2 fixture sentinel `M2_FIXTURE_ONLY` must keep its current meaning and
-   must never enable production dispatch.
+ (or an equivalent explicit production flag) as the *only* production opt-in.
+ The M2 fixture sentinel `M2_FIXTURE_ONLY` must keep its current meaning and
+ must never enable production dispatch.
 2. **Dispatch only after the existing checks.** `ports.dispatch(validated)` must
-   still run only after token identity, the start/end captures, epoch/canonical
-   equality and `actions.validate` + `ports.validate` all pass.
+ still run only after token identity, the start/end captures, epoch/canonical
+ equality and `actions.validate` + `ports.validate` all pass.
 3. **Revision hand-off (recommended).** Pass the validated revision (or the
-   `handle`/epoch pair) to `ports.dispatch(validated, epoch)` so a future broker
-   can assert the executor's immediate pre-callback re-check equals the epoch the
-   broker itself validated. Today the executor re-captures the revision itself
-   via the adapter, so this is a hardening option, not a correctness requirement.
+ `handle`/epoch pair) to `ports.dispatch(validated, epoch)` so a future broker
+ can assert the executor's immediate pre-callback re-check equals the epoch the
+ broker itself validated. Today the executor re-captures the revision itself
+ via the adapter, so this is a hardening option, not a correctness requirement.
 4. **No new policy capability.** The extension must not let policy reach
-   `dispatch`, `G.FUNCS`, `Client.send` or `MP.ACTIONS`. Dispatch stays reachable
-   only from the broker's trusted submit phase.
+ `dispatch`, `G.FUNCS`, `Client.send` or `MP.ACTIONS`. Dispatch stays reachable
+ only from the broker's trusted submit phase.
 
 Until that extension lands, `production_executor` is exercised directly by the
 fixture suite (`tests/engine/test_executor.lua`) and end-to-end through the real
@@ -458,17 +458,17 @@ broker only up to `broker_executor_disabled`.
 ## 8. Fail-closed rules
 
 - Missing/unreadable `ruleset` (from `MP.LOBBY.config.ruleset` or `MP.SP.ruleset`)
-  ⇒ no view (`engine_build_failed`); `ruleset` is a required decision token.
+ ⇒ no view (`engine_build_failed`); `ruleset` is a required decision token.
 - Unknown/ambiguous engine state ⇒ `engine_unsupported_state`.
 - Missing engine area backing a requested zone, or a non-table card slot ⇒
-  `engine_build_failed` / zone refusal.
+ `engine_build_failed` / zone refusal.
 - A `booster` in the generic shop zone ⇒ `engine_build_failed`.
 - Unknown ref, wrong zone, phase mismatch, unaffordable purchase, full slots,
-  `STOP_USE > 0`, controller locked, non-empty `G.play` ⇒ `exec_illegal` /
-  `exec_unknown_ref`.
+ `STOP_USE > 0`, controller locked, non-empty `G.play` ⇒ `exec_illegal` /
+ `exec_unknown_ref`.
 - Stale revision or an action not freshly validated ⇒ refused before any callback.
 - Oversized/malformed arrays or unreadable revisions ⇒ refused, never truncated
-  into a broader authority.
+ into a broader authority.
 
 ## 9. Remaining wiring (honest non-claims)
 
@@ -476,75 +476,75 @@ This chunk is **not playable** by itself. Still required before any real-engine
 acceptance:
 
 - **Broker production dispatch** per §7, followed by an end-to-end broker dispatch
-  test against a fixture engine.
+ test against a fixture engine.
 - **Launcher/trusted-UI integration.** The executor now derives the real
-  `cash_out` button, `skip_blind` UIBox and PvP `select_blind_button` from the
-  injected `G` when `element_for` yields nothing (C2), so skip and PvP ready no
-  longer stop the AI and cash-out waits for the real tally button. The launcher
-  still owns role/session provenance and stage-room binding: the adapter assumes
-  the injected `G`/`MP` are the staged AI runtime and cannot authenticate that
-  itself.
+ `cash_out` button, `skip_blind` UIBox and PvP `select_blind_button` from the
+ injected `G` when `element_for` yields nothing (C2), so skip and PvP ready no
+ longer stop the AI and cash-out waits for the real tally button. The launcher
+ still owns role/session provenance and stage-room binding: the adapter assumes
+ the injected `G`/`MP` are the staged AI runtime and cannot authenticate that
+ itself.
 - **Timer projection.** `match.timer`/`opponent.timer` are intentionally omitted;
-  the actual-visibility certificate (rendered HUD string) is not yet produced. The
-  adapter also no longer derives any `timer_expired` veto (see §6): the engine's
-  own timer and callbacks stay authoritative, and the executor re-checks real gates
-  per action.
+ the actual-visibility certificate (rendered HUD string) is not yet produced. The
+ adapter also no longer derives any `timer_expired` veto (see §6): the engine's
+ own timer and callbacks stay authoritative, and the executor re-checks real gates
+ per action.
 - **Required terminal signal.** `MP.GAME.won = true` followed by `win_game()` does
-  not necessarily set `G.STATE = G.STATES.GAME_OVER`, so `MATCH_COMPLETE` cannot be
-  the only stop condition. The runtime coordinator MUST stop the decision loop when
-  either `MP.GAME.won == true` or the engine state is `GAME_OVER`. No observation
-  field is added (M2 schema kept intact); the coordinator reads the signal directly.
+ not necessarily set `G.STATE = G.STATES.GAME_OVER`, so `MATCH_COMPLETE` cannot be
+ the only stop condition. The runtime coordinator MUST stop the decision loop when
+ either `MP.GAME.won == true` or the engine state is `GAME_OVER`. No observation
+ field is added (M2 schema kept intact); the coordinator reads the signal directly.
 - **Deck total and tags/owned vouchers** remain unsupported, as in M2.
 - **Targeted consumables (`CONSUMABLE_SELECTION`)** are implemented legally (M3)
-  **when** the trusted `target_selection()` port names the active source and its
-  bounds; without that port the phase is refused (`engine_no_decision_state`). The
-  port itself (the launcher/UI side that observes an active highlight phase) is
-  still launcher work; until it is wired no targeted consumable is ever offered or
-  committed.
+ **when** the trusted `target_selection()` port names the active source and its
+ bounds; without that port the phase is refused (`engine_no_decision_state`). The
+ port itself (the launcher/UI side that observes an active highlight phase) is
+ still launcher work; until it is wired no targeted consumable is ever offered or
+ committed.
 - **Content-specific consumable eligibility** is delegated to the read-only
-  `Card:can_use_consumeable` predicate (which the adapter and executor both call),
-  including Ankh's `check_use` full-slot case. Any effect a Tarot cannot apply for
-  reasons the predicate does not capture remains a residual risk.
+ `Card:can_use_consumeable` predicate (which the adapter and executor both call),
+ including Ankh's `check_use` full-slot case. Any effect a Tarot cannot apply for
+ reasons the predicate does not capture remains a residual risk.
 - **Asynchronous policy timing.** The M2 broker requires the observation bytes at
-  `issue` to equal those at `submit`. A live timer/opponent score can change inside
-  an asynchronous decision window, so the orchestrator must either decide within
-  the window, re-issue, or a reviewed broker change must widen the window. No such
-  change is made here.
+ `issue` to equal those at `submit`. A live timer/opponent score can change inside
+ an asynchronous decision window, so the orchestrator must either decide within
+ the window, re-issue, or a reviewed broker change must widen the window. No such
+ change is made here.
 - **PvP ready/select ordering.** The adapter emits a normal `BLIND_SELECTION`
-  while the on-deck blind is the PvP blind and not yet readied, and the executor
-  maps policy `SELECT_BLIND` to `G.FUNCS.mp_toggle_ready` on the resolved PvP ready
-  element, deliberately never calling `select_blind` before the server's
-  `startBlind`. Derived from `ui/game/functions.lua` /
-  `networking/action_handlers.lua`.
+ while the on-deck blind is the PvP blind and not yet readied, and the executor
+ maps policy `SELECT_BLIND` to `G.FUNCS.mp_toggle_ready` on the resolved PvP ready
+ element, deliberately never calling `select_blind` before the server's
+ `startBlind`. Derived from `ui/game/functions.lua` /
+ `networking/action_handlers.lua`.
 - **Reorders have no discrete callback.** `REORDER_JOKERS`/`REORDER_HAND` commit by
-  permuting the target `CardArea.cards` and calling the real
-  `CardArea:set_ranks()` / `CardArea:align_cards()`; areas containing a pinned card
-  are refused (L1). This is a trusted-executor commit, not a `G.FUNCS` callback;
-  verify on the staged runtime that no engine layout hook fights the reorder.
+ permuting the target `CardArea.cards` and calling the real
+ `CardArea:set_ranks()` / `CardArea:align_cards()`; areas containing a pinned card
+ are refused (L1). This is a trusted-executor commit, not a `G.FUNCS` callback;
+ verify on the staged runtime that no engine layout hook fights the reorder.
 - **Stall clock (L5).** The bounded latch uses the injected clock; the runtime
-  worker must supply a game-active (pause-aware) clock, otherwise pausing the game
-  can cause a false `exec_stall_timeout`. Owned by the runtime worker, not here.
+ worker must supply a game-active (pause-aware) clock, otherwise pausing the game
+ can cause a false `exec_stall_timeout`. Owned by the runtime worker, not here.
 - **`blocked` is intentionally coarse.** It denies all candidates while
-  `STOP_USE > 0`, the controller is locked or `G.play` is non-empty; the
-  orchestrator is expected to retry on the next decision point when the UI
-  unlocks. Per-action legality is still re-checked by the executor.
+ `STOP_USE > 0`, the controller is locked or `G.play` is non-empty; the
+ orchestrator is expected to retry on the next decision point when the UI
+ unlocks. Per-action legality is still re-checked by the executor.
 - **Stat: no live run.** Nothing here launches Balatro, loads Mods, writes files
-  or sends network traffic; all evidence is fixture-only under Lua 5.1 and LuaJIT.
+ or sends network traffic; all evidence is fixture-only under Lua 5.1 and LuaJIT.
 
 ## 10. Tests
 
 `python tests/run_engine.py --require-all` runs:
 
 - static source checks: presence of the modules and guide; no forbidden
-  `require`/`dofile`/`io`/`os`/`debug`/RNG/global tokens or forbidden raw fields
-  in real code (comments/strings stripped); the adapter references **no** mutating
-  `can_*` predicate; the executor references only the pure predicates and all
-  committed callback names; the production sentinel and control states are present;
+ `require`/`dofile`/`io`/`os`/`debug`/RNG/global tokens or forbidden raw fields
+ in real code (comments/strings stripped); the adapter references **no** mutating
+ `can_*` predicate; the executor references only the pure predicates and all
+ committed callback names; the production sentinel and control states are present;
 - `tests/engine/test_revision.lua`, `test_adapter.lua`, `test_executor.lua`,
-  `test_pending.lua`, `test_broker_gap.lua` on both `lupa.lua51` and
-  `lupa.luajit21`, loading the real
-  `codec`/`observation`/`actions`/`state_reader`/`action_broker` and the three new
-  modules, driven by a synthetic metatable-aware engine with recording callbacks.
+ `test_pending.lua`, `test_broker_gap.lua` on both `lupa.lua51` and
+ `lupa.luajit21`, loading the real
+ `codec`/`observation`/`actions`/`state_reader`/`action_broker` and the three new
+ modules, driven by a synthetic metatable-aware engine with recording callbacks.
 
 Coverage includes: role/session/port binding; positive construction for hand,
 shop, pack, PvP and terminal phases; face-down redaction; distinct shop zones;

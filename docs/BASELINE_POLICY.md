@@ -1,6 +1,6 @@
 # Baseline sparring policy — bounded, observable-only
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 
 Status: chunk 1 of `docs/PLAYABLE_PLAN.md` ("Observation-only bounded baseline
 policy, three honest difficulties, stable development gauntlet seeds, policy
@@ -39,21 +39,21 @@ money as a budget with a reserve and interest opportunity cost.
 ```lua
 local BaselinePolicy = dofile("AISparring/ai/baseline_policy.lua")
 
-BaselinePolicy.difficulties()        -- { "rookie", "competitive", "major_league" }
-BaselinePolicy.describe()            -- fresh deep copy of the three configurations
-BaselinePolicy.source(difficulty)    -- source string, or nil + bounded code
+BaselinePolicy.difficulties() -- { "rookie", "competitive", "major_league" }
+BaselinePolicy.describe() -- fresh deep copy of the three configurations
+BaselinePolicy.source(difficulty) -- source string, or nil + bounded code
 ```
 
 - `source` returns a non-empty string within the 64 KiB worker source cap, or
-  `nil, "baseline_unknown_difficulty"` for a non-string/unknown difficulty.
+ `nil, "baseline_unknown_difficulty"` for a non-string/unknown difficulty.
 - `BaselinePolicy.CODE` exposes the bounded codes (`baseline_ok`,
-  `baseline_unknown_difficulty`, `baseline_bad_config`, `baseline_bad_source`,
-  `baseline_source_too_large`). The 64 KiB guard is enforced in the generator as
-  well as the worker.
+ `baseline_unknown_difficulty`, `baseline_bad_config`, `baseline_bad_source`,
+ `baseline_source_too_large`). The 64 KiB guard is enforced in the generator as
+ well as the worker.
 - `describe` and `difficulties` return copies; mutating them cannot change the
-  module's private configurations.
+ module's private configurations.
 - The module is deterministic: the same difficulty renders byte-identical source
-  on both Lua 5.1 and LuaJIT 2.1 (pinned by cross-runtime source hash vectors).
+ on both Lua 5.1 and LuaJIT 2.1 (pinned by cross-runtime source hash vectors).
 
 The configuration is baked into the generated chunk at render time; no
 configuration table is passed to the restricted environment, so a loaded policy
@@ -65,37 +65,37 @@ The generated chunk returns:
 
 ```lua
 function(observation, actions)
-  -- observation: the sanitized AIObservation export (visible fields only)
-  -- actions:     the legal action candidates regenerated from that observation
-  -- returns:     one element of `actions` (or nil when there is none)
+ -- observation: the sanitized AIObservation export (visible fields only)
+ -- actions: the legal action candidates regenerated from that observation
+ -- returns: one element of `actions` (or nil when there is none)
 end
 ```
 
 Guarantees:
 
 1. **Only provided legal candidates.** The function iterates the supplied
-   `actions` array and returns one of its elements; it never synthesizes,
-   constructs or mutates an action. The worker re-validates the selection against
-   the canonical handle, so an out-of-set or mutated result is rejected upstream.
+ `actions` array and returns one of its elements; it never synthesizes,
+ constructs or mutates an action. The worker re-validates the selection against
+ the canonical handle, so an out-of-set or mutated result is rejected upstream.
 2. **Deterministic canonical ties.** Each candidate is scored with integer
-   arithmetic; equal scores are broken by an explicit byte-wise comparison of the
-   candidate `id` (the canonical encoding), the same ordering used by
-   `actions.generate`. The result does not depend on input iteration order.
+ arithmetic; equal scores are broken by an explicit byte-wise comparison of the
+ candidate `id` (the canonical encoding), the same ordering used by
+ `actions.generate`. The result does not depend on input iteration order.
 3. **Bounded evaluations.** The loop evaluates at most `max_actions` (256)
-   candidates independent of the supplied array length, and each evaluation does
-   bounded work over a bounded selection plus a bounded lookup into a `<= 16`
-   visible shop/booster array. No recursion.
+ candidates independent of the supplied array length, and each evaluation does
+ bounded work over a bounded selection plus a bounded lookup into a `<= 16`
+ visible shop/booster array. No recursion.
 4. **No globals, seed, RNG or IO.** The chunk writes only locals. It uses no
-   `math.random`, no `io`/`os`/`debug`, no clock, no seed and no network.
+ `math.random`, no `io`/`os`/`debug`, no clock, no seed and no network.
 5. **Visible fields only.** Scoring reads only schema fields already part of the
-   sanitized export: card `rank`/`suit`/`center`/`edition`/`seal`/`debuff`,
-   visible joker `center`/`edition`/`seal`/`debuff`, `self.money`/`credit_limit`/
-   `hands`/`discards`, `match` slots (`joker_slots`), shop
-   `kind`/`center`/`edition`/`cost`/`sell_cost`/`reroll_cost`, booster card kind,
-   and the consumable target `min_targets`/`max_targets` bounds
-   (`consumable_target`, falling back to `context`). Unknown keys, poisoned
-   fields, hidden order, sale proceeds and seed-derived state are never present in
-   the export and are never read.
+ sanitized export: card `rank`/`suit`/`center`/`edition`/`seal`/`debuff`,
+ visible joker `center`/`edition`/`seal`/`debuff`, `self.money`/`credit_limit`/
+ `hands`/`discards`, `match` slots (`joker_slots`), shop
+ `kind`/`center`/`edition`/`cost`/`sell_cost`/`reroll_cost`, booster card kind,
+ and the consumable target `min_targets`/`max_targets` bounds
+ (`consumable_target`, falling back to `context`). Unknown keys, poisoned
+ fields, hidden order, sale proceeds and seed-derived state are never present in
+ the export and are never read.
 
 Malformed input returns nil (`observation`/`actions` not tables, an action
 without a string `type`), which the worker reports as `policy_no_action`.
@@ -164,10 +164,10 @@ information or authority differences).
 Observable consequences (pinned by tests):
 
 - **rookie** is more willing to spend, reroll and churn; it still preserves made
-  hands and respects a small reserve.
+ hands and respects a small reserve.
 - **competitive** is the balanced default.
 - **major_league** keeps the largest reserve, is the most conservative about
-  junk-padded plays and damaging discards, and rerolls only with a large surplus.
+ junk-padded plays and damaging discards, and rerolls only with a large surplus.
 
 These are honest baseline differences in a generic scorer, not a strength claim
 and not an evaluator: the real Major League engine adjudicates every effect, cost
@@ -219,14 +219,14 @@ let the AI dump every joker while waiting with no hands left). Inside `SHOP`, a
 
 - the visible joker board is full (`#self.jokers >= match.joker_slots`);
 - the sold candidate is a visible, non-debuffed, **un-editioned** owned copy of a
-  recognized vanilla joker `center` (the small `+Mult`/`xMult`/position-sensitive
-  set already used for reordering — not a tier list);
+ recognized vanilla joker `center` (the small `+Mult`/`xMult`/position-sensitive
+ set already used for reordering — not a tier list);
 - the shop offers a face-up `joker` with the **same visible center** and a
-  recognized non-negative edition (`foil`/`holo`/`polychrome`) — a strict,
-  source-grounded upgrade of the identical base card;
+ recognized non-negative edition (`foil`/`holo`/`polychrome`) — a strict,
+ source-grounded upgrade of the identical base card;
 - that offered copy is already affordable from current spendable cash **while
-  preserving the difficulty reserve**. The observation exposes no sale proceeds,
-  so a sell is never assumed to fund the purchase (a `sell_cost` is never added).
+ preserving the difficulty reserve**. The observation exposes no sale proceeds,
+ so a sell is never assumed to fund the purchase (a `sell_cost` is never added).
 
 Every unclear case — unknown/face-down/different center, debuffed copy, an
 already-editioned owned copy (so a strictly-better edition cannot be proven), a
@@ -262,66 +262,66 @@ selected.
 ### Known limitations (honest)
 
 - **Joker reorder is intentionally narrow.** Only recognized vanilla
-  `+Mult`/`xMult` centers are ranked and only when the candidate strictly reduces
-  inversions; every unrecognized or position-sensitive joker is a fixed anchor
-  that is never moved. This means ordering-dependent value beyond "additive mult
-  before multiplicative mult" (for example chain-mult layouts or
-  Blueprint/Copycat positioning) is left on the table. A richer ranking was
-  deliberately not invented: the baseline does not guess a joker tier list or
-  rearrange synergies it cannot see.
+ `+Mult`/`xMult` centers are ranked and only when the candidate strictly reduces
+ inversions; every unrecognized or position-sensitive joker is a fixed anchor
+ that is never moved. This means ordering-dependent value beyond "additive mult
+ before multiplicative mult" (for example chain-mult layouts or
+ Blueprint/Copycat positioning) is left on the table. A richer ranking was
+ deliberately not invented: the baseline does not guess a joker tier list or
+ rearrange synergies it cannot see.
 - **Selling is intentionally basic.** The only sale the baseline can justify is a
-  SHOP slot-pressure upgrade: full joker board, same visible center, un-editioned
-  owned copy, recognized non-negative edition on offer, and already affordable
-  without the sale. It never sells to raise money, never sells consumables, and
-  never picks a joker to give up by value — so it cannot free a slot for an
-  arbitrary stronger-but-different joker (that needs a strategic replacement
-  ranking the visible observation does not provide). This is a conservative
-  baseline, not a strength claim.
+ SHOP slot-pressure upgrade: full joker board, same visible center, un-editioned
+ owned copy, recognized non-negative edition on offer, and already affordable
+ without the sale. It never sells to raise money, never sells consumables, and
+ never picks a joker to give up by value — so it cannot free a slot for an
+ arbitrary stronger-but-different joker (that needs a strategic replacement
+ ranking the visible observation does not provide). This is a conservative
+ baseline, not a strength claim.
 - **Buy ranking is intentionally shallow.** Purchases differ only by item kind,
-  a fixed bonus for a recognized non-negative edition (or the negative bonus) and
-  the reserve/interest economy term. There is no per-joker utility model, so
-  between two same-kind, same-edition purchases the economy term decides.
+ a fixed bonus for a recognized non-negative edition (or the negative bonus) and
+ the reserve/interest economy term. There is no per-joker utility model, so
+ between two same-kind, same-edition purchases the economy term decides.
 - **Multi-target consumables are unsupported.** The trusted adapter certifies
-  only single-target `SELECT_TARGETS` steps, while the legal-action generator
-  rejects a single target when the visible `min_targets >= 2`. In that state
-  there is no committing candidate at all, so the policy returns no action rather
-  than inventing one and never fakes a successful target callback. This is a
-  producer/executor contract gap owned outside this module.
+ only single-target `SELECT_TARGETS` steps, while the legal-action generator
+ rejects a single target when the visible `min_targets >= 2`. In that state
+ there is no committing candidate at all, so the policy returns no action rather
+ than inventing one and never fakes a successful target callback. This is a
+ producer/executor contract gap owned outside this module.
 - **The highlight-only frame is synthetic.** The current adapter always emits a
-  committing `USE_CONSUMABLE` together with `SELECT_TARGETS` for
-  `min_targets <= 1`, so the policy normally commits in a single decision. The
-  two-step progression test's first frame deliberately omits the committing
-  certificate to pin the "select only when needed" branch. No test and no policy
-  path fakes an executor or engine callback.
+ committing `USE_CONSUMABLE` together with `SELECT_TARGETS` for
+ `min_targets <= 1`, so the policy normally commits in a single decision. The
+ two-step progression test's first frame deliberately omits the committing
+ certificate to pin the "select only when needed" branch. No test and no policy
+ path fakes an executor or engine callback.
 - **No runtime claim.** The fixtures are synthetic, schema-honest frames run
-  against the real generated source in the restricted worker; they are not a
-  real-engine capture and establish no in-game behaviour or rules parity.
+ against the real generated source in the restricted worker; they are not a
+ real-engine capture and establish no in-game behaviour or rules parity.
 
 Conservative denials (do not invent authority):
 
 - No blanket/class authorization; the policy chooses only among certificates the
-  trusted producer already certified.
+ trusted producer already certified.
 - Unknown action types and unknown item kinds receive no positive weight.
 - Empty candidate lists (blocked interaction, expired timer, `MATCH_COMPLETE` or
-  no certificates) produce no action rather than a fabricated one.
+ no certificates) produce no action rather than a fabricated one.
 
 ## 7. Safety and boundary summary
 
 - Source is text-only and within the 64 KiB cap; bytecode is rejected upstream.
 - No global writes; the generated chunk declares only locals.
 - No RNG, seed, clock, filesystem, network, process or engine access; the
-  restricted environment exposes none of them.
+ restricted environment exposes none of them.
 - Only visible, already-sanitized fields are read, and only to score/compare
-  candidates the trusted generator produced.
+ candidates the trusted generator produced.
 - The worker/orchestrator must still re-validate the selection; the policy has no
-  authority and performs no effect. This module is and remains inert: it renders a
-  text-only chunk and is not wired to any engine object.
+ authority and performs no effect. This module is and remains inert: it renders a
+ text-only chunk and is not wired to any engine object.
 - The trusted production executor (`AISparring/integration/production_executor.lua`)
-  now exists and is enabled behind its own trusted gates: it is the only component
-  that reaches the engine, re-derives legality from live state and fails closed.
-  That does not change this module's contract — the policy still receives only the
-  sanitized observation and the certified candidate list, and its chosen action is
-  re-validated before any effect.
+ now exists and is enabled behind its own trusted gates: it is the only component
+ that reaches the engine, re-derives legality from live state and fails closed.
+ That does not change this module's contract — the policy still receives only the
+ sanitized observation and the certified candidate list, and its chosen action is
+ re-validated before any effect.
 
 ## 8. Tests
 
@@ -335,16 +335,16 @@ The worker invokes `PolicyEnv.run` in its separate restricted interpreter; this
 is not an invocation inside the game VM.
 
 - static-checks the module, documentation and absence of forbidden APIs after
-  stripping comments (so a comment mentioning `require(` or a `G` identifier is
-  not a false positive, while real `require`/`io.`/`os.`/`math.random`/`_G`
-  usages are still flagged);
+ stripping comments (so a comment mentioning `require(` or a `G` identifier is
+ not a false positive, while real `require`/`io.`/`os.`/`math.random`/`_G`
+ usages are still flagged);
 - runs `tests/policy/test_*.lua` on `lupa.lua51` and `lupa.luajit21`, loading the
-  real `codec.lua`, `observation.lua`, `actions.lua`, `baseline_policy.lua` and
-  `tools/lua/policy_env.lua`, instantiating `Observation.factory(codec)` and
-  `Actions.factory(observation, codec)`;
+ real `codec.lua`, `observation.lua`, `actions.lua`, `baseline_policy.lua` and
+ `tools/lua/policy_env.lua`, instantiating `Observation.factory(codec)` and
+ `Actions.factory(observation, codec)`;
 - compares chosen-action and source-hash vectors exactly across both runtimes;
 - drives the real `tools/policy_worker.py` subprocess for all three difficulties
-  on both runtimes and checks the returned action type.
+ on both runtimes and checks the returned action type.
 
 The Lua suite includes substantive competing-candidate cases: flush vs pair vs
 high card, nonadjacent pairs, Ace-low and Broadway straights, discard-beats-weak
@@ -377,17 +377,17 @@ The Major League engine, not these tests, adjudicates real play.
 ## 9. Integration contract for other workers
 
 - **Producer → observation:** build the AIObservation normally; the policy only
-  needs the sanitized export plus the generator's candidate list.
+ needs the sanitized export plus the generator's candidate list.
 - **Orchestrator:** call `BaselinePolicy.source(difficulty)` once per policy
-  instance and pass that string to the restricted runner/worker; do not pass the
-  module or any configuration across the boundary.
+ instance and pass that string to the restricted runner/worker; do not pass the
+ module or any configuration across the boundary.
 - **Difficulty selection:** `rookie`, `competitive`, `major_league`; the string is
-  the only difficulty knob, so the same source can be cached and reused.
+ the only difficulty knob, so the same source can be cached and reused.
 - **Selection handling:** accept only the returned action and re-validate it; do
-  not trust it. Treat `policy_no_action` as a legitimate "no legal choice".
+ not trust it. Treat `policy_no_action` as a legitimate "no legal choice".
 - **Determinism:** identical observation + candidate list yields an identical
-  action id on every run and on both Lua runtimes, which keeps gauntlet seeds
-  reproducible.
+ action id on every run and on both Lua runtimes, which keeps gauntlet seeds
+ reproducible.
 
 Not implemented here and owned elsewhere: real-engine view/certificate producer,
 executor, async orchestration, logging, launcher, staged runtime, UI.

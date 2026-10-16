@@ -1,13 +1,13 @@
 # Production broker authority and injected-port decision loop
 
-Author: DeepSeek V4.1 Flash (High) for Codex / Astra. Date: 2026-09-27.
+Author: development for development / review. Date: 2026-09-27.
 Status: bounded production-enablement chunk, fixture-verified only. No live game,
 no Mods write, no network, no external AI call, no policy in the game VM.
 
 Owned by this chunk:
 
 - `AISparring/integration/action_broker.lua` — production capability registrar and
-  cancel/revoke (the legacy M2 factory path is preserved).
+ cancel/revoke (the legacy M2 factory path is preserved).
 - `AISparring/integration/decision_loop.lua` — nonblocking, injected-port loop.
 - `tests/run_decision.py` + `tests/decision/*` — static + Lua 5.1 / LuaJIT fixtures.
 - this document.
@@ -33,28 +33,28 @@ Production enablement is a **separate** path:
 
 ```lua
 local authority, code = ActionBroker.production_factory(verifier)
-local capability       = authority.mint()
-local broker, code     = authority.authorize(observation, actions, ports, capability)
+local capability = authority.mint()
+local broker, code = authority.authorize(observation, actions, ports, capability)
 ```
 
 - `production_factory(verifier)` requires a **function** `verifier(ports, capability)`
-  and returns a private broker authority. A non-function is refused
-  `broker_bad_verifier`; an authority built this way is only reachable by code
-  that already runs inside the staged runtime.
+ and returns a private broker authority. A non-function is refused
+ `broker_bad_verifier`; an authority built this way is only reachable by code
+ that already runs inside the staged runtime.
 - `authority.mint()` returns a fresh capability: an opaque table whose protected
-  metatable is the module-private `AISparring.ActionBroker.capability` tag. It is
-  an **identity object**, not a string, boolean or JSON value. It is not
-  serializable (the codec refuses metatables) and it is never passed to policy or
-  transport.
+ metatable is the module-private `AISparring.ActionBroker.capability` tag. It is
+ an **identity object**, not a string, boolean or JSON value. It is not
+ serializable (the codec refuses metatables) and it is never passed to policy or
+ transport.
 - `authority.authorize(observation, actions, ports, capability)` accepts only a
-  capability minted by **this** authority, rejects a revoked one, validates the
-  observation/actions/ports interfaces, refuses a ports table that still carries a
-  fixture sentinel, requires `ports.dispatch`, and then calls the trusted
-  `verifier`. Only `verifier(...) == true` (pcall-clean) authorizes; a false,
-  missing or throwing verifier is refused `broker_verifier_rejected`.
+ capability minted by **this** authority, rejects a revoked one, validates the
+ observation/actions/ports interfaces, refuses a ports table that still carries a
+ fixture sentinel, requires `ports.dispatch`, and then calls the trusted
+ `verifier`. Only `verifier(...) == true` (pcall-clean) authorizes; a false,
+ missing or throwing verifier is refused `broker_verifier_rejected`.
 - `authority.revoke(capability)` marks the capability revoked and clears the
-  pending token on every broker created from it. `authority.revoke_all()` revokes
-  every capability. `authority.describe()` reports only counts and bounded codes.
+ pending token on every broker created from it. `authority.revoke_all()` revokes
+ every capability. `authority.describe()` reports only counts and bounded codes.
 
 ### 1.1 Who may mint a capability
 
@@ -78,15 +78,15 @@ membership, `ports.validate == true`, post-validation recapture and reentrancy
 checks). On top of that:
 
 - Production dispatch requires the callback to return **explicitly `true`**. A
-  `false`, `nil` or throwing `ports.dispatch` is `broker_dispatch_failed`, never a
-  silent success. (Fixture mode keeps its legacy pcall-only behavior.)
+ `false`, `nil` or throwing `ports.dispatch` is `broker_dispatch_failed`, never a
+ silent success. (Fixture mode keeps its legacy pcall-only behavior.)
 - Revocation is re-checked immediately before dispatch; a revoked broker returns
-  `broker_revoked` and never dispatches.
+ `broker_revoked` and never dispatches.
 - `broker.cancel()` invalidates the pending token (`broker_canceled`, or
-  `broker_no_pending`); a later submit of that token is `broker_token_unknown`.
+ `broker_no_pending`); a later submit of that token is `broker_token_unknown`.
 - `broker.revoke()` revokes that broker; `broker.is_revoked()` reports state.
 - `broker.issue()` now returns a third value: a bounded
-  `meta = { epoch, candidate_count }`. Existing two-value callers are unaffected.
+ `meta = { epoch, candidate_count }`. Existing two-value callers are unaffected.
 
 New bounded codes: `broker_bad_verifier`, `broker_verifier_rejected`,
 `broker_bad_capability`, `broker_revoked`, `broker_canceled`,
@@ -95,30 +95,30 @@ New bounded codes: `broker_bad_verifier`, `broker_verifier_rejected`,
 ### 1.3 Port snapshot, executor pending latch and authority close
 
 - **Port snapshot.** At authorize time a production broker copies `capture`,
-  `validate` and `dispatch` out of the ports table the verifier approved. A later
-  swap of the ports table cannot redirect an already authorized broker. The legacy
-  disabled/fixture factory keeps dynamic access, so the M2 boundary behaviour (a
-  swapped or metatable ports table is an internal error) is unchanged.
+ `validate` and `dispatch` out of the ports table the verifier approved. A later
+ swap of the ports table cannot redirect an already authorized broker. The legacy
+ disabled/fixture factory keeps dynamic access, so the M2 boundary behaviour (a
+ swapped or metatable ports table is an internal error) is unchanged.
 - **Executor pending latch.** The broker passes through three explicit allowlisted
-  port codes instead of collapsing them to `broker_capture_failed`:
-  - `exec_pending` — the executor's committed-action latch ("a committed action's
-    visible effect has not appeared yet"). The loop treats it as a bounded
-    transient wait, short of a terminal fault.
-  - `exec_stall_timeout` and `exec_revoked` — the executor's **terminal** faults
-    (`production_executor.lua:691-701`). They are passed through so the loop can
-    stop immediately and revoke; they are never counted as a transient wait.
+ port codes instead of collapsing them to `broker_capture_failed`:
+ - `exec_pending` — the executor's committed-action latch ("a committed action's
+ visible effect has not appeared yet"). The loop treats it as a bounded
+ transient wait, short of a terminal fault.
+ - `exec_stall_timeout` and `exec_revoked` — the executor's **terminal** faults
+ (`production_executor.lua:691-701`). They are passed through so the loop can
+ stop immediately and revoke; they are never counted as a transient wait.
 
-  Every other port code still collapses to a fixed broker code
-  (`exec_control_required` and adapter-unsupported states remain
-  `broker_capture_failed`).
+ Every other port code still collapses to a fixed broker code
+ (`exec_control_required` and adapter-unsupported states remain
+ `broker_capture_failed`).
 - **Committed dispatch reentry.** If `ports.dispatch` reenters the broker, a
-  dispatch that already returned explicit `true` is still reported as committed
-  (`true, broker_ok`); it is never downgraded to `broker_reentrant`, which would
-  invite a duplicate retry. Pre-commit reentry (during capture or validate) is
-  still rejected `broker_reentrant`.
+ dispatch that already returned explicit `true` is still reported as committed
+ (`true, broker_ok`); it is never downgraded to `broker_reentrant`, which would
+ invite a duplicate retry. Pre-commit reentry (during capture or validate) is
+ still rejected `broker_reentrant`.
 - **Revocation and authority close.** `broker.revoke()` is required by the loop.
-  `authority.revoke_all()` also **closes** the authority: a later `mint()` returns
-  `nil, broker_revoked`. Terminal match stop revokes the broker too.
+ `authority.revoke_all()` also **closes** the authority: a later `mint()` returns
+ `nil, broker_revoked`. Terminal match stop revokes the broker too.
 
 ### 1.4 API delta for the runtime bootstrap worker
 
@@ -126,17 +126,17 @@ The runtime bootstrap is owned elsewhere and is still being finalized. When it
 wires the loop it should pass:
 
 - `get_revision = function() return revision.current() end` so the decision log
-  records the real post-action revision (`result_epoch`) rather than nothing.
+ records the real post-action revision (`result_epoch`) rather than nothing.
 - `wait_state` bound to the authorized runtime's verified-wait probe (the
-  authoritative MP timer/heartbeat) so a genuine opponent wait is never
-  deadline-aborted by the loop.
+ authoritative MP timer/heartbeat) so a genuine opponent wait is never
+ deadline-aborted by the loop.
 - `timeout` **larger than the service's worker timeout** (see §2.6). The service
-  times a decision out at 10s; the loop must wait longer (recommended 15s) so a
-  slow decision is cancelled-and-reissued by the service's own timeout instead of
-  the loop giving up first and permanently occupying the service decision slot.
+ times a decision out at 10s; the loop must wait longer (recommended 15s) so a
+ slow decision is cancelled-and-reissued by the service's own timeout instead of
+ the loop giving up first and permanently occupying the service decision slot.
 - optionally `controls.refresh` if the adapter exposes an explicit refresh call
-  (otherwise the loop refreshes through `broker.issue` → capture, which is
-  sufficient because `controls.next` is `executor.last_control_state()`).
+ (otherwise the loop refreshes through `broker.issue` → capture, which is
+ sufficient because `controls.next` is `executor.last_control_state()`).
 
 No bootstrap change is *required* for the control/transient defaults to be safe:
 the loop already respects the control cooldown, defaults `exec_pending` to
@@ -209,43 +209,43 @@ changed epoch), so a future state change is never stalled.
 ### 2.2 Pacing, timeout, terminal and empty states
 
 - Pacing defers `broker.submit` until `now + pacing`; `update()` returns
-  `"scheduled"` and the caller-level loop keeps running (no blocking, no clock
-  mutation). `pacing` must be strictly less than `timeout`, otherwise the factory
-  refuses the configuration with `loop_bad_options`.
+ `"scheduled"` and the caller-level loop keeps running (no blocking, no clock
+ mutation). `pacing` must be strictly less than `timeout`, otherwise the factory
+ refuses the configuration with `loop_bad_options`.
 - Once a valid response is scheduled, the request timeout and polling are both
-  suspended: the deadline is measured from `request_sent_at` and a scheduled
-  submit always resolves before it, and a late duplicate response cannot overwrite
-  the scheduled action or reset its submit time.
+ suspended: the deadline is measured from `request_sent_at` and a scheduled
+ submit always resolves before it, and a late duplicate response cannot overwrite
+ the scheduled action or reset its submit time.
 - A response that never arrives past `timeout` is cancelled (`broker.cancel`,
-  transport cancel) and reissued after a cooldown; repeated timeouts/errors
-  revoke authority and stop the local match through the trusted `on_stop` hook.
+ transport cancel) and reissued after a cooldown; repeated timeouts/errors
+ revoke authority and stop the local match through the trusted `on_stop` hook.
 - A **transient** capture failure at `issue` or `submit` (engine animation, a
-  queued executor callback, the executor's `exec_pending` latch) is a bounded
-  wait, not an abort: the loop backs off and retries without counting toward the
-  fatal error budget, returning `loop_transient`. An unbroken transient streak
-  becomes fatal only after `max_transient_seconds` of wall-clock time (the
-  secondary `max_transient_streak` guard may fire first; the default backoff of
-  `0.25s` makes the wall-clock window the practical bound).
+ queued executor callback, the executor's `exec_pending` latch) is a bounded
+ wait, not an abort: the loop backs off and retries without counting toward the
+ fatal error budget, returning `loop_transient`. An unbroken transient streak
+ becomes fatal only after `max_transient_seconds` of wall-clock time (the
+ secondary `max_transient_streak` guard may fire first; the default backoff of
+ `0.25s` makes the wall-clock window the practical bound).
 - A **terminal executor fault** (`exec_stall_timeout`, `exec_revoked` — the codes
-  the executor's `gate()` latches permanently) is *not* a transient. The loop
-  stops at once (`stats().faults`), cancels the pending broker token and revokes
-  the authority. `exec_pending` stays a bounded wait: it is the valid
-  "committed action's effect not visible yet" latch, bounded by the executor's own
-  stall window (10s default), so a legitimate animation is never mistaken for the
-  fault that follows it.
+ the executor's `gate()` latches permanently) is *not* a transient. The loop
+ stops at once (`stats().faults`), cancels the pending broker token and revokes
+ the authority. `exec_pending` stays a bounded wait: it is the valid
+ "committed action's effect not visible yet" latch, bounded by the executor's own
+ stall window (10s default), so a legitimate animation is never mistaken for the
+ fault that follows it.
 - A failed trusted control advance (`controls.advance` returning a non-`true`
-  code, e.g. `exec_element_missing` while the button is still animating in) is
-  the same bounded transient wait, not a `loop_control_failed` that aborts the
-  match after three frames. The retry respects `cooldown_until`, so the bound is
-  wall-clock (or `max_transient_seconds`) rather than a frame-rate streak guard.
+ code, e.g. `exec_element_missing` while the button is still animating in) is
+ the same bounded transient wait, not a `loop_control_failed` that aborts the
+ match after three frames. The retry respects `cooldown_until`, so the bound is
+ wall-clock (or `max_transient_seconds`) rather than a frame-rate streak guard.
 - Stale submissions (`broker_stale_epoch`, `broker_observation_changed`,
-  `broker_epoch_regression`) are normal: the loop counts them, does not abort and
-  reissues with a fresh sequence, so an A→B→A revision bump is handled safely.
+ `broker_epoch_regression`) are normal: the loop counts them, does not abort and
+ reissues with a fresh sequence, so an A→B→A revision bump is handled safely.
 - A terminal observation (`phase == terminal_phase`) ends the loop with
-  `"terminal"`, revokes the broker authority and performs no request; the driver
-  performs normal MP stop/leave.
+ `"terminal"`, revokes the broker authority and performs no request; the driver
+ performs normal MP stop/leave.
 - An empty candidate list is a transient state: the loop backs off (and doubles
-  the cooldown if the same epoch repeats), never spins and never aborts.
+ the cooldown if the same epoch repeats), never spins and never aborts.
 - At most one request is outstanding, and `min_interval` caps the request rate.
 
 ### 2.3 Trusted control navigation
@@ -268,12 +268,12 @@ After a successful advance the loop latches the control name. While latched:
 
 - it never arms a second deferred transition;
 - it calls the optional `controls.refresh()` if supplied, then falls through to
-  the normal decision path so `broker.issue` runs the trusted capture and updates
-  `controls.next` (a still-required control re-surfaces as a transient capture
-  failure, so there is no deadlock);
+ the normal decision path so `broker.issue` runs the trusted capture and updates
+ `controls.next` (a still-required control re-surfaces as a transient capture
+ failure, so there is no deadlock);
 - once the capture reports the control is gone the latch releases; if the latch
-  has been held longer than `control_latch_seconds` (and no verified `wait_state`
-  is active) the loop stops with `loop_control_timeout` instead of hanging.
+ has been held longer than `control_latch_seconds` (and no verified `wait_state`
+ is active) the loop stops with `loop_control_timeout` instead of hanging.
 
 No arbitrary error is treated as a control, and readiness is not special-cased: a
 PvP ready decision flows through the normal `SELECT_BLIND` action/broker path
@@ -354,36 +354,36 @@ the synthetic engine fixture and drives the real broker and loop end to end.
 Coverage:
 
 - default factory still production-disabled with production-style ports, while the
-  fixture sentinel still dispatches;
+ fixture sentinel still dispatches;
 - production authorize/dispatch, explicit-`true` requirement, token single-use,
-  stale epoch, validator rejection, port snapshot at authorize time, `exec_pending`
-  pass-through, `exec_stall_timeout`/`exec_revoked` fatal pass-through, an
-  unlisted port code still collapsing, committed-dispatch reentry reports success,
-  pre-commit reentry still rejected;
+ stale epoch, validator rejection, port snapshot at authorize time, `exec_pending`
+ pass-through, `exec_stall_timeout`/`exec_revoked` fatal pass-through, an
+ unlisted port code still collapsing, committed-dispatch reentry reports success,
+ pre-commit reentry still rejected;
 - forged capability, cross-instance capability, verifier rejection/throw,
-  non-function verifier, non-serializable capability, fixture-sentinel ports,
-  missing dispatch port;
+ non-function verifier, non-serializable capability, fixture-sentinel ports,
+ missing dispatch port;
 - authority revoke before submit, broker cancel, `revoke_all` and authority close
-  against a new `mint`;
+ against a new `mint`;
 - request payload shape (only `sequence` + `observation`, no hidden fields, no
-  functions), pacing without blocking, `pacing >= timeout` rejected, scheduled
-  submits skip timeout and polling (duplicate responses cannot overwrite them),
-  out-of-order and replayed responses, timeout/error abort with revocation,
-  error-then-success recovery, `policy_no_action` same-epoch exponential backoff
-  to the cap, reset on epoch change and on commit, stale A→B→A reissue, terminal
-  stop revokes, empty-state backoff without spin, request rate cap;
+ functions), pacing without blocking, `pacing >= timeout` rejected, scheduled
+ submits skip timeout and polling (duplicate responses cannot overwrite them),
+ out-of-order and replayed responses, timeout/error abort with revocation,
+ error-then-success recovery, `policy_no_action` same-epoch exponential backoff
+ to the cap, reset on epoch change and on commit, stale A→B→A reissue, terminal
+ stop revokes, empty-state backoff without spin, request rate cap;
 - control navigation via injected advance only, unknown control ignored, latch
-  refresh through capture (no deadlock) with a self-sticky controls fake, latch
-  release after refresh, bounded failed-advance waits, a 15s/144 FPS failed-advance
-  run bounded by wall clock rather than the frame-rate streak guard, wall-clock
-  transient bound, verified `wait_state` holding the window open;
+ refresh through capture (no deadlock) with a self-sticky controls fake, latch
+ release after refresh, bounded failed-advance waits, a 15s/144 FPS failed-advance
+ run bounded by wall clock rather than the frame-rate streak guard, wall-clock
+ transient bound, verified `wait_state` holding the window open;
 - response-rejection and dispatch-failure logging, post-decision revision logging
-  from an injected reader, bounded transient capture waits, transport
-  request/poll faults, no engine globals;
+ from an injected reader, bounded transient capture waits, transport
+ request/poll faults, no engine globals;
 - a full real-pipeline cash-out (stale latch → refresh → progress), a real
-  `PLAY_CARDS` dispatch through the broker, the executor stall fault stopping and
-  revoking the match, and an 8s/144 FPS valid pending-commit wait that does not
-  trip the fault or the transient guard.
+ `PLAY_CARDS` dispatch through the broker, the executor stall fault stopping and
+ revoking the match, and an 8s/144 FPS valid pending-commit wait that does not
+ trip the fault or the transient guard.
 
 Fixtures are not real-engine evidence; the live adapter/executor wiring remains a
 launcher prerequisite.
@@ -392,6 +392,6 @@ launcher prerequisite.
 
 - The loop is not wired to the mod startup, the adapter or the launcher here.
 - The capability is in-process provenance, not isolation, and not a defence
-  against arbitrary trusted local code.
+ against arbitrary trusted local code.
 - No live game, staged runtime, Mods write, IPC, process control or policy
-  subprocess is exercised by this chunk.
+ subprocess is exercised by this chunk.
