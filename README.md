@@ -38,3 +38,7 @@ python tests/run_companion.py
 These suites exercise Lua 5.1 and LuaJIT with synthetic engine fixtures. Some integration checks separately use a real restricted policy subprocess or local sockets; their scope is documented in the acceptance evidence. They do not launch Balatro or prove a playable match. Proprietary sources, dependencies, credentials, logs, backups and staged runtimes stay outside Git.
 
 Development stops after a safe, legal, functional installed playtest build has passed the requested checks. Stronger AI and visual polish are outside the current objective.
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Gio Fiore.
